@@ -1,11 +1,16 @@
+mod commands;
 mod hotkey;
+mod indexer;
 mod tray;
 mod win_utils;
+
+use std::sync::Mutex;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(Mutex::new(crate::indexer::build_index()))
         .setup(|app| {
             let handle = app.handle().clone();
             crate::tray::setup_tray(&handle)?;
@@ -15,7 +20,12 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![
+            commands::search::search_apps,
+            commands::search::open_item,
+            commands::config::config_load,
+            commands::config::config_save,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
