@@ -23,8 +23,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::search::search_apps,
             commands::search::open_item,
+            commands::search::open_search,
             commands::config::config_load,
             commands::config::config_save,
+            commands::system::sys_get_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
