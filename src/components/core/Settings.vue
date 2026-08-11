@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { useConfigStore } from "../../stores/config";
+import WallpaperPanel from "./WallpaperPanel.vue";
 
 const store = useConfigStore();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -15,10 +16,19 @@ async function toggleIsland() {
   await store.save();
 }
 
+/** Phase2 模块开关(重启生效:窗口显隐/watcher/监听器都在启动时按配置初始化) */
+async function toggleModule(
+  key: "enable_dock" | "enable_file_drawer" | "enable_clipboard_history",
+) {
+  if (!store.cfg) return;
+  store.cfg[key] = !store.cfg[key];
+  await store.save();
+}
+
 const phase2Modules = [
-  { key: "enable_dock", label: "Dock 栏", note: "Phase2 开放" },
-  { key: "enable_file_drawer", label: "文件抽屉", note: "Phase2 开放" },
-  { key: "enable_clipboard_history", label: "剪贴板历史", note: "Phase2 开放" },
+  { key: "enable_dock", label: "Dock 栏" },
+  { key: "enable_file_drawer", label: "文件抽屉" },
+  { key: "enable_clipboard_history", label: "剪贴板历史" },
 ] as const;
 </script>
 
@@ -44,7 +54,7 @@ const phase2Modules = [
       <div class="flex items-center justify-between">
         <div>
           <div class="text-sm">灵动岛</div>
-          <div class="text-[10px] text-white/30">顶部常驻:时间 + CPU/内存,重启后生效</div>
+          <div class="text-[10px] text-white/30">顶部常驻:时间 + CPU/内存/网络,重启后生效</div>
         </div>
         <button
           class="w-10 h-5 rounded-full relative transition-colors"
@@ -58,18 +68,27 @@ const phase2Modules = [
         </button>
       </div>
 
-      <div
-        v-for="item in phase2Modules"
-        :key="item.key"
-        class="flex items-center justify-between opacity-40"
-      >
+      <div v-for="item in phase2Modules" :key="item.key" class="flex items-center justify-between">
         <div>
           <div class="text-sm">{{ item.label }}</div>
-          <div class="text-[10px] text-white/30">{{ item.note }}</div>
+          <div class="text-[10px] text-white/30">Phase2 开放,重启后生效</div>
         </div>
-        <div class="w-10 h-5 rounded-full bg-white/10 relative">
-          <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white/60" />
-        </div>
+        <button
+          class="w-10 h-5 rounded-full relative transition-colors"
+          :class="store.cfg?.[item.key] ? 'bg-blue-500/80' : 'bg-white/10'"
+          @click="toggleModule(item.key)"
+        >
+          <span
+            class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+            :class="store.cfg?.[item.key] ? 'left-[22px]' : 'left-0.5'"
+          />
+        </button>
+      </div>
+
+      <!-- 2.4 静态壁纸区块 -->
+      <div>
+        <div class="text-sm mb-1.5">壁纸</div>
+        <WallpaperPanel />
       </div>
     </div>
   </div>
