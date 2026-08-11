@@ -23,6 +23,18 @@ export interface AppConfig {
   clipboard_max_items: number;
   hotkey_clipboard: string;
   wallpaper_dir: string | null;
+  // ---- Phase3 AI 集成(与 src-tauri/src/commands/config.rs 同步;ai_api_key 只可能是 null 或掩码 "******")----
+  enable_ai: boolean;
+  ai_provider: string;
+  ai_api_key: string | null;
+  ai_model: string;
+  ai_base_url: string;
+  ai_ollama_url: string;
+  ai_ollama_model: string;
+  ai_tools_enabled: boolean;
+  ai_search_roots: string[];
+  ai_max_tool_rounds: number;
+  ai_hotkey: string;
 }
 
 export const useConfigStore = defineStore("config", {

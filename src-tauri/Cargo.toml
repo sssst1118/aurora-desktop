@@ -30,3 +30,9 @@ png = "0.17"
 known-folders = "1.4"
 notify = "6"
 tauri-plugin-clipboard = "2"
+# ---- Phase3 AI 代理(设计文档 §1.6):OpenAI 兼容 HTTP 客户端;Windows 上 native-tls=schannel(系统证书库),无需 OpenSSL;json=请求/响应序列化,stream=SSE bytes_stream ----
+reqwest = { version = "0.12", features = ["json", "stream"] }
+# SSE 逐行解析用 StreamExt(3.1 实现时可选手写缓冲读取,二选一)
+futures-util = "0.3"
+# SSE idle 超时(30s 无增量视为断线)用 tokio::time::timeout;tauri 依赖树已含 tokio,这里显式声明以免 3.1 模块编译报未声明依赖
+tokio = { version = "1", features = ["time"] }

@@ -47,7 +47,16 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let drawer_item = MenuItem::with_id(app, "toggle_drawer", "桌面抽屉", true, None::<&str>)?;
     let clipboard_item = MenuItem::with_id(app, "toggle_clipboard", "剪贴板历史", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &hide_item, &drawer_item, &clipboard_item, &quit_item])?;
+    // Phase3 AI 对话入口:enable_ai 总开关关闭时不显示(设计文档 §1.5),按配置条件加入
+    let mut menu_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        vec![&show_item, &hide_item, &drawer_item, &clipboard_item];
+    let ai_item;
+    if crate::commands::config::load_from(&crate::commands::config::config_path(app)).enable_ai {
+        ai_item = MenuItem::with_id(app, "toggle_ai_panel", "AI 对话", true, None::<&str>)?;
+        menu_items.push(&ai_item);
+    }
+    menu_items.push(&quit_item);
+    let menu = Menu::with_items(app, &menu_items)?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().expect("no window icon").clone())
@@ -58,6 +67,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "hide_all" => crate::win_utils::hide_all(app),
             "toggle_drawer" => crate::hotkey::toggle_drawer_window(app),
             "toggle_clipboard" => crate::hotkey::toggle_clipboard_window(app),
+            "toggle_ai_panel" => crate::hotkey::toggle_ai_panel_window(app),
             "quit" => app.exit(0),
             _ => {}
         })

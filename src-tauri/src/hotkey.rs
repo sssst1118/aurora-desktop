@@ -6,17 +6,24 @@ pub const SEARCH_HOTKEY: &str = "ctrl+shift+space";
 
 /// 2.2 抽屉窗口呼出/隐藏(热键与托盘共用入口)
 pub fn toggle_drawer_window(app: &AppHandle) {
-    toggle_window(app, "drawer");
+    toggle_window(app, "drawer", true);
 }
 
 /// 2.3 剪贴板历史窗口呼出/隐藏(热键与托盘共用入口)
 pub fn toggle_clipboard_window(app: &AppHandle) {
-    toggle_window(app, "clipboard");
+    toggle_window(app, "clipboard", true);
+}
+
+/// Phase3 3.1 AI 对话面板呼出/隐藏(热键与托盘共用入口);
+/// ai_panel 设计为不置顶(设计文档 §0.3.5),故 set_top=false
+pub fn toggle_ai_panel_window(app: &AppHandle) {
+    toggle_window(app, "ai_panel", false);
 }
 
 /// 通用窗口显隐切换(Phase1 toggle_search_window 同款手法):
-/// 显示时置顶强制 Z 序提升 + Alt 伪按键绕过 Windows 前台锁,保证 WebView 输入可聚焦
-fn toggle_window(app: &AppHandle, label: &str) {
+/// 显示时按 set_top 决定是否置顶强制 Z 序提升(drawer/clipboard 配置为置顶,ai_panel 不置顶)
+/// + Alt 伪按键绕过 Windows 前台锁,保证 WebView 输入可聚焦
+fn toggle_window(app: &AppHandle, label: &str, set_top: bool) {
     let Some(win) = app.get_webview_window(label) else {
         return;
     };
@@ -25,7 +32,9 @@ fn toggle_window(app: &AppHandle, label: &str) {
         return;
     }
     let _ = win.show();
-    let _ = win.set_always_on_top(true);
+    if set_top {
+        let _ = win.set_always_on_top(true);
+    }
     unsafe {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
             keybd_event, KEYEVENTF_KEYUP, VK_MENU,
@@ -77,6 +86,15 @@ pub fn setup_hotkey(app: &AppHandle) -> Result<(), tauri_plugin_global_shortcut:
         let hk = cfg.hotkey_clipboard.clone();
         if let Err(e) = register_hotkey(app, &hk, toggle_clipboard_window) {
             eprintln!("[aurora] 剪贴板热键 {hk} 注册失败(可能被占用): {e}");
+        }
+    }
+
+    // 3) Phase3 AI 对话面板热键:受 enable_ai 总开关控制(设计文档 §1.5:关闭时不注册热键);
+    // 注册冲突仅告警、不阻塞启动(同 drawer/clipboard 模式)
+    if cfg.enable_ai && !cfg.ai_hotkey.trim().is_empty() {
+        let hk = cfg.ai_hotkey.clone();
+        if let Err(e) = register_hotkey(app, &hk, toggle_ai_panel_window) {
+            eprintln!("[aurora] AI 热键 {hk} 注册失败(可能被占用): {e}");
         }
     }
     Ok(())
