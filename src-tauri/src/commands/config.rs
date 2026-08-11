@@ -25,7 +25,7 @@ impl Default for AppConfig {
 }
 
 /// 配置文件路径:%APPDATA%\com.aurora.desktop\config.json
-fn config_file_path(app: &tauri::AppHandle) -> PathBuf {
+pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
     app.path()
         .app_config_dir()
         .map(|p| p.join("config.json"))
@@ -34,12 +34,12 @@ fn config_file_path(app: &tauri::AppHandle) -> PathBuf {
 
 #[tauri::command]
 pub fn config_load(app: tauri::AppHandle) -> AppConfig {
-    load_from(&config_file_path(&app))
+    load_from(&config_path(&app))
 }
 
 #[tauri::command]
 pub fn config_save(app: tauri::AppHandle, cfg: AppConfig) -> bool {
-    save_to(&config_file_path(&app), &cfg)
+    save_to(&config_path(&app), &cfg)
 }
 
 /// 读取配置;文件缺失或 JSON 损坏时回退默认值

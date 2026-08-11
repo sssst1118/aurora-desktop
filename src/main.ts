@@ -1,4 +1,5 @@
 import { createApp } from "vue";
+import { createPinia } from "pinia";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App.vue";
 import Island from "./components/core/Island.vue";
@@ -10,4 +11,4 @@ const label = getCurrentWindow().label;
 const root =
   label === "island" ? Island : label === "search" ? SearchBar : App;
 
-createApp(root).mount("#app");
+createApp(root).use(createPinia()).mount("#app");
