@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 /// 基础设置(与前端 AppConfig 字段一一对应)
+/// #[serde(default)]:未来新增字段时,老配置文件缺失该字段仍可反序列化,不会整体失败回退丢失配置
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub hotkey_search: String,
     pub enable_island: bool,
@@ -116,6 +118,18 @@ mod tests {
         std::fs::write(&p, "{ not valid json !!").unwrap();
         let cfg = load_from(&p);
         assert_eq!(cfg.hotkey_search, "Ctrl+Shift+Space");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn missing_new_fields_fall_back_per_field() {
+        // 模拟老版本配置文件缺少未来新增字段:应逐字段回退默认,不整体失败
+        let p = tmp_cfg("partial");
+        std::fs::write(&p, r#"{"hotkey_search":"ctrl+alt+z"}"#).unwrap();
+        let cfg = load_from(&p);
+        assert_eq!(cfg.hotkey_search, "ctrl+alt+z");
+        assert!(cfg.enable_island);
+        assert!(!cfg.enable_dock);
         let _ = std::fs::remove_file(&p);
     }
 }

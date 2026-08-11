@@ -12,7 +12,24 @@ pub fn toggle_search_window(app: &AppHandle) {
             let _ = win.hide();
         } else {
             let _ = win.show();
+            // 置顶强制 Z 序提升(参考 ZeroLaunch 手法;窗口本就配置置顶,不改变属性)
             let _ = win.set_always_on_top(true);
+            // Windows 前台锁:热键呼出时本进程未必持有前台权限,SetForegroundWindow 会被拒,
+            // 表现:窗口已显示但不激活,键盘输入进不了 WebView。
+            // 经典绕过:注入一次 Alt 键(伪输入)后,系统将"最后输入"归属本进程,随后激活被允许。
+            unsafe {
+                use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                    keybd_event, KEYEVENTF_KEYUP, VK_MENU,
+                };
+                keybd_event(VK_MENU as u8, 0, 0, 0);
+                keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+            }
+            if let Ok(hwnd) = win.hwnd() {
+                unsafe {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+                    let _ = SetForegroundWindow(hwnd.0 as *mut core::ffi::c_void);
+                }
+            }
             let _ = win.set_focus();
         }
     }
