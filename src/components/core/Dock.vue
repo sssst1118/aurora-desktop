@@ -4,7 +4,7 @@
 // 自动隐藏由后端线程处理(dock.rs,GetCursorPos 200ms + 1.5s 离开隐藏),本组件无需干预。
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, currentMonitor, PhysicalPosition } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 
 interface DockItem {
   name: string;
@@ -41,6 +41,13 @@ const overIdx = ref(-1);
 
 let runningTimer: number | undefined;
 let cfgTimer: number | undefined;
+
+/** Dock 窗口基准高度(与 tauri.conf.json 的 64 一致) */
+const BASE_H = 64;
+/** 右键菜单/添加面板弹出时的扩展高度(容纳 ~270px 添加面板 + 间隙) */
+const EXPAND_H = 380;
+/** 高度调整串行链:连续开关菜单时保证 setSize/setPosition 按调用顺序落地,末尾者胜 */
+let heightChain: Promise<void> = Promise.resolve();
 
 function pad(s: string) {
   return s.length > 1 ? s : s + " ";
@@ -99,6 +106,28 @@ async function applyPosition() {
   }
 }
 
+/** 调整 Dock 窗口高度(宽度不变,居中 x 同 applyPosition),Dock 边缘始终贴屏幕边缘 */
+function setDockHeight(h: number): Promise<void> {
+  heightChain = heightChain.then(async () => {
+    try {
+      const mon = await currentMonitor();
+      if (!mon) return;
+      const win = getCurrentWindow();
+      const outer = await win.outerSize();
+      const x = Math.round(mon.position.x + (mon.size.width - outer.width) / 2);
+      const y =
+        position.value === "top"
+          ? mon.position.y
+          : mon.position.y + mon.size.height - h;
+      await win.setSize(new PhysicalSize(outer.width, h));
+      await win.setPosition(new PhysicalPosition(x, y));
+    } catch (e) {
+      console.error("setDockHeight failed", e);
+    }
+  });
+  return heightChain;
+}
+
 /** 图标 data URL(后端双缓存);失败返回 undefined → 占位首字符 */
 async function iconOf(path: string): Promise<string | undefined> {
   const hit = icons.value.get(path);
@@ -131,8 +160,9 @@ async function launch(item: DockItem) {
   }
 }
 
-/** 右键菜单 */
-function openMenu(ev: MouseEvent, item: DockItem) {
+/** 右键菜单(item 为 null = 空白处右键,菜单不含"移除"项) */
+function openMenu(ev: MouseEvent, item: DockItem | null) {
+  void setDockHeight(EXPAND_H); // 菜单约 200px 高,64px 窗口放不下,先加高再弹
   menu.value = {
     x: Math.min(ev.clientX, window.innerWidth - 170),
     y: ev.clientY,
@@ -141,11 +171,12 @@ function openMenu(ev: MouseEvent, item: DockItem) {
   addOpen.value = false;
 }
 
-function closeMenu() {
+async function closeMenu() {
   menu.value = null;
   addOpen.value = false;
   addQuery.value = "";
   addResults.value = [];
+  await setDockHeight(BASE_H); // 菜单/面板关闭,窗口恢复 64px 基准高
 }
 
 /** 移除条目 */
@@ -162,6 +193,11 @@ async function removeItem(item: DockItem) {
 
 /** 添加面板:首次打开扫全量,输入后模糊搜索(复用 Phase1 search_apps) */
 async function openAdd() {
+  // 关掉右键菜单但保持窗口扩展高(closeMenu 会恢复 64px,故不调用,直接清状态)
+  menu.value = null;
+  addOpen.value = false;
+  addResults.value = [];
+  await setDockHeight(EXPAND_H); // 从菜单点进来时已扩展,幂等;直接触发时兜底
   addOpen.value = true;
   addQuery.value = "";
   await searchApps("");
@@ -198,8 +234,9 @@ async function togglePosition() {
   } catch (e) {
     console.error("config_save failed", e);
   }
+  // 先恢复基准高再摆位:菜单打开时窗口是扩展高,按扩展高算 y 会让 Dock 脱离屏幕边缘
+  await closeMenu();
   void applyPosition();
-  closeMenu();
 }
 
 /** 自动隐藏开关(后端线程 2s 内感知) */
@@ -261,55 +298,61 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="relative h-full w-full flex items-center gap-1 px-2 select-none bg-black/40 backdrop-blur-md"
+    class="relative h-full w-full select-none bg-black/40 backdrop-blur-md"
     @click="closeMenu"
-    @contextmenu.prevent
+    @contextmenu.prevent="openMenu($event, null)"
   >
+    <!-- 条目区:absolute 贴 Dock 边缘,窗口扩展时菜单/面板位于其内侧,不再被裁剪 -->
     <div
-      v-for="(it, i) in items"
-      :key="it.path"
-      class="group relative flex h-12 w-12 items-center justify-center rounded-xl transition-colors"
-      :class="[
-        i === overIdx && dragIdx >= 0 ? 'bg-white/20' : 'hover:bg-white/10',
-        dragIdx === i ? 'opacity-40' : '',
-      ]"
-      :draggable="true"
-      @dragstart="dragStart(i)"
-      @dragover.prevent="dragOver(i)"
-      @dragleave="dragLeave"
-      @drop.prevent="dropAt(i)"
-      @click.stop="launch(it)"
-      @contextmenu.stop="openMenu($event, it)"
-      :title="it.name"
+      class="absolute inset-x-0 h-16 flex items-center gap-1 px-2"
+      :class="position === 'bottom' ? 'bottom-0' : 'top-0'"
     >
-      <img
-        v-if="icons.has(it.path) && icons.get(it.path)"
-        :src="icons.get(it.path)"
-        class="h-9 w-9 pointer-events-none"
-        draggable="false"
-        alt=""
-      />
-      <span
-        v-else
-        class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-sm font-medium text-white/70"
-        >{{ pad(it.name.slice(0, 1)) }}</span
+      <div
+        v-for="(it, i) in items"
+        :key="it.path"
+        class="group relative flex h-12 w-12 items-center justify-center rounded-xl transition-colors"
+        :class="[
+          i === overIdx && dragIdx >= 0 ? 'bg-white/20' : 'hover:bg-white/10',
+          dragIdx === i ? 'opacity-40' : '',
+        ]"
+        :draggable="true"
+        @dragstart="dragStart(i)"
+        @dragover.prevent="dragOver(i)"
+        @dragleave="dragLeave"
+        @drop.prevent="dropAt(i)"
+        @click.stop="launch(it)"
+        @contextmenu.stop="openMenu($event, it)"
+        :title="it.name"
       >
-      <!-- 运行中指示点 -->
-      <span
-        v-if="running.has(it.path)"
-        class="absolute bottom-1 h-1.5 w-1.5 rounded-full bg-green-400"
-      ></span>
+        <img
+          v-if="icons.has(it.path) && icons.get(it.path)"
+          :src="icons.get(it.path)"
+          class="h-9 w-9 pointer-events-none"
+          draggable="false"
+          alt=""
+        />
+        <span
+          v-else
+          class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-sm font-medium text-white/70"
+          >{{ pad(it.name.slice(0, 1)) }}</span
+        >
+        <!-- 运行中指示点 -->
+        <span
+          v-if="running.has(it.path)"
+          class="absolute bottom-1 h-1.5 w-1.5 rounded-full bg-green-400"
+        ></span>
+      </div>
+
+      <div v-if="items.length === 0" class="text-xs text-white/40 select-none">
+        右键添加应用
+      </div>
     </div>
 
-    <div v-if="items.length === 0" class="text-xs text-white/40 select-none">
-      右键添加应用
-    </div>
-
-    <!-- 右键菜单 -->
+    <!-- 右键菜单(窗口扩展态下位于条目区内侧,不再 top-full/bottom-full 弹出窗外) -->
     <div
       v-if="menu"
       class="absolute z-10 w-40 overflow-hidden rounded-lg border border-white/10 bg-black/70 backdrop-blur-md text-xs text-white/90 shadow-xl"
-      :class="position === 'top' ? 'top-full mt-1' : 'bottom-full mb-1'"
+      :class="position === 'bottom' ? 'bottom-20' : 'top-20'"
       :style="{ left: `${menu.x}px` }"
       @click.stop
     >
@@ -332,11 +375,11 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 添加应用 mini 列表 -->
+    <!-- 添加应用 mini 列表(扩展态下位于条目区内侧) -->
     <div
       v-if="addOpen"
       class="absolute left-1/2 z-10 w-72 -translate-x-1/2 overflow-hidden rounded-lg border border-white/10 bg-black/70 backdrop-blur-md text-xs text-white/90 shadow-xl"
-      :class="position === 'top' ? 'top-full mt-1' : 'bottom-full mb-1'"
+      :class="position === 'bottom' ? 'bottom-20' : 'top-20'"
       @click.stop
     >
       <input
