@@ -247,22 +247,17 @@ fn pick_item(text: Option<String>, files: Vec<String>, ts: u64) -> Option<Clipbo
 }
 
 // ==================== 命令(JS 契约与 stubs.rs 占位一致) ====================
-//
-// 【注意】与 stubs.rs 同名 pub 命令并存时,tauri 命令宏生成的宏会导出到 crate root
-// 造成 E0428 重名冲突(与 drawer.rs 同款问题),故本文件命令暂时声明为私有。
-// 集成 agent 在 lib.rs 把 invoke_handler 从 stubs 切换为本模块时,把下面
-// `fn` 改回 `pub fn` 并删除 stubs.rs 对应项即可(函数名与签名均无需改动)。
 
 /// 读取剪贴板历史(内存态;启动/首次调用时从 json 加载)
 #[tauri::command]
-fn clipboard_get_history(app: tauri::AppHandle) -> Vec<ClipboardItem> {
+pub fn clipboard_get_history(app: tauri::AppHandle) -> Vec<ClipboardItem> {
     ensure_ready(&app);
     history().lock().unwrap().items.clone()
 }
 
 /// 清空剪贴板历史(清内存 + 删除历史文件)
 #[tauri::command]
-fn clipboard_clear_history(app: tauri::AppHandle) {
+pub fn clipboard_clear_history(app: tauri::AppHandle) {
     let mut hist = history().lock().unwrap();
     hist.items.clear();
     hist.last_hash = 0;
@@ -273,7 +268,7 @@ fn clipboard_clear_history(app: tauri::AppHandle) {
 /// 回贴第 index 条到系统剪贴板(文本 → writeText;图片文件路径 → 还原"复制文件"场景);
 /// 越界返回 Err
 #[tauri::command]
-fn clipboard_copy_back(app: tauri::AppHandle, index: usize) -> Result<(), String> {
+pub fn clipboard_copy_back(app: tauri::AppHandle, index: usize) -> Result<(), String> {
     let item = history()
         .lock()
         .unwrap()

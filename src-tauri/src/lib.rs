@@ -47,30 +47,40 @@ pub fn run() {
             if let Err(e) = crate::hotkey::setup_hotkey(&handle) {
                 eprintln!("[aurora] 全局热键注册失败(可能被占用): {e}");
             }
+            // 2.3 剪贴板历史:启动即监听(事件驱动,非轮询;内部按 enable_clipboard_history 开关自判)
+            crate::commands::clipboard::setup(&handle)?;
+            // 2.2 FileDrawer:启动桌面目录 watcher(事件驱动;内部按 enable_file_drawer 开关自判)
+            crate::commands::drawer::init_watcher(handle.clone())?;
+            // 2.5 采样线程无需接线:首个 sys_get_status invoke(灵动岛挂载)时幂等懒启动;
+            // 托盘 tooltip 的更新订阅在 tray::setup_tray 内完成
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // ---- Phase1 ----
             commands::search::search_apps,
             commands::search::open_item,
             commands::search::open_search,
             commands::config::config_load,
             commands::config::config_save,
             commands::system::sys_get_status,
-            // ---- Phase2 占位注册:模块实现后由集成 agent 逐个切换为 commands::<mod>::xxx ----
-            commands::stubs::dock_get_items,
-            commands::stubs::dock_set_items,
-            commands::stubs::dock_launch,
-            commands::stubs::dock_get_running,
-            commands::stubs::dock_get_icon,
-            commands::stubs::drawer_list_files,
-            commands::stubs::drawer_open,
-            commands::stubs::drawer_refresh,
-            commands::stubs::clipboard_get_history,
-            commands::stubs::clipboard_clear_history,
-            commands::stubs::clipboard_copy_back,
-            commands::stubs::wallpaper_set_static,
-            commands::stubs::wallpaper_list_local,
-            commands::stubs::wallpaper_get_current,
+            // ---- Phase2 2.1 Dock ----
+            commands::dock::dock_get_items,
+            commands::dock::dock_set_items,
+            commands::dock::dock_launch,
+            commands::dock::dock_get_running,
+            commands::dock::dock_get_icon,
+            // ---- Phase2 2.2 FileDrawer ----
+            commands::drawer::drawer_list_files,
+            commands::drawer::drawer_open,
+            commands::drawer::drawer_refresh,
+            // ---- Phase2 2.3 剪贴板历史 ----
+            commands::clipboard::clipboard_get_history,
+            commands::clipboard::clipboard_clear_history,
+            commands::clipboard::clipboard_copy_back,
+            // ---- Phase2 2.4 壁纸(函数名带 _cmd 后缀,tauri::command(rename) 保持外部命令名) ----
+            commands::wallpaper::wallpaper_set_static_cmd,
+            commands::wallpaper::wallpaper_list_local_cmd,
+            commands::wallpaper::wallpaper_get_current_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

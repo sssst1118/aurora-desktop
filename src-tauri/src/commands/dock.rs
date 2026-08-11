@@ -392,24 +392,21 @@ fn auto_hide_loop(app: tauri::AppHandle) {
 // ==================== 命令 ====================
 
 /// 读取 Dock 条目(内存缓存)
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 时补 pub 并移除本行
 #[tauri::command]
-fn dock_get_items(app: tauri::AppHandle) -> Vec<DockItem> {
+pub fn dock_get_items(app: tauri::AppHandle) -> Vec<DockItem> {
     ensure_auto_hide_thread(&app);
     load_items(&config_path(&app))
 }
 
 /// 写回 Dock 条目(内存缓存 + config 落盘)
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 时补 pub 并移除本行
 #[tauri::command]
-fn dock_set_items(app: tauri::AppHandle, items: Vec<DockItem>) -> bool {
+pub fn dock_set_items(app: tauri::AppHandle, items: Vec<DockItem>) -> bool {
     save_items(&config_path(&app), &items)
 }
 
 /// 启动或聚焦 Dock 项:运行中 → 恢复最小化并置前台;未运行 → opener 启动
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 时补 pub 并移除本行
 #[tauri::command]
-fn dock_launch(item: DockItem) -> bool {
+pub fn dock_launch(item: DockItem) -> bool {
     let target = item_target_path(&item.path);
     if let Some(w) = running_windows()
         .into_iter()
@@ -425,9 +422,8 @@ fn dock_launch(item: DockItem) -> bool {
 }
 
 /// 运行中且被 Dock 收录的应用条目路径集合(前端小圆点渲染用)
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 时补 pub 并移除本行
 #[tauri::command]
-fn dock_get_running(app: tauri::AppHandle) -> Vec<String> {
+pub fn dock_get_running(app: tauri::AppHandle) -> Vec<String> {
     ensure_auto_hide_thread(&app);
     let items = load_items(&config_path(&app));
     let windows = running_windows();
@@ -442,9 +438,8 @@ fn dock_get_running(app: tauri::AppHandle) -> Vec<String> {
 }
 
 /// 图标 base64 data URL(内存 + 磁盘双缓存);提取失败返回 None(前端回退占位)
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 时补 pub 并移除本行
 #[tauri::command]
-fn dock_get_icon(app: tauri::AppHandle, path: String) -> Option<String> {
+pub fn dock_get_icon(app: tauri::AppHandle, path: String) -> Option<String> {
     let dir = app
         .path()
         .app_config_dir()

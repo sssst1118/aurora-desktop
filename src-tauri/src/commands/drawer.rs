@@ -150,22 +150,15 @@ fn refresh_scan() -> Option<Vec<DrawerGroup>> {
     }
 }
 
-/// 【模块实现后替换】扫描桌面并按扩展名分组(优先读 watcher 维护的缓存)。
-///
-/// ⚠️ 与 stubs.rs 占位同名命令并存期间(集成 agent 未切换 invoke_handler、
-/// 未删除 stubs 对应项),本函数故意为私有:tauri 命令宏对 pub fn 生成的
-/// `__cmd__*`/`__tauri_command_name_*` 宏带 `#[macro_export]`,同名 pub 命令
-/// 跨模块必然 E0428 冲突。集成 agent 切换时把 `fn` 改为 `pub fn` 即可。
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 后移除
+/// 扫描桌面并按扩展名分组(优先读 watcher 维护的缓存)。
 #[tauri::command]
-fn drawer_list_files() -> Vec<DrawerGroup> {
+pub fn drawer_list_files() -> Vec<DrawerGroup> {
     read_cache().or_else(refresh_scan).unwrap_or_default()
 }
 
-/// 【模块实现后替换】打开抽屉内文件/文件夹(仅桌面目录内路径)。见上:切换时补 `pub`。
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 后移除
+/// 打开抽屉内文件/文件夹(仅桌面目录内路径)
 #[tauri::command]
-fn drawer_open(path: String) -> bool {
+pub fn drawer_open(path: String) -> bool {
     let Some(desktop) = desktop_dir() else {
         eprintln!("[aurora] drawer_open: 无法获取用户桌面目录");
         return false;
@@ -173,10 +166,9 @@ fn drawer_open(path: String) -> bool {
     open_within_desktop(&desktop, &path)
 }
 
-/// 【模块实现后替换】手动刷新(强制重扫并更新缓存)。见上:切换时补 `pub`。
-#[allow(dead_code)] // 集成 agent 接线 invoke_handler 后移除
+/// 手动刷新(强制重扫并更新缓存)
 #[tauri::command]
-fn drawer_refresh() -> Vec<DrawerGroup> {
+pub fn drawer_refresh() -> Vec<DrawerGroup> {
     refresh_scan().unwrap_or_default()
 }
 
@@ -185,7 +177,6 @@ fn drawer_refresh() -> Vec<DrawerGroup> {
 /// 目录变化(Create/Modify/Remove)→ 200ms 防抖合并 → 重扫 → 更新缓存 →
 /// emit "drawer-updated"(payload 空,信号用途)→ 前端收到后调 drawer_list_files 拉取。
 /// watcher 放入 managed state 保活,应用退出时随 App 一起 drop;防抖线程随之结束。
-#[allow(dead_code)] // 集成 agent 接线 lib.rs setup 后移除
 pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
     // 设置开关关闭时不启动 watcher(不注册监听、不留句柄)
     let cfg_path = crate::commands::config::config_path(&app);
