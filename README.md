@@ -20,7 +20,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11, built to **
 | **Clipboard History** | ✅ | Background event-driven clipboard monitoring; history is searchable, re-pasteable, and persisted locally. *Phase 2 done; GUI verification pending* |
 | **Wallpaper Engine** | ✅ | One-click static wallpaper switching (immediate + persisted via SPIF_UPDATEINIFILE). *Phase 2 done; dynamic wallpapers + battery-aware downshift deferred to Phase 4; GUI verification pending* |
 | **System Monitor** | ✅ | Real-time CPU / memory / network sampling (backend 2s thread) surfaced in the Island and the tray tooltip. *Phase 2 done* |
-| **AI Assistant** | 📋 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set wallpapers, find files) |
+| **AI Assistant** | 🚧 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set wallpapers, find files). *Phase 3 code complete; manual acceptance pending* |
 | **UI Automation** | 📋 | Keyboard/mouse simulation and Windows UI Automation control manipulation (an advanced feature with well-defined boundaries) |
 
 ## Interface Preview
@@ -93,7 +93,7 @@ aurora-desktop/
 |---|---|---|
 | **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | 🚧 Code complete; manual acceptance pending |
 | **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | ✅ Done (manual GUI verification pending) |
-| **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 📋 |
+| **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 🚧 Code complete; manual acceptance pending |
 | **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | 📋 |
 
 ## Design Principles

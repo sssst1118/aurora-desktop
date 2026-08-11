@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 mod hotkey;
 mod indexer;
@@ -81,6 +82,12 @@ pub fn run() {
             commands::wallpaper::wallpaper_set_static_cmd,
             commands::wallpaper::wallpaper_list_local_cmd,
             commands::wallpaper::wallpaper_get_current_cmd,
+            // ---- Phase3 3.1 AI 对话(流式/非流式/单轮工具执行) ----
+            commands::ai::ai_chat_stream,
+            commands::ai::ai_chat_completion,
+            commands::ai::ai_execute_tool,
+            // ---- Phase3 3.3 自然语言文件搜索(前端/AI 工具双入口) ----
+            commands::file_search::ai_search_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
