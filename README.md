@@ -13,13 +13,13 @@ Aurora is an open-source desktop productivity hub for Windows 10/11, built to **
 
 | Module | Status | Description |
 |---|---|---|
-| **Global Search Launcher** | 📋 | Summon with a global hotkey for blazing-fast search: apps first, files second, Pinyin / fuzzy matching, Enter to launch |
-| **Island** | 📋 | A persistent floating panel pinned to the top of the screen — time / CPU / memory / network speed / media controls, always on top without stealing focus |
+| **Global Search Launcher** | 🚧 | Summon with a global hotkey (Ctrl+Shift+Space) for blazing-fast search: Start-menu apps indexed and searchable, Enter to launch. *Phase 1 core done; Pinyin / fuzzy matching and file search coming in later phases* |
+| **Island** | 🚧 | A persistent floating panel pinned to the top of the screen — time / CPU / memory, always on top without stealing focus. *Phase 1 core done; network speed and media controls coming in Phase 2* |
 | **Dock** | 📋 | A customizable app shortcut bar with drag-to-reorder icons, running-application indicators, and switchable top/bottom edges |
 | **Desktop File Drawer** | 📋 | Desktop file organization: logical grouping (files stay put) or physical archiving (desktop cleared), with auto-classification |
 | **Clipboard History** | 📋 | Monitors the clipboard in the background; history is searchable, re-pasteable, and persisted locally |
 | **Wallpaper Engine** | 📋 | One-click static wallpaper switching + dynamic wallpapers (web/video rendered to the wallpaper layer), with automatic battery-aware downshift on laptops |
-| **System Monitor** | 📋 | Real-time CPU / memory / network collection, surfaced in the Island and the system tray |
+| **System Monitor** | 🚧 | Real-time CPU / memory collection surfaced in the Island. *Network monitoring designed for Phase 2* |
 | **AI Assistant** | 📋 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set wallpapers, find files) |
 | **UI Automation** | 📋 | Keyboard/mouse simulation and Windows UI Automation control manipulation (an advanced feature with well-defined boundaries) |
 
@@ -91,7 +91,7 @@ aurora-desktop/
 
 | Phase | Scope | Status |
 |---|---|---|
-| **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | 📋 Planned |
+| **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | 🚧 In progress |
 | **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | 📋 |
 | **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 📋 |
 | **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | 📋 |
