@@ -157,20 +157,15 @@ const IID_ISHELL_LINK_W: GUID = GUID {
     data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
 };
 
-/// IShellLinkW vtable:经典 MS COM 多继承布局
-/// (IUnknown 3 + IPersist 1 + IPersistFile 5 + IShellLinkW 18 = 27 槽位)。
-/// 实际调用 load(5) / save(6) / get_path(9) / set_path(26),其余槽位仅保证偏移正确。
+/// IShellLinkW vtable:SDK 头文件(shobjidl_core.h)`IShellLinkW : public IUnknown`
+/// 直接继承 IUnknown(无 IPersist/IPersistFile 中间层),vtable =
+/// IUnknown(3) + IShellLinkW(18) = 21 槽。GetPath=槽3, SetPath=槽20。
+/// IPersistFile 是独立接口,须通过 QueryInterface(IID_IPersistFile)获取。
 #[repr(C)]
 struct ShellLinkVtbl {
     query_interface: unsafe extern "system" fn(*mut core::ffi::c_void, *const GUID, *mut *mut core::ffi::c_void) -> i32,
     add_ref: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
     release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
-    get_class_id: unsafe extern "system" fn(*mut core::ffi::c_void, *mut GUID) -> i32,
-    is_dirty: unsafe extern "system" fn(*mut core::ffi::c_void) -> i32,
-    load: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR, u32) -> i32,
-    save: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR, i32) -> i32,
-    save_completed: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR) -> i32,
-    get_cur_file: unsafe extern "system" fn(*mut core::ffi::c_void, *mut *mut u16) -> i32,
     get_path: unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16, i32, *mut core::ffi::c_void, u32) -> i32,
     get_id_list: unsafe extern "system" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> i32,
     set_id_list: unsafe extern "system" fn(*mut core::ffi::c_void, *const core::ffi::c_void) -> i32,
@@ -190,6 +185,28 @@ struct ShellLinkVtbl {
     resolve: unsafe extern "system" fn(*mut core::ffi::c_void, HWND, u32) -> i32,
     set_path: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR) -> i32,
 }
+
+/// IPersistFile vtable:IUnknown(3) + IPersist::GetClassID(1) + IPersistFile(5) = 9 槽。
+/// GetClassID=槽3 / Load=槽5 / Save=槽6。经 IShellLinkW::QueryInterface 获取。
+#[repr(C)]
+struct PersistFileVtbl {
+    query_interface: unsafe extern "system" fn(*mut core::ffi::c_void, *const GUID, *mut *mut core::ffi::c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+    release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+    get_class_id: unsafe extern "system" fn(*mut core::ffi::c_void, *mut GUID) -> i32,
+    is_dirty: unsafe extern "system" fn(*mut core::ffi::c_void) -> i32,
+    load: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR, u32) -> i32,
+    save: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR, i32) -> i32,
+    save_completed: unsafe extern "system" fn(*mut core::ffi::c_void, PCWSTR) -> i32,
+    get_cur_file: unsafe extern "system" fn(*mut core::ffi::c_void, *mut *mut u16) -> i32,
+}
+
+const IID_IPERSIST_FILE: GUID = GUID {
+    data1: 0x0000_010B,
+    data2: 0x0000,
+    data3: 0x0000,
+    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+};
 
 const SLGP_RAWPATH: u32 = 0x0000_0004; // GetPath 返回链接文件中的原始路径
 const COINIT_APARTMENTTHREADED: u32 = 0x2;
@@ -219,22 +236,24 @@ pub fn resolve_lnk_target(path: &Path) -> Option<String> {
         let mut result = None;
         if hr >= 0 && !com.is_null() {
             let vtbl = &**(com as *const *const ShellLinkVtbl);
-            let hr_load = (vtbl.load)(com, wide.as_ptr(), STGM_READ);
-            if hr_load >= 0 {
-                let mut buf = [0u16; 2048];
-                let hr_path = (vtbl.get_path)(com, buf.as_mut_ptr(), buf.len() as i32, std::ptr::null_mut(), SLGP_RAWPATH);
-                let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-                let s = String::from_utf16_lossy(&buf[..len]);
-                eprintln!("[dbg] coinit_hr={hr} co_ok={co_ok} hr_load={hr_load} hr_path={hr_path} len={len} s={s:?}");
-                if hr_path >= 0 && !s.is_empty() {
-                    result = Some(s);
+            // 持久化读写走独立接口 IPersistFile(Load),经 QueryInterface 获取
+            let mut pf: *mut core::ffi::c_void = std::ptr::null_mut();
+            let hr_qi = (vtbl.query_interface)(com, &IID_IPERSIST_FILE, &mut pf);
+            if hr_qi >= 0 && !pf.is_null() {
+                let pvtbl = &**(pf as *const *const PersistFileVtbl);
+                let hr_load = (pvtbl.load)(pf, wide.as_ptr(), STGM_READ);
+                if hr_load >= 0 {
+                    let mut buf = [0u16; 2048];
+                    let hr_path = (vtbl.get_path)(com, buf.as_mut_ptr(), buf.len() as i32, std::ptr::null_mut(), SLGP_RAWPATH);
+                    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                    let s = String::from_utf16_lossy(&buf[..len]);
+                    if hr_path >= 0 && !s.is_empty() {
+                        result = Some(s);
+                    }
                 }
-            } else {
-                eprintln!("[dbg] coinit_hr={hr} co_ok={co_ok} hr_load={hr_load}");
+                (pvtbl.release)(pf);
             }
             (vtbl.release)(com);
-        } else {
-            eprintln!("[dbg] cocreate hr={hr} com_null={}", com.is_null());
         }
         if co_ok {
             CoUninitialize();
@@ -507,13 +526,20 @@ mod tests {
                     .encode_utf16()
                     .chain(std::iter::once(0))
                     .collect();
-                if (vtbl.set_path)(com, t.as_ptr()) >= 0 {
-                    let l: Vec<u16> = lnk
-                        .to_string_lossy()
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-                    ok = (vtbl.save)(com, l.as_ptr(), 1) >= 0; // fRemember = TRUE
+                let hr_set = (vtbl.set_path)(com, t.as_ptr());
+                let l: Vec<u16> = lnk
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                // 保存走 IPersistFile::Save(槽6)
+                let mut pf: *mut core::ffi::c_void = std::ptr::null_mut();
+                let hr_qi = (vtbl.query_interface)(com, &IID_IPERSIST_FILE, &mut pf);
+                if hr_set >= 0 && hr_qi >= 0 && !pf.is_null() {
+                    let pvtbl = &**(pf as *const *const PersistFileVtbl);
+                    let hr_save = (pvtbl.save)(pf, l.as_ptr(), 1); // fRemember = TRUE
+                    ok = hr_save >= 0 && lnk.exists();
+                    (pvtbl.release)(pf);
                 }
                 (vtbl.release)(com);
             }
@@ -532,7 +558,16 @@ mod tests {
         let lnk = dir.join("my_link.lnk");
         assert!(create_shell_link(&lnk, &fake_exe), "创建 .lnk 应成功");
         let target = resolve_lnk_target(&lnk);
-        assert_eq!(target.as_deref(), Some(fake_exe.to_string_lossy().as_ref()));
+        // 注意:temp_dir 可能含 8.3 短名(如 GENGZH~1),外壳保存时规范化为长名,
+        // 两侧都取 canonicalize(短名→长名)后再比,避免表象差异
+        let resolved = target
+            .as_deref()
+            .map(|t| std::fs::canonicalize(t).expect("解析结果应可 canonicalize"));
+        assert_eq!(
+            resolved,
+            Some(std::fs::canonicalize(&fake_exe).expect("目标文件应可 canonicalize")),
+            "解析目标应指向同一文件"
+        );
         // 不存在的 .lnk → None
         assert!(resolve_lnk_target(&dir.join("missing.lnk")).is_none());
         let _ = std::fs::remove_dir_all(&dir);
@@ -545,7 +580,9 @@ mod tests {
         std::fs::write(&fake_exe, b"MZ").unwrap();
         let lnk = dir.join("a.lnk");
         assert!(create_shell_link(&lnk, &fake_exe));
-        assert_eq!(item_target_path(&lnk.to_string_lossy()), fake_exe.to_string_lossy());
+        // 8.3 短名规范化见 resolve_lnk_roundtrip 注释,同样 canonicalize 后比较
+        let resolved = std::fs::canonicalize(item_target_path(&lnk.to_string_lossy())).expect("lnk 应解析为存在的目标");
+        assert_eq!(resolved, std::fs::canonicalize(&fake_exe).unwrap());
         assert_eq!(item_target_path(r"C:\x\calc.exe"), r"C:\x\calc.exe");
         let _ = std::fs::remove_dir_all(&dir);
     }
