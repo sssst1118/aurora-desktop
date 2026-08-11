@@ -1,5 +1,7 @@
 # Aurora 极光
 
+[English](./README.en.md) | 中文
+
 > **极光之下,桌面宇宙。**
 > Windows 平台 AI 增强模块化桌面效率中心——启动器、灵动岛、Dock、全局搜索、文件收纳、剪贴板历史、壁纸引擎、AI 助手,一站集齐。
 
@@ -114,4 +116,4 @@ aurora-desktop/
 
 ## License
 
-待定(规划使用 MIT)。
+[MIT](./LICENSE) © 2026 [sssst1118](https://github.com/sssst1118)
