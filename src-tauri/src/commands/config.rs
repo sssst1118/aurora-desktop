@@ -2,16 +2,37 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
+/// Dock 快捷方式条目(AppConfig.dock_items 元素;2.1 模块命令直接复用本类型)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DockItem {
+    pub name: String,
+    pub path: String,
+}
+
 /// 基础设置(与前端 AppConfig 字段一一对应)
 /// #[serde(default)]:未来新增字段时,老配置文件缺失该字段仍可反序列化,不会整体失败回退丢失配置
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    // ---- Phase1 ----
     pub hotkey_search: String,
     pub enable_island: bool,
+    // ---- Phase2 开关(Phase1 已含,默认 false,独立验收)----
     pub enable_dock: bool,
     pub enable_file_drawer: bool,
     pub enable_clipboard_history: bool,
+    // ---- Phase2 2.1 Dock ----
+    pub dock_items: Vec<DockItem>,
+    pub dock_position: String,
+    pub dock_auto_hide: bool,
+    // ---- Phase2 2.2 FileDrawer ----
+    pub drawer_hotkey: String,
+    pub drawer_open_on_launch: bool,
+    // ---- Phase2 2.3 剪贴板历史 ----
+    pub clipboard_max_items: u32,
+    pub hotkey_clipboard: String,
+    // ---- Phase2 2.4 壁纸 ----
+    pub wallpaper_dir: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -22,6 +43,14 @@ impl Default for AppConfig {
             enable_dock: false,
             enable_file_drawer: false,
             enable_clipboard_history: false,
+            dock_items: Vec::new(),
+            dock_position: "bottom".to_string(),
+            dock_auto_hide: false,
+            drawer_hotkey: "ctrl+alt+d".to_string(),
+            drawer_open_on_launch: false,
+            clipboard_max_items: 200,
+            hotkey_clipboard: "ctrl+alt+v".to_string(),
+            wallpaper_dir: None,
         }
     }
 }

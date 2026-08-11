@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "default capability for island and search windows",
-  "windows": ["island", "search"],
+  "description": "default capability for all windows (island/search + Phase2 dock/drawer/clipboard). Permission blocks: Phase1 core/window/global-shortcut; Phase2 2.3 clipboard plugin(allow-* per command, plugin has no default set; wallpaper asset protocol is config-scoped, no capability entry needed)",
+  "windows": ["island", "search", "dock", "drawer", "clipboard"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -12,6 +12,12 @@
     "core:window:allow-set-focus",
     "core:window:allow-set-always-on-top",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "global-shortcut:allow-unregister",
+    "clipboard:allow-start-monitor",
+    "clipboard:allow-stop-monitor",
+    "clipboard:allow-is-monitor-running",
+    "clipboard:allow-read-text",
+    "clipboard:allow-read-files",
+    "clipboard:allow-write-text"
   ]
 }

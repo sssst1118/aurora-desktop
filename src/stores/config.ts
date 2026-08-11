@@ -1,6 +1,12 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 
+/** Dock 快捷方式条目(与 Rust 侧 DockItem 对应) */
+export interface DockItem {
+  name: string;
+  path: string;
+}
+
 /** 与 Rust 侧 AppConfig 字段一一对应 */
 export interface AppConfig {
   hotkey_search: string;
@@ -8,6 +14,15 @@ export interface AppConfig {
   enable_dock: boolean;
   enable_file_drawer: boolean;
   enable_clipboard_history: boolean;
+  // ---- Phase2 新增(与 src-tauri/src/commands/config.rs 同步)----
+  dock_items: DockItem[];
+  dock_position: string;
+  dock_auto_hide: boolean;
+  drawer_hotkey: string;
+  drawer_open_on_launch: boolean;
+  clipboard_max_items: number;
+  hotkey_clipboard: string;
+  wallpaper_dir: string | null;
 }
 
 export const useConfigStore = defineStore("config", {

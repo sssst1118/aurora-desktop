@@ -17,6 +17,9 @@ importers:
       pinia:
         specifier: ^4.0.2
         version: 4.0.2(@vue/devtools-api@8.2.1)(typescript@5.6.3)(vue@3.5.41(typescript@5.6.3))
+      tauri-plugin-clipboard-api:
+        specifier: ^2.1.11
+        version: 2.1.11(typescript@5.6.3)
       vue:
         specifier: ^3.5.13
         version: 3.5.41(typescript@5.6.3)
@@ -394,6 +397,9 @@ packages:
     resolution: {integrity: sha512-zD6NdeWEByGE9QF9vCrlJ5YQB4oq9q91kPZS37Jwj5hOkvR1lTBSpsKhKDw4IJtbQ35LsTS1HD9DZYGKIshU1Q==}
     cpu: [x64]
     os: [win32]
+
+  '@tauri-apps/api@2.0.1':
+    resolution: {integrity: sha512-eoQWT+Tq1qSwQpHV+nw1eNYe5B/nm1PoRjQCRiEOS12I1b+X4PUcREfXVX8dPcBT6GrzWGDtaecY0+1p0Rfqlw==}
 
   '@tauri-apps/api@2.11.1':
     resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
@@ -901,6 +907,9 @@ packages:
     engines: {node: '>=14.0.0'}
     hasBin: true
 
+  tauri-plugin-clipboard-api@2.1.11:
+    resolution: {integrity: sha512-VNkGaVPPfRoHg7/rJBcWqsvLvn4/kNEOOlzqwyI9Qdf6g54B3mc31GLZdnq/HWtX0vZskw3J8b/EF9YkASDCBQ==}
+
   thenify-all@1.6.0:
     resolution: {integrity: sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==}
     engines: {node: '>=0.8'}
@@ -932,6 +941,14 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
+
+  valibot@0.40.0:
+    resolution: {integrity: sha512-XHKnaVtwHqxPwnGOsLrwka9CEaL7yNeLNp707OKv/bmT29GnPVdl6PxBOZ6BW7hF66/6QT6iVbOlnW7qVPmoKw==}
+    peerDependencies:
+      typescript: '>=5'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   vite@6.4.3:
     resolution: {integrity: sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A==}
@@ -1188,6 +1205,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.62.4':
     optional: true
+
+  '@tauri-apps/api@2.0.1': {}
 
   '@tauri-apps/api@2.11.1': {}
 
@@ -1715,6 +1734,13 @@ snapshots:
       - tsx
       - yaml
 
+  tauri-plugin-clipboard-api@2.1.11(typescript@5.6.3):
+    dependencies:
+      '@tauri-apps/api': 2.0.1
+      valibot: 0.40.0(typescript@5.6.3)
+    transitivePeerDependencies:
+      - typescript
+
   thenify-all@1.6.0:
     dependencies:
       thenify: 3.3.1
@@ -1743,6 +1769,10 @@ snapshots:
       picocolors: 1.1.1
 
   util-deprecate@1.0.2: {}
+
+  valibot@0.40.0(typescript@5.6.3):
+    optionalDependencies:
+      typescript: 5.6.3
 
   vite@6.4.3(jiti@1.21.7):
     dependencies:

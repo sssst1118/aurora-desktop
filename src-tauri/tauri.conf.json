@@ -38,10 +38,53 @@
         "resizable": false,
         "visible": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "dock",
+        "title": "Aurora-Dock",
+        "width": 800,
+        "height": 64,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "focus": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "drawer",
+        "title": "Aurora-FileDrawer",
+        "width": 720,
+        "height": 520,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "skipTaskbar": true
+      },
+      {
+        "label": "clipboard",
+        "title": "Aurora-Clipboard",
+        "width": 480,
+        "height": 560,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "skipTaskbar": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$USERPROFILE/Pictures/**"]
+      }
     }
   },
   "bundle": {
