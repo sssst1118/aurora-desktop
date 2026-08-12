@@ -95,7 +95,7 @@ pub fn apply_hotkeys(app: &AppHandle, cfg: &AppConfig) {
         ("ai", cfg.enable_ai.then_some(cfg.ai_hotkey.as_str())),
     ];
     let mut binding = registered().lock().unwrap_or_else(|p| p.into_inner());
-    let mut g = binding.get_or_insert_with(HashMap::new);
+    let g = binding.get_or_insert_with(HashMap::new);
 
     for (kind, target) in targets {
         let target = target.map(str::trim).filter(|s| !s.is_empty());
