@@ -15,9 +15,9 @@ Aurora is an open-source desktop productivity hub for Windows 10/11, built to **
 |---|---|---|
 | **Global Search Launcher** | 🚧 | Summon with a global hotkey (Ctrl+Shift+Space) for blazing-fast search: Start-menu apps indexed and searchable, Enter to launch. *Phase 1 core done; Pinyin / fuzzy matching and file search coming in later phases* |
 | **Island** | ✅ | A persistent floating panel pinned to the top of the screen — time / CPU / memory / network speed, always on top without stealing focus. *Phase 2: network speed via backend 2s sampling + event push* |
-| **Dock** | ✅ | A customizable app shortcut bar with drag-to-reorder icons, running-application indicators, and switchable top/bottom edges. *Phase 2 done; GUI verification pending* |
-| **Desktop File Drawer** | ✅ | Desktop file organization: logical grouping (files stay put), auto-classification by extension, event-driven auto refresh. *Phase 2 done; physical archiving deferred to Phase 4; GUI verification pending* |
-| **Clipboard History** | ✅ | Background event-driven clipboard monitoring; history is searchable, re-pasteable, and persisted locally. *Phase 2 done; GUI verification pending* |
+| **Dock** | ✅ | A customizable app shortcut bar with drag-to-reorder icons, running-application indicators, and switchable top/bottom edges. *Phase 2 done; GUI verified 2026-08-12* |
+| **Desktop File Drawer** | ✅ | Desktop file organization: logical grouping (files stay put), auto-classification by extension, event-driven auto refresh. *Phase 2 done; physical archiving deferred to Phase 4; GUI verified 2026-08-12* |
+| **Clipboard History** | ✅ | Background event-driven clipboard monitoring; history is searchable, re-pasteable, and persisted locally. *Phase 2 done; GUI verified 2026-08-12* |
 | **Wallpaper Engine** | ✅ | Static wallpaper switching plus a dynamic engine (video / HTML / live WebGL injected beneath the desktop via WorkerW), battery-aware downshift, and multi-monitor support with hot-plug auto rebuild. *Phase 2 static + Phase 4 dynamic + Phase 5 multi-monitor done* |
 | **System Monitor** | ✅ | Real-time CPU / memory / network sampling (backend 2s thread) surfaced in the Island and the tray tooltip. *Phase 2 done* |
 | **AI Assistant** | 🚧 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set static/dynamic wallpapers, find files). *Phase 3 core + Phase 5 dynamic-wallpaper tools done; manual acceptance pending* |
@@ -96,7 +96,7 @@ aurora-desktop/
 | Phase | Scope | Status |
 |---|---|---|
 | **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | ✅ Done (verified 2026-08-12) |
-| **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | ✅ Done (manual GUI verification pending) |
+| **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | ✅ Done (GUI verified 2026-08-12) |
 | **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 🚧 Code complete; manual acceptance pending |
 | **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | ✅ Done (manual GUI verification pending) |
 | **Phase 5** Release | NSIS installer + self-built auto update (with signing hookup), multi-monitor wallpapers, AI dynamic-wallpaper tools, dead-code cleanup | ✅ Done (manual GUI verification pending) |
