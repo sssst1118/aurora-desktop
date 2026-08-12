@@ -58,6 +58,31 @@ pub fn run() {
             if cfg.enable_dynamic_wallpaper && cfg.wallpaper_battery_downshift {
                 crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
             }
+            // Phase5 多屏热插拔:2s 轮询显示器布局签名(数量/坐标/尺寸/主屏),变化即重建多屏 attach;
+            // 线程内部自行判开关(运行中开/关多屏都响应),总开关关时不做事只重置基线
+            if cfg.enable_dynamic_wallpaper {
+                let probe = handle.clone();
+                std::thread::spawn(move || {
+                    let mut last = String::new();
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        let cur = crate::commands::config::load_from(
+                            &crate::commands::config::config_path(&probe),
+                        );
+                        if !cur.enable_dynamic_wallpaper || !cur.wallpaper_multi_monitor {
+                            last.clear();
+                            continue;
+                        }
+                        let sig = crate::wallpaper_dynamic::layout_signature(
+                            &crate::wallpaper_dynamic::enum_monitors(&probe),
+                        );
+                        if sig != last {
+                            last = sig;
+                            let _ = crate::wallpaper_dynamic::multi_apply(&probe);
+                        }
+                    }
+                });
+            }
             // 2.5 采样线程无需接线:首个 sys_get_status invoke(灵动岛挂载)时幂等懒启动;
             // 托盘 tooltip 的更新订阅在 tray::setup_tray 内完成
             Ok(())
@@ -106,6 +131,10 @@ pub fn run() {
             commands::wallpaper_dynamic::wallpaper_dynamic_set,
             commands::wallpaper_dynamic::wallpaper_dynamic_clear,
             commands::wallpaper_dynamic::wallpaper_dynamic_get_state,
+            // ---- Phase5 5.2 多屏壁纸(逐屏注入 + 布局枚举;热插拔走 setup 线程)----
+            commands::wallpaper_dynamic::wallpaper_multi_monitors,
+            commands::wallpaper_dynamic::wallpaper_multi_apply,
+            commands::wallpaper_dynamic::wallpaper_dynamic_set_monitor,
             // ---- Phase4 4.3 UIA 控件自动化(Uia* 句柄式 API;入口校验在命令内)----
             commands::uia_cmd::uia_find_window,
             commands::uia_cmd::uia_get_window_info,

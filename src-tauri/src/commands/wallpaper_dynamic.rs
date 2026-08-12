@@ -39,6 +39,16 @@ pub struct DynamicWallpaperState {
     pub url: Option<String>,    // video/html 素材:目录外 = data URL;Pictures 内 = None(前端 convertFileSrc)
     pub on_battery: bool,       // 最近一次电池检测结果(无检测记录 = false)
     pub downshift_active: bool, // enable_dynamic_wallpaper && wallpaper_battery_downshift
+    pub monitors: Vec<PerMonitorState>, // Phase5 多屏逐屏状态;多屏关 = 空数组
+}
+
+/// 多屏逐屏状态(拼接模式:素材相同时每屏各一条;独立模式:各屏各自的素材)
+#[derive(Clone, Debug, Serialize)]
+pub struct PerMonitorState {
+    pub index: u32,
+    pub kind: String, // "none" | "video" | "html"
+    pub path: Option<String>,
+    pub url: Option<String>,
 }
 
 /// 读配置(不走 config_load 的密钥脱敏,这里不涉及密钥)
@@ -82,6 +92,28 @@ pub fn wallpaper_dynamic_set(app: AppHandle, path: String) -> Result<WallpaperSe
             }
             // 电池检测线程惰性自启兜底(集成 agent 在 setup 接线后此处为幂等 no-op)
             wallpaper_dynamic::spawn_battery_watcher(app.clone(), &cfg);
+            // ---- Phase5 多屏分发(设计文档 §2.3):拼接 → 全屏同一素材;独立 → 只设主屏 ----
+            if cfg.wallpaper_multi_monitor {
+                let url = wallpaper_dynamic::resolve_material_url(
+                    &path,
+                    &wallpaper_dynamic::default_pictures_dir(),
+                )?;
+                let state = WallpaperState {
+                    path: path.clone(),
+                    kind: kind.to_string(),
+                    url: url.clone(),
+                };
+                let mons = crate::wallpaper_dynamic::enum_monitors(&app);
+                for m in &mons {
+                    if cfg.wallpaper_span_mode || m.index == 0 {
+                        wallpaper_dynamic::set_monitor_state(m.index, state.clone())?;
+                    }
+                }
+                crate::wallpaper_dynamic::multi_apply(&app)?;
+                // 同步单值状态(get_state 主屏聚合保持一致)
+                wallpaper_dynamic::set_state(Some(state));
+                return Ok(WallpaperSetInfo { path, url });
+            }
             // 幂等:同路径重复 set 无副作用(不重复注入)
             if let Some(cur) = wallpaper_dynamic::current_state() {
                 if (cur.kind == "video" || cur.kind == "html")
@@ -114,6 +146,13 @@ pub fn wallpaper_dynamic_set(app: AppHandle, path: String) -> Result<WallpaperSe
 /// 图片走系统壁纸本就无需"恢复";视频/html 撤下后系统壁纸自然可见,不碰 SystemParametersInfoW
 #[tauri::command(rename = "wallpaper_dynamic_clear")]
 pub fn wallpaper_dynamic_clear(app: AppHandle) -> Result<(), String> {
+    let cfg = load_cfg(&app);
+    // Phase5 多屏:清全部屏素材 + 重建(无素材屏自动撤下注入)
+    if cfg.wallpaper_multi_monitor {
+        wallpaper_dynamic::clear_monitor_states();
+        wallpaper_dynamic::set_state(None);
+        return crate::wallpaper_dynamic::multi_apply(&app);
+    }
     let cur = wallpaper_dynamic::current_state();
     if let Some(st) = &cur {
         if st.kind == "video" || st.kind == "html" {
@@ -132,6 +171,31 @@ pub fn wallpaper_dynamic_get_state(app: AppHandle) -> DynamicWallpaperState {
         Some(st) => (st.kind, Some(st.path), st.url),
         None => ("none".to_string(), None, None),
     };
+    // Phase5 多屏:逐屏状态(实际屏数截断,防热插拔缩屏后残留脏数据;多屏关 = 空数组)
+    let monitors = if cfg.wallpaper_multi_monitor {
+        let states = wallpaper_dynamic::monitor_states();
+        crate::wallpaper_dynamic::enum_monitors(&app)
+            .into_iter()
+            .map(|m| {
+                match states.get(m.index as usize) {
+                    Some(Some(st)) => PerMonitorState {
+                        index: m.index,
+                        kind: st.kind.clone(),
+                        path: Some(st.path.clone()),
+                        url: st.url.clone(),
+                    },
+                    _ => PerMonitorState {
+                        index: m.index,
+                        kind: "none".to_string(),
+                        path: None,
+                        url: None,
+                    },
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     DynamicWallpaperState {
         enabled: cfg.enable_dynamic_wallpaper,
         kind,
@@ -139,7 +203,70 @@ pub fn wallpaper_dynamic_get_state(app: AppHandle) -> DynamicWallpaperState {
         url,
         on_battery: wallpaper_dynamic::battery_latest(),
         downshift_active: cfg.enable_dynamic_wallpaper && cfg.wallpaper_battery_downshift,
+        monitors,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase5 5.2 多屏(设计文档 §2.3):三命令 + set/clear 按模式分发
+// ---------------------------------------------------------------------------
+
+/// 每屏窗口 label 约定:主屏沿用 "wallpaper",副屏 "wallpaper_<index>"(前端按 label 分流)
+pub fn monitor_window_label(index: u32) -> String {
+    if index == 0 {
+        "wallpaper".to_string()
+    } else {
+        format!("wallpaper_{index}")
+    }
+}
+
+/// 枚举显示器(设置区展示 + 前端 span 切片计算)
+#[tauri::command(rename = "wallpaper_multi_monitors")]
+pub fn wallpaper_multi_monitors(app: AppHandle) -> Vec<crate::wallpaper_dynamic::MonitorInfo> {
+    crate::wallpaper_dynamic::enum_monitors(&app)
+}
+
+/// 按当前配置重建多屏 attach(开关/模式/素材变更后调用;热插拔检测线程也走这里)
+#[tauri::command(rename = "wallpaper_multi_apply")]
+pub fn wallpaper_multi_apply(app: AppHandle) -> Result<(), String> {
+    crate::wallpaper_dynamic::multi_apply(&app)
+}
+
+/// 独立模式:只给指定屏设置素材(越界/拼接模式/多屏未启用报错)
+#[tauri::command(rename = "wallpaper_dynamic_set_monitor")]
+pub fn wallpaper_dynamic_set_monitor(
+    app: AppHandle,
+    path: String,
+    index: u32,
+) -> Result<WallpaperSetInfo, String> {
+    let cfg = load_cfg(&app);
+    if !cfg.wallpaper_multi_monitor {
+        return Err("多屏壁纸未启用,请在设置中开启".to_string());
+    }
+    if cfg.wallpaper_span_mode {
+        return Err("拼接模式下不支持单独设置某屏,请切换为独立模式".to_string());
+    }
+    let mons = crate::wallpaper_dynamic::enum_monitors(&app);
+    if !mons.iter().any(|m| m.index == index) {
+        return Err(format!("显示器 {index} 不存在(当前共 {} 台)", mons.len()));
+    }
+    crate::wallpaper_dynamic::validate_set_args(&path)?;
+    let kind = crate::wallpaper_dynamic::material_kind(&path);
+    if kind == "image" {
+        return Err("图片素材走系统壁纸,不支持按屏设置,请使用视频/html".to_string());
+    }
+    let url = crate::wallpaper_dynamic::resolve_material_url(
+        &path,
+        &crate::wallpaper_dynamic::default_pictures_dir(),
+    )?;
+    let state = WallpaperState {
+        path: path.clone(),
+        kind: kind.to_string(),
+        url: url.clone(),
+    };
+    crate::wallpaper_dynamic::set_monitor_state(index, state)?;
+    crate::wallpaper_dynamic::apply_monitor(&app, index)?;
+    Ok(WallpaperSetInfo { path, url })
 }
 
 // ---------------------------------------------------------------------------

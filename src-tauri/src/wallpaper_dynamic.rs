@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager}; // Manager:get_webview_window(apply_monitor/multi_apply 用)
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -295,7 +295,7 @@ pub fn detach_from_workerw(hwnd: HWND) {
 // ---------------------------------------------------------------------------
 
 /// 显示器信息(虚拟桌面物理坐标;index = enum_monitors 排序后的序号,主屏恒为 0)
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct MonitorInfo {
     pub index: u32,
     pub x: i32,
@@ -309,7 +309,6 @@ pub struct MonitorInfo {
 /// 排序 = 主屏优先 + (x, y) 升序稳定排,index 即排序序号。
 /// 枚举失败(无桌面/异常)→ 返回仅主屏的兜底 1920x1080(与 attach 现状一致,不 panic)
 pub fn enum_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
-    use tauri::Manager;
     let Ok(mons) = app.available_monitors() else {
         return vec![MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true }];
     };
@@ -343,14 +342,31 @@ pub fn enum_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
 /// 虚拟桌面整体 rect(所有屏并集;纯函数):返回 (x, y, w, h);
 /// 空列表 → (0, 0, 1920, 1080) 兜底(与 attach 现状一致)
 pub fn span_viewport(monitors: &[MonitorInfo]) -> (i32, i32, i32, i32) {
-    if monitors.is_empty() {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    for m in monitors {
+        min_x = min_x.min(m.x);
+        min_y = min_y.min(m.y);
+        max_x = max_x.max(m.x + m.width);
+        max_y = max_y.max(m.y + m.height);
+    }
+    if min_x == i32::MAX {
         return (0, 0, 1920, 1080);
     }
-    let min_x = monitors.iter().map(|m| m.x).min().unwrap_or(0);
-    let min_y = monitors.iter().map(|m| m.y).min().unwrap_or(0);
-    let max_x = monitors.iter().map(|m| m.x + m.width).max().unwrap_or(1920);
-    let max_y = monitors.iter().map(|m| m.y + m.height).max().unwrap_or(1080);
     (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// 布局签名(纯函数,热插拔检测用):屏数 + 每屏 (x,y,w,h,primary) 排序后拼接。
+/// 排序保证枚举顺序变化不误触发;任一屏移动/改分辨率/增减屏都会改变签名
+pub fn layout_signature(monitors: &[MonitorInfo]) -> String {
+    let mut sigs: Vec<String> = monitors
+        .iter()
+        .map(|m| format!("{},{},{},{},{}", m.x, m.y, m.width, m.height, m.primary))
+        .collect();
+    sigs.sort();
+    format!("{}|{}", monitors.len(), sigs.join(";"))
 }
 
 /// 把 webview 窗口注入 WorkerW 并定位到虚拟桌面指定 rect(x/y 为虚拟桌面坐标)。
@@ -368,6 +384,122 @@ pub fn attach_to_workerw_at(hwnd: HWND, x: i32, y: i32, width: i32, height: i32)
         SetWindowPos(hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 多屏状态与重建(设计 §2.2/§2.3):每屏素材内存状态 + 窗口创建/注入/重建
+// ---------------------------------------------------------------------------
+
+/// 每屏素材内存状态(index → 素材;多屏模式使用;与单值状态并存,多屏关时单值照旧)
+static MONITOR_STATES: OnceLock<Mutex<Vec<Option<WallpaperState>>>> = OnceLock::new();
+
+/// 写指定屏素材状态(自动扩容)
+pub fn set_monitor_state(index: u32, st: WallpaperState) -> Result<(), String> {
+    let mut g = MONITOR_STATES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .map_err(|_| "壁纸状态锁失败".to_string())?;
+    if g.len() <= index as usize {
+        g.resize(index as usize + 1, None);
+    }
+    g[index as usize] = Some(st);
+    Ok(())
+}
+
+/// 读全部屏素材状态(缺屏 = None;锁失败/未初始化 = 空)
+pub fn monitor_states() -> Vec<Option<WallpaperState>> {
+    MONITOR_STATES
+        .get()
+        .map(|m| m.lock().ok().map(|g| g.clone()).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// 清空全部屏素材状态(多屏 clear 用;锁失败静默)
+pub fn clear_monitor_states() {
+    if let Some(m) = MONITOR_STATES.get() {
+        if let Ok(mut g) = m.lock() {
+            g.clear();
+        }
+    }
+}
+
+/// 创建/复用指定屏的壁纸窗口并注入:
+/// 窗口不存在 → WebviewWindowBuilder 创建(label = wallpaper_<index>,加载 index.html,
+/// 前端按 window label 分流渲染,与主屏 wallpaper 窗口同配置:无边框/不透明/不置顶/
+/// 不可缩放/skipTaskbar/不抢焦点);
+/// 窗口存在 → 直接 set_size(该屏物理尺寸)+ set_position(虚拟坐标)+ show + attach
+pub fn apply_monitor(app: &tauri::AppHandle, index: u32) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let label = crate::commands::wallpaper_dynamic::monitor_window_label(index);
+    let mons = enum_monitors(app);
+    let Some(mon) = mons.iter().find(|m| m.index == index) else {
+        return Err(format!("显示器 {index} 不存在(当前共 {} 台)", mons.len()));
+    };
+    let win = if let Some(w) = app.get_webview_window(&label) {
+        w
+    } else {
+        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+            .decorations(false)
+            .transparent(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .visible(false)
+            .focused(false) // 铁律:不抢焦点(grep tauri-2.11.5 源码确认存在)
+            .build()
+            .map_err(|e| format!("创建壁纸窗口 {label} 失败: {e}"))?
+    };
+    let hwnd = win.hwnd().map_err(|e| format!("获取壁纸窗口句柄失败: {e}"))?;
+    let _ = win.set_size(tauri::PhysicalSize::new(mon.width as u32, mon.height as u32));
+    let _ = win.set_position(tauri::PhysicalPosition::new(mon.x, mon.y));
+    let _ = win.show();
+    let _ = win.set_always_on_top(false);
+    attach_to_workerw_at(hwnd.0 as *mut core::ffi::c_void, mon.x, mon.y, mon.width, mon.height)
+}
+
+/// 多屏整体重建(设置变更/热插拔后调用;错误聚合为一条,不中断其他屏):
+/// 多屏关 → 撤下并销毁全部副屏窗口(主屏保持现状);
+/// 多屏开 → 有素材的屏逐个注入;主屏无素材 → 撤下主屏注入(系统壁纸可见)
+pub fn multi_apply(app: &tauri::AppHandle) -> Result<(), String> {
+    let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(app));
+    let mons = enum_monitors(app);
+    let mut errors: Vec<String> = Vec::new();
+    if !cfg.wallpaper_multi_monitor {
+        for m in mons.iter().filter(|m| m.index > 0) {
+            let label = crate::commands::wallpaper_dynamic::monitor_window_label(m.index);
+            if let Some(w) = app.get_webview_window(&label) {
+                if let Ok(hwnd) = w.hwnd() {
+                    detach_from_workerw(hwnd.0 as *mut core::ffi::c_void);
+                }
+                let _ = w.destroy();
+            }
+        }
+        return Ok(()); // 主屏保持现状(由 4.1 set/attach 路径管理)
+    }
+    let states = monitor_states();
+    for m in &mons {
+        let st = states.get(m.index as usize).and_then(|s| s.clone());
+        match st {
+            Some(st) if st.kind == "video" || st.kind == "html" => {
+                if let Err(e) = apply_monitor(app, m.index) {
+                    errors.push(format!("屏 {} 注入失败: {e}", m.index));
+                }
+            }
+            _ => {
+                // 无素材(或图片素材走系统壁纸):撤下该屏注入,系统壁纸可见
+                let label = crate::commands::wallpaper_dynamic::monitor_window_label(m.index);
+                if let Some(w) = app.get_webview_window(&label) {
+                    if let Ok(hwnd) = w.hwnd() {
+                        detach_from_workerw(hwnd.0 as *mut core::ffi::c_void);
+                    }
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -864,5 +996,37 @@ mod tests {
     #[test]
     fn span_viewport_empty_returns_default() {
         assert_eq!(span_viewport(&[]), (0, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn layout_signature_changes_when_monitors_change() {
+        let a = vec![
+            MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true },
+            MonitorInfo { index: 1, x: 1920, y: 0, width: 1280, height: 720, primary: false },
+        ];
+        let b = vec![MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true }];
+        assert_ne!(layout_signature(&a), layout_signature(&b));
+    }
+
+    #[test]
+    fn layout_signature_order_independent() {
+        let a = vec![
+            MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true },
+            MonitorInfo { index: 1, x: 1920, y: 0, width: 1280, height: 720, primary: false },
+        ];
+        let mut b = a.clone();
+        b.reverse(); // 枚举顺序翻转(热插拔偶发),签名必须不变
+        assert_eq!(layout_signature(&a), layout_signature(&b));
+    }
+
+    #[test]
+    fn layout_signature_changes_on_position_move() {
+        let a = vec![
+            MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true },
+            MonitorInfo { index: 1, x: 1920, y: 0, width: 1280, height: 720, primary: false },
+        ];
+        let mut b = a.clone();
+        b[1].x = 3840; // 副屏挪到更右边
+        assert_ne!(layout_signature(&a), layout_signature(&b));
     }
 }
