@@ -59,6 +59,12 @@ pub struct AppConfig {
     // ---- Phase4 4.4 主题(设计文档 §4)----
     pub theme_mode: String,                // "system" | "dark" | "light",默认 "system"(跟随系统)
     pub theme_accent: String,              // 强调色 token 名,默认 "blue"(前端 CSS 变量令牌,§4.2)
+    // ---- Phase5 5.1 自动更新(设计文档 §1)----
+    pub update_enabled: bool,              // 更新总开关,默认 true;false 不检查不提示
+    pub update_feed_url: String,           // 更新源 latest.json 地址,默认 GitHub 仓库内维护文件
+    // ---- Phase5 5.2 多屏壁纸(设计文档 §2)----
+    pub wallpaper_multi_monitor: bool,     // 多屏开关,默认 false(= 现状只铺主屏)
+    pub wallpaper_span_mode: bool,         // true=拼接(一张素材铺满虚拟桌面);false=每屏独立素材
 }
 
 impl Default for AppConfig {
@@ -99,6 +105,11 @@ impl Default for AppConfig {
             automation_click_delay_ms: 80,
             theme_mode: "system".to_string(),
             theme_accent: "blue".to_string(),
+            update_enabled: true,
+            update_feed_url: "https://raw.githubusercontent.com/sssst1118/aurora-desktop/main/latest.json"
+                .to_string(),
+            wallpaper_multi_monitor: false,
+            wallpaper_span_mode: true,
         }
     }
 }
@@ -331,5 +342,43 @@ mod tests {
         assert_eq!(resolve_key_save(&prev, &Some(String::new())), Some(String::new()));
         // 未配置过 + 掩码 → 保持未配置
         assert_eq!(resolve_key_save(&None, &Some("******".to_string())), None);
+    }
+
+    // ---- Phase5 字段(设计文档 §5):老配置缺 Phase5 字段逐字段回退默认 ----
+
+    #[test]
+    fn missing_phase5_fields_fall_back_per_field() {
+        let p = tmp_cfg("p5partial");
+        std::fs::write(&p, r#"{"hotkey_search":"ctrl+alt+z"}"#).unwrap();
+        let cfg = load_from(&p);
+        // 5.1 更新:默认开 + 默认 GitHub 源
+        assert!(cfg.update_enabled);
+        assert_eq!(
+            cfg.update_feed_url,
+            "https://raw.githubusercontent.com/sssst1118/aurora-desktop/main/latest.json"
+        );
+        // 5.2 多屏:默认关(= 现状只铺主屏),拼接模式默认开
+        assert!(!cfg.wallpaper_multi_monitor);
+        assert!(cfg.wallpaper_span_mode);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn phase5_fields_roundtrip() {
+        let p = tmp_cfg("p5roundtrip");
+        let cfg = AppConfig {
+            update_enabled: false,
+            update_feed_url: "https://example.com/aurora/latest.json".to_string(),
+            wallpaper_multi_monitor: true,
+            wallpaper_span_mode: false,
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &cfg));
+        let loaded = load_from(&p);
+        assert!(!loaded.update_enabled);
+        assert_eq!(loaded.update_feed_url, "https://example.com/aurora/latest.json");
+        assert!(loaded.wallpaper_multi_monitor);
+        assert!(!loaded.wallpaper_span_mode);
+        let _ = std::fs::remove_file(&p);
     }
 }
