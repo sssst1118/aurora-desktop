@@ -45,6 +45,20 @@ pub struct AppConfig {
     pub ai_search_roots: Vec<String>, // 3.3 搜索目录集合,默认空 = 仅桌面(禁止全盘)
     pub ai_max_tool_rounds: u32,      // 工具循环上限,默认 3(防死循环)
     pub ai_hotkey: String,            // 默认 "ctrl+alt+a"
+    // ---- Phase4 4.1 动态壁纸(设计文档 §1)----
+    pub enable_dynamic_wallpaper: bool,    // 总开关,默认 false;关闭时不创建壁纸窗口、不启动电池检测
+    pub wallpaper_dynamic_dir: Option<String>, // 动态壁纸素材目录,默认 None = 与 2.4 wallpaper_dir 相同(仍为空则 %USERPROFILE%\Pictures)
+    pub wallpaper_scale_mode: String,      // "cover" | "contain" | "stretch",默认 "cover"(视频/图片填充方式)
+    pub wallpaper_battery_downshift: bool, // 电池降载开关,默认 true(§8 风险铁律,默认开)
+    pub wallpaper_battery_threshold_pct: u8, // 降载阈值:电量低于该百分比即暂停;默认 0 = 只要在用电池就暂停
+    pub wallpaper_battery_check_sec: u32,  // 电池检测周期,默认 30(有节制轮询)
+    // ---- Phase4 4.2/4.3 自动化(风险最高模块,总开关默认关)----
+    pub enable_automation: bool,           // 自动化总开关,默认 false;关闭时所有 automation_*/uia_* 命令直接返回错误
+    pub automation_uia_enable: bool,       // 4.3 UIA 控件操作独立开关,默认 false(比键鼠模拟风险更高,独立可关)
+    pub automation_click_delay_ms: u32,    // 连续点击最小间隔,默认 80(防连点风暴/误操作)
+    // ---- Phase4 4.4 主题(设计文档 §4)----
+    pub theme_mode: String,                // "system" | "dark" | "light",默认 "system"(跟随系统)
+    pub theme_accent: String,              // 强调色 token 名,默认 "blue"(前端 CSS 变量令牌,§4.2)
 }
 
 impl Default for AppConfig {
@@ -74,6 +88,17 @@ impl Default for AppConfig {
             ai_search_roots: Vec::new(),
             ai_max_tool_rounds: 3,
             ai_hotkey: "ctrl+alt+a".to_string(),
+            enable_dynamic_wallpaper: false,
+            wallpaper_dynamic_dir: None,
+            wallpaper_scale_mode: "cover".to_string(),
+            wallpaper_battery_downshift: true,
+            wallpaper_battery_threshold_pct: 0,
+            wallpaper_battery_check_sec: 30,
+            enable_automation: false,
+            automation_uia_enable: false,
+            automation_click_delay_ms: 80,
+            theme_mode: "system".to_string(),
+            theme_accent: "blue".to_string(),
         }
     }
 }
@@ -205,6 +230,63 @@ mod tests {
         assert_eq!(cfg.hotkey_search, "ctrl+alt+z");
         assert!(cfg.enable_island);
         assert!(!cfg.enable_dock);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- Phase4 字段(设计文档 §0.3.4):老配置缺 Phase4 字段逐字段回退默认 ----
+
+    #[test]
+    fn missing_phase4_fields_fall_back_per_field() {
+        let p = tmp_cfg("p4partial");
+        std::fs::write(&p, r#"{"hotkey_search":"ctrl+alt+z"}"#).unwrap();
+        let cfg = load_from(&p);
+        // 4.1 动态壁纸:全部默认关/空
+        assert!(!cfg.enable_dynamic_wallpaper);
+        assert_eq!(cfg.wallpaper_dynamic_dir, None);
+        assert_eq!(cfg.wallpaper_scale_mode, "cover");
+        assert!(cfg.wallpaper_battery_downshift);
+        assert_eq!(cfg.wallpaper_battery_threshold_pct, 0);
+        assert_eq!(cfg.wallpaper_battery_check_sec, 30);
+        // 4.2/4.3 自动化:默认全关(风险最高模块)
+        assert!(!cfg.enable_automation);
+        assert!(!cfg.automation_uia_enable);
+        assert_eq!(cfg.automation_click_delay_ms, 80);
+        // 4.4 主题:system + blue(老用户升级后外观不变)
+        assert_eq!(cfg.theme_mode, "system");
+        assert_eq!(cfg.theme_accent, "blue");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn phase4_fields_roundtrip() {
+        let p = tmp_cfg("p4roundtrip");
+        let cfg = AppConfig {
+            enable_dynamic_wallpaper: true,
+            wallpaper_dynamic_dir: Some("D:\\wps".to_string()),
+            wallpaper_scale_mode: "contain".to_string(),
+            wallpaper_battery_downshift: false,
+            wallpaper_battery_threshold_pct: 20,
+            wallpaper_battery_check_sec: 60,
+            enable_automation: true,
+            automation_uia_enable: true,
+            automation_click_delay_ms: 120,
+            theme_mode: "light".to_string(),
+            theme_accent: "green".to_string(),
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &cfg));
+        let loaded = load_from(&p);
+        assert!(loaded.enable_dynamic_wallpaper);
+        assert_eq!(loaded.wallpaper_dynamic_dir.as_deref(), Some("D:\\wps"));
+        assert_eq!(loaded.wallpaper_scale_mode, "contain");
+        assert!(!loaded.wallpaper_battery_downshift);
+        assert_eq!(loaded.wallpaper_battery_threshold_pct, 20);
+        assert_eq!(loaded.wallpaper_battery_check_sec, 60);
+        assert!(loaded.enable_automation);
+        assert!(loaded.automation_uia_enable);
+        assert_eq!(loaded.automation_click_delay_ms, 120);
+        assert_eq!(loaded.theme_mode, "light");
+        assert_eq!(loaded.theme_accent, "green");
         let _ = std::fs::remove_file(&p);
     }
 

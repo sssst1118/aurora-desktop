@@ -90,6 +90,19 @@
         "resizable": false,
         "visible": false,
         "skipTaskbar": true
+      },
+      {
+        "label": "wallpaper",
+        "title": "Aurora-Wallpaper",
+        "width": 1920,
+        "height": 1080,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "resizable": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": false
       }
     ],
     "security": {

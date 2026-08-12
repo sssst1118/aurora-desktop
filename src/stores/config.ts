@@ -35,6 +35,18 @@ export interface AppConfig {
   ai_search_roots: string[];
   ai_max_tool_rounds: number;
   ai_hotkey: string;
+  // ---- Phase4(与 src-tauri/src/commands/config.rs 同步)----
+  enable_dynamic_wallpaper: boolean;
+  wallpaper_dynamic_dir: string | null;
+  wallpaper_scale_mode: string;
+  wallpaper_battery_downshift: boolean;
+  wallpaper_battery_threshold_pct: number;
+  wallpaper_battery_check_sec: number;
+  enable_automation: boolean;
+  automation_uia_enable: boolean;
+  automation_click_delay_ms: number;
+  theme_mode: string;
+  theme_accent: string;
 }
 
 export const useConfigStore = defineStore("config", {

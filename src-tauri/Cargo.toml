@@ -25,7 +25,8 @@ tauri-plugin-global-shortcut = "2"
 opener = "0.7"
 # 2.1/2.4 图标提取与窗口操作:Win32_UI_Shell(ExtractIconExW/IShellLinkW)、Win32_System_Com(COM)
 # 2.5 网络采样:Win32_NetworkManagement_IpHelper(GetIfTable2)
-windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_System_Threading", "Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_NetworkManagement_IpHelper"] }
+# Phase4 4.1 电池降载:Win32_System_Power(GetSystemPowerStatus);4.3 UIA:Win32_UI_Accessibility(Uia* 函数族)+ Win32_System_Variant(UiaGetPropertyValue 的 VARIANT 参数)
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_System_Threading", "Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_NetworkManagement_IpHelper", "Win32_System_Power", "Win32_UI_Accessibility", "Win32_System_Variant"] }
 png = "0.17"
 known-folders = "1.4"
 notify = "6"

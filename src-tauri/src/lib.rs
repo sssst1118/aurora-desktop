@@ -1,4 +1,5 @@
 mod ai;
+mod automation;
 mod commands;
 mod hotkey;
 mod indexer;
@@ -88,6 +89,7 @@ pub fn run() {
             commands::ai::ai_execute_tool,
             // ---- Phase3 3.3 自然语言文件搜索(前端/AI 工具双入口) ----
             commands::file_search::ai_search_files,
+            // ---- Phase4 占位:命令注册随模块合入逐个添加(4.1 wallpaper_dynamic_* / 4.2 automation_sim_* / 4.3 uia_*)----
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
