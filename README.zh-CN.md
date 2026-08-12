@@ -3,121 +3,55 @@
 [English](./README.md) | 中文
 
 > **极光之下,桌面宇宙。**
-> Windows 平台 AI 增强模块化桌面效率中心——启动器、灵动岛、Dock、全局搜索、文件收纳、剪贴板历史、壁纸引擎、AI 助手,一站集齐。
+> 一个悬浮在屏幕顶端的极光带,承载整个 Windows 桌面效率宇宙。
 
-Aurora 是一个面向 Windows 10/11 的开源桌面效率中心,目标是**替代 / 增强 Windows 原生桌面体验**。顶部常驻的灵动岛如同一道极光带,极光之下是完整的桌面宇宙:所有功能模块独立可开关,按需启用、不臃肿;Rust 后端扛下系统调用与 AI 代理,前端只负责渲染交互。
+Aurora 是 Windows 10/11 上的开源桌面效率中枢——全局搜索、灵动岛、文件收纳、剪贴板历史、AI 助手、动态壁纸,一站集齐。每个模块独立可开关:只装你需要的,不多一点。
 
-## 功能全景
+## ✨ 亮点特性
 
-> ✅ 已实现 / 🚧 开发中 / 📋 规划中
+- **⚡ 全局搜索** — `Ctrl+Shift+Space` 即呼即搜,开始菜单应用秒级定位,回车直达
+- **🌌 灵动岛** — 常驻屏幕顶端:时间、CPU、内存、网速一眼尽览,置顶不抢焦点
+- **📁 文件抽屉** — 桌面文件按类型自动分类收纳,新增即时刷新,桌面从此整洁
+- **📋 剪贴板历史** — 自动记录每一次复制,可搜索、一键回贴,重启不丢
+- **🤖 AI 助手** — DeepSeek 云端 + Ollama 本地双模式;自然语言打开应用、搜索文件、更换壁纸
+- **🖼️ 动态壁纸** — 视频 / HTML / WebGL 注入桌面底层,笔记本自动降载,多屏热插拔自动重建
+- **📊 系统监控** — CPU / 内存 / 网络实时采样,灵动岛与托盘双处可见
+- **🔒 隐私轻量** — API 密钥仅存本机;空闲内存 <120MB;模块按需启停,零后台浪费
 
-| 模块 | 状态 | 说明 |
-|---|---|---|
-| **全局搜索启动器** | 🚧 | 全局热键(Ctrl+Shift+Space)呼出极速搜索:开始菜单应用已索引可搜,回车直达。*Phase1 核心已完成;拼音/模糊匹配与文件搜索后续阶段做* |
-| **灵动岛 Island** | ✅ | 常驻顶部悬浮面板,时间 / CPU / 内存 / 网络速率,置顶不抢焦点。*Phase2:网络速率走后端 2s 采样 + 事件推送* |
-| **Dock 栏** | ✅ | 自定义应用快捷栏,图标拖拽排序,运行中程序标记,上下边缘可切换。*Phase2 已完成;GUI 验收通过 2026-08-12* |
-| **桌面文件抽屉** | ✅ | 桌面文件收纳:逻辑分组(文件原位不动),按扩展名自动分类,事件驱动自动刷新。*Phase2 已完成;物理归档推迟 Phase4;GUI 验收通过 2026-08-12* |
-| **剪贴板历史** | ✅ | 后台事件驱动监听剪贴板,历史可搜索、可回贴,本地持久化。*Phase2 已完成;GUI 验收通过 2026-08-12* |
-| **壁纸引擎** | ✅ | 静态壁纸切换 + 动态引擎(video / HTML / 实时 WebGL 经 WorkerW 注入桌面下层),电池降载,多屏支持(热插拔自动重建)。*Phase 2 静态 + Phase 4 动态 + Phase 5 多屏已完成* |
-| **系统状态监控** | ✅ | CPU / 内存 / 网络实时采样(后端 2s 线程),灵动岛与托盘 tooltip 展示。*Phase2 已完成* |
-| **AI 助手** | 🚧 | 双模式:云端 DeepSeek + 本地 Ollama;自然语言指令直驱系统操作(打开程序、设静态/动态壁纸、搜文件)。*Phase 3 核心 + Phase 5 动态壁纸工具已完成;手动验收待用户* |
-| **UI 自动化** | ✅ | 键鼠模拟(SendInput)与 Windows UI Automation 控件操作(搜索窗口、读取文本、点击、输入)。*Phase 4 已完成* |
-| **自动更新** | ✅ | 自研 updater(免签名):语义化版本比较 + SHA-256 校验 + NSIS 静默安装;设置页手动检查 / 6 小时自动检查 / 一键更新。*Phase 5 已完成;签名接入见 [docs/代码签名接入.md](./docs/代码签名接入.md)* |
+## 🚀 快速开始
 
-## 界面示意
+1. 从 [Releases](https://github.com/sssst1118/aurora-desktop/releases) 下载安装包(`Aurora_0.1.0_x64.msi` 或 `setup.exe`)
+2. 双击安装并启动 Aurora
+3. 按 `Ctrl+Shift+Space` 呼出全局搜索,开始使用
 
-```
-┌──────────────────────── 灵动岛(常驻顶部,极光带) ───────────────────┐
-│  🔍  ▸ 14:32:08   CPU 12%   内存 5.8G/16G   ↑1.2M/s ↓3.4M/s  ♪     │
-└─────────────────────────────────────────────────────────────────────┘
+**配置 AI(可选)**:设置 → AI 助手 → 填入 DeepSeek API Key;或指向本地 Ollama(如 `qwen2.5:7b-instruct-q4_K_M`),云端 / 本地自由切换。
 
-        ┌──────────── 全局搜索(Ctrl+Shift+Space) ────────────┐
-        │  🔍  > 记                                                           │
-        │  ────────────────────────────────────────────────── │
-        │  🖥 记事本                    C:\Windows\notepad.exe │
-        │  📄 记账.xlsx                  D:\财务\记账.xlsx    │
-        │  ...                                                  │
-        └──────────────────────────────────────────────────────┘
+## ⌨️ 快捷键
 
-       ( Dock 栏 ──────────────── )( 文件抽屉 )( AI 对话面板 )
-```
-
-*界面示意为规划稿,最终效果以实际开发为准。*
-
-## 技术栈
-
-| 层级 | 选型 |
+| 快捷键 | 功能 |
 |---|---|
-| 桌面外壳 | Tauri 2.0(多窗口、透明无边框、托盘、权限白名单) |
-| 后端 | Rust 1.80+ / windows-rs(Win32 原生 API)、reqwest(AI 代理) |
-| 前端 | Vue3 + TypeScript + Vite、TailwindCSS v3、Pinia |
-| 插件 | global-shortcut(全局热键)、clipboard-next(剪贴板)、wallpaper(壁纸层) |
-| 包管理 | pnpm / cargo |
+| `Ctrl+Shift+Space` | 全局搜索 |
+| `Ctrl+Alt+D` | 文件抽屉 |
+| `Ctrl+Alt+V` | 剪贴板历史 |
+| `Ctrl+Alt+A` | AI 助手 |
 
-## 快速开始
+## 🛠️ 技术一览(开发者)
 
-### 环境要求
+- **外壳**:Tauri 2(多窗口、透明无边框、托盘、权限白名单)
+- **后端**:Rust + Win32 原生 API——系统调用、搜索索引、AI 代理全在后端
+- **前端**:Vue3 + TypeScript + Vite + TailwindCSS
+- 开发 / 打包说明见 [docs/开发文档.md](./docs/开发文档.md),模块明细与路线图见 [docs/开发进度.md](./docs/开发进度.md)
 
-- Windows 10 21H2 及以上
-- Rust MSVC 工具链(含 Visual Studio Build Tools C++ 负载 + Windows SDK)
-- Node.js LTS + pnpm
+## 📜 设计原则
 
-### 开发运行
+- 模块化可开关,不臃肿
+- 前端只管渲染,重活全在 Rust 后端
+- 空闲内存 <120MB,后台零轮询
+- AI 密钥只存本地,不进前端、不上网络
 
-```bash
-pnpm install          # 安装前端依赖
-pnpm tauri dev        # 启动开发模式(Rust 编译 + 前端热更新)
-```
+## 致谢
 
-### 打包
-
-```bash
-pnpm tauri build      # 产出 MSI + NSIS 安装包(NSIS = 自动更新目标)
-```
-
-> 打包前置:MSI (WiX) 与 NSIS 工具链自动下载;
-> 若走代理,先设置 `HTTPS_PROXY=http://127.0.0.1:7897`。
-
-## 项目结构
-
-```
-aurora-desktop/
-├── src-tauri/            # Rust 后端
-│   ├── commands/         # Tauri 命令:搜索/文件/壁纸/系统/剪贴板/AI/自动化
-│   ├── indexer/          # 开始菜单应用索引、文件按需索引
-│   └── automation/       # 键鼠模拟 + UI Automation 封装
-└── src/                  # Vue3 前端
-    ├── components/core/  # Island / Dock / SearchBar / FileDrawer / AIPanel / Settings
-    └── stores/           # Pinia:模块开关、配置、剪贴板历史
-```
-
-## 路线图
-
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| **Phase 1** MVP | 项目脚手架、多窗口 + 托盘、全局热键搜索、开始菜单索引、基础设置、灵动岛雏形——*可当高级启动器使用* | 🚧 代码完成,手动验收待用户 |
-| **Phase 2** 效率增强 | Dock、文件抽屉、剪贴板历史、静态壁纸、完整系统状态 | ✅ 已完成(GUI 手动验收通过 2026-08-12) |
-| **Phase 3** AI 集成 | AI 对话面板、DeepSeek / Ollama 双模式、function-call 工具调用 | 🚧 代码完成,手动验收待用户 |
-| **Phase 4** 高级特性 | 动态壁纸 + 电池降载、键鼠模拟、UI Automation、主题系统、MSI 打包 | ✅ 已完成(GUI 手动验收待用户) |
-| **Phase 5** 发布就绪 | NSIS 安装包 + 自研自动更新(含签名接入)、多屏壁纸、AI 动态壁纸工具、死代码清理 | ✅ 已完成(GUI 手动验收待用户) |
-
-## 设计原则
-
-- **模块化可开关**:每个模块独立启用/停用,不臃肿;
-- **分层架构**:系统调用 / IO / 搜索 / AI / 自动化全在 Rust 后端,前端只管渲染;
-- **轻量优先**:空闲内存目标 <120MB,后台零轮询轰炸,索引懒加载;
-- **密钥安全**:AI API Key 只存本地配置文件,不进前端、不上网络。
-
-## 参考与致谢
-
-架构与思路参考了这些优秀开源项目(按模块):
-
-- **桌面美化**:Lively Wallpaper、Seelen-UI、dwall、Sapphire-EnhancedDesktop、SnowDesktop、Layouter
-- **启动器**:ZeroLaunch-rs(拼音/模糊搜索)、Flow Launcher、Wox、QuickLauncher
-- **剪贴板**:ClipVault、TieZ、EcoPaste、Copy Creator
-- **AI 桌面**:Hope Agent、Abu-Cowork、Desktop-Claw、NAVI
-- **Tauri 参考**:Yogu、健康办公助手、今序 (Torder)
-- **任务栏**:ZenDesktop、Taskbar Widgets、ComposeWindowsTaskBar
+架构与思路参考了 Lively Wallpaper、Seelen-UI、Flow Launcher、Wox、EcoPaste 等优秀开源项目。
 
 ## License
 
