@@ -21,6 +21,11 @@ let debounceTimer: number | undefined;
 
 const win = getCurrentWindow();
 
+// Dock 开关立即读取(不等 onShown):Dock 组件在应用启动时即挂载并后台提取图标,
+// 用户呼出搜索栏时图标已就绪(否则首次呼出才挂载,COM 初始化的 ~1.9s 成本
+// 会压在"打开搜索栏之后"——实测首 lnk 图标提取独占 1.85s)
+void loadDockFlag();
+
 async function loadDockFlag() {
   try {
     const cfg = await invoke<{ enable_dock: boolean }>("config_load");
