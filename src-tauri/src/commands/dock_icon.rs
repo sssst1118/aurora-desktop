@@ -20,7 +20,9 @@ use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::UI::Shell::ExtractIconExW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
 
-use super::resolve_lnk_target; // .lnk 先解析目标再提取(ExtractIconExW 对 lnk 直接调用失败)
+use super::item_target_path; // .lnk 先解析目标再提取(ExtractIconExW 对 lnk 直接调用失败);
+                             // 走 dock.rs 的 LNK_TARGET_CACHE 共享缓存:实测冷启动首个
+                             // lnk 的 COM 初始化 1.85s,重复解析会拖慢首次打开搜索栏
 
 // ---- 手写 FFI:windows-sys 未启用 Win32_Graphics_Gdi / 相关 user32 符号 ----
 
@@ -90,11 +92,7 @@ pub fn extract_icon_pixels(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     // 先解析目标(如 exe)再提取,与资源管理器显示一致;解析失败回退原路径。
     // 注:曾改 SHGetFileInfoW 走 Shell 语义,但该 API 在并发调用下返回 ok=1 而 hIcon
     // 为空(系统图标缓存竞态,全量测试轮流挂),且隐式依赖 COM 初始化,故回退本组合。
-    let target = if path.to_lowercase().ends_with(".lnk") {
-        resolve_lnk_target(Path::new(path)).unwrap_or_else(|| path.to_string())
-    } else {
-        path.to_string()
-    };
+    let target = item_target_path(path);
     let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let mut hicon_large: HICON = std::ptr::null_mut();
@@ -320,6 +318,7 @@ pub fn clear_memory_cache() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn b64_standard_vectors() {
@@ -383,6 +382,50 @@ mod tests {
     #[test]
     fn extract_icon_garbage_path_returns_none() {
         assert!(extract_icon_pixels(r"C:\definitely\not\exists_aurora.exe").is_none());
+    }
+
+    #[test]
+    fn debug_first_load_timing() {
+        // 排查"首次打开搜索栏图标加载几秒":模拟冷启动(清内存缓存+删磁盘缓存),
+        // 对公共桌面 lnk 批量提取计时,看瓶颈在 lnk 解析还是像素提取
+        let dir = std::env::temp_dir().join(format!("aurora_icon_timing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        clear_memory_cache();
+        let lnks: Vec<String> = std::fs::read_dir(r"C:\Users\Public\Desktop")
+            .map(|rd| {
+                rd.filter_map(|e| {
+                    let p = e.ok()?.path();
+                    (p.extension().map(|x| x.to_string_lossy().to_lowercase()) == Some("lnk".into()))
+                        .then(|| p.to_string_lossy().to_string())
+                })
+                .take(8)
+                .collect()
+            })
+            .unwrap_or_default();
+        if lnks.is_empty() {
+            return;
+        }
+        let t0 = Instant::now();
+        for p in &lnks {
+            let s = Instant::now();
+            let r = extract_icon_pixels(p);
+            println!("  冷启动提取 {:?}: {:?} -> {}", Path::new(p).file_name().unwrap_or_default(), s.elapsed(), r.is_some());
+        }
+        println!("冷启动(无预热)串行 {} 个 lnk: {:?}", lnks.len(), t0.elapsed());
+        // 模拟预热:先解析全部 lnk 目标(填充共享 LNK_TARGET_CACHE,付一次 COM 初始化),
+        // 再清图标内存缓存(模拟磁盘缓存缺失),测"预热后首次提取"
+        clear_memory_cache();
+        for p in &lnks {
+            let _ = super::item_target_path(p);
+        }
+        let t2 = Instant::now();
+        for p in &lnks {
+            let s = Instant::now();
+            let r = extract_icon_pixels(p);
+            println!("  预热后提取 {:?}: {:?} -> {}", Path::new(p).file_name().unwrap_or_default(), s.elapsed(), r.is_some());
+        }
+        println!("预热后首次提取 {} 个 lnk: {:?}", lnks.len(), t2.elapsed());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -3,12 +3,27 @@
 // 入口分流(island/search)在 main.ts 完成,其余 label 落到本组件。
 // 组件根元素不再加背景:各面板组件自带毛玻璃背景(Dock/DrawerPanel/ClipboardPanel)。
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import { onMounted } from "vue";
 import DrawerPanel from "./components/FileDrawer/DrawerPanel.vue";
 import ClipboardPanel from "./components/core/ClipboardPanel.vue";
 import AIPanel from "./components/core/AIPanel.vue";
 import DynamicWallpaper from "./components/core/DynamicWallpaper.vue";
 
 const label = getCurrentWindow().label;
+
+// Dock 图标后台预热:搜索窗口随应用启动常驻,挂载时静默提取全部条目图标(写磁盘缓存),
+// 用户首次打开搜索栏时图标命中缓存毫秒级显示,不必现场等 lnk 的 COM 初始化
+// (实测冷启动首个 ~1.85s)。预热失败静默,打开时再现场提取兜底。
+onMounted(async () => {
+  if (label !== "search") return;
+  try {
+    const items = await invoke<{ name: string; path: string }[]>("dock_get_items");
+    for (const it of items) void invoke("dock_get_icon", { path: it.path });
+  } catch {
+    /* 预热失败:打开搜索栏时 Dock 组件会现场提取 */
+  }
+});
 </script>
 
 <template>
