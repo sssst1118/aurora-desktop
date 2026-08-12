@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod automation;
 pub mod classify;
 pub mod clipboard;
 pub mod config;
