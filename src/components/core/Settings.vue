@@ -473,10 +473,11 @@ async function uiaType() {
       <div class="bg-[var(--aurora-field)] rounded p-2.5 space-y-1.5">
         <div class="text-xs text-[var(--aurora-text-dim)]">快捷键速查</div>
         <div class="flex items-center justify-between text-xs">
-          <span>呼出搜索框</span>
+          <!-- 灵动岛即顶部常驻栏:点击或按快捷键均呼出搜索框;键位为固定值(与 hotkey.rs SEARCH_HOTKEY 一致) -->
+          <span>灵动岛 · 呼出搜索框</span>
           <span
             class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
-            >{{ store.cfg?.hotkey_search ?? "Ctrl+Shift+Space" }}</span
+            >Ctrl+Shift+Space</span
           >
         </div>
         <div class="flex items-center justify-between text-xs">
@@ -493,7 +494,7 @@ async function uiaType() {
             >{{ store.cfg?.hotkey_clipboard ?? "Ctrl+Alt+V" }}</span
           >
         </div>
-        <p class="text-[10px] text-[var(--aurora-text-dim)]">搜索框快捷键为固定值;抽屉/剪贴板可在各自区块修改</p>
+        <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出搜索框(固定值);抽屉/剪贴板可在各自区块修改</p>
       </div>
 
       <div class="flex items-center justify-between">
