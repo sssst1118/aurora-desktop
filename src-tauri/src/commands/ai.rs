@@ -252,6 +252,21 @@ async fn exec_tool_action(app: AppHandle, action: ToolAction) -> Result<(String,
             let items = crate::commands::clipboard::clipboard_get_history(app.clone());
             Ok(("get_clipboard_history".to_string(), fmt_clipboard_summary(&items)))
         }
+        ToolAction::SetDynamicWallpaper { path, url } => {
+            // 4.1 set 契约仅收本地素材路径;远端网页素材暂不支持(需先下载到本地)
+            if path.is_empty() {
+                let hint = url.as_deref().unwrap_or("");
+                return Err(format!(
+                    "动态壁纸需要本地素材路径,网页素材请先下载到本地: {hint}"
+                ));
+            }
+            let info = crate::commands::wallpaper_dynamic::wallpaper_dynamic_set(app, path)?;
+            Ok(("set_dynamic_wallpaper".to_string(), format!("动态壁纸已设置: {}", display_path(&info.path))))
+        }
+        ToolAction::StopDynamicWallpaper => {
+            crate::commands::wallpaper_dynamic::wallpaper_dynamic_clear(app)?;
+            Ok(("stop_dynamic_wallpaper".to_string(), "已恢复系统壁纸".to_string()))
+        }
     }
 }
 

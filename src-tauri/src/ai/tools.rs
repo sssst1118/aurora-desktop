@@ -84,6 +84,23 @@ pub static ALL_TOOLS: std::sync::LazyLock<Vec<ToolSpec>> = std::sync::LazyLock::
             description: "查看剪贴板历史(最近文本,供\"我复制了什么\"类提问)",
             parameters: json!({ "type": "object", "properties": {} }),
         },
+        // ---- Phase5 5.3 动态壁纸(设计文档 §3)----
+        ToolSpec {
+            name: "set_dynamic_wallpaper",
+            description: "把图片/视频/网页文件设为桌面壁纸(图片走系统壁纸;视频/html 走动态壁纸层,须先启用动态壁纸;file_path 为绝对路径)",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "素材绝对路径" },
+                    "url": { "type": "string", "description": "可选,http(s) 网页素材(当前需先下载到本地,直接给 url 会被拒)" }
+                }
+            }),
+        },
+        ToolSpec {
+            name: "stop_dynamic_wallpaper",
+            description: "恢复系统壁纸(撤下动态壁纸层)",
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
     ]
 });
 
@@ -151,6 +168,9 @@ pub enum ToolAction {
     SetWallpaper { file_path: String },
     GetSystemStatus,
     GetClipboardHistory,
+    // ---- Phase5 5.3 动态壁纸(设计文档 §3):url 保留供未来远端素材扩展,当前执行要求本地 path ----
+    SetDynamicWallpaper { path: String, url: Option<String> },
+    StopDynamicWallpaper,
 }
 
 /// 纯路由:工具名 + 已解析参数 → 执行意图。
@@ -184,6 +204,21 @@ pub fn route(name: &str, args: &Value) -> Result<ToolAction, String> {
         "get_clipboard_history" => {
             ensure_no_args(args)?;
             Ok(ToolAction::GetClipboardHistory)
+        }
+        "set_dynamic_wallpaper" => {
+            let path = optional_str(args, "file_path")?.unwrap_or_default();
+            let url = optional_str(args, "url")?;
+            if path.is_empty() && url.is_none() {
+                return Err("set_dynamic_wallpaper 需要 file_path 或 url 至少一个".to_string());
+            }
+            if !path.is_empty() {
+                require_abs(&path, "file_path")?;
+            }
+            Ok(ToolAction::SetDynamicWallpaper { path, url })
+        }
+        "stop_dynamic_wallpaper" => {
+            ensure_no_args(args)?;
+            Ok(ToolAction::StopDynamicWallpaper)
         }
         _ => Err(format!("未知工具名: {name}")),
     }
@@ -223,6 +258,22 @@ pub fn rule_match(instruction: &str) -> Option<ToolAction> {
             return if rest.is_empty() { None } else { Some(ToolAction::SearchFiles { query: rest, dirs: Vec::new() }) };
         }
     }
+    // ---- Phase5 5.3:壁纸关键词(长度降序;保守词表宁缺勿误匹配,设计文档 §3.2)----
+    // stop 先判(含"停/关"等独立语义),set 后判;与 open/find 无词面冲突
+    const STOP_WALLPAPER_KW: [&str; 4] = ["停止壁纸", "关掉壁纸", "关闭壁纸", "停壁纸"];
+    const SET_WALLPAPER_KW: [&str; 6] =
+        ["设置壁纸", "换成壁纸", "设为壁纸", "改成壁纸", "换壁纸", "设壁纸"];
+
+    for kw in STOP_WALLPAPER_KW {
+        if instruction.contains(kw) {
+            return Some(ToolAction::StopDynamicWallpaper);
+        }
+    }
+    for kw in SET_WALLPAPER_KW {
+        if instruction.contains(kw) {
+            return Some(ToolAction::SetDynamicWallpaper { path: String::new(), url: None });
+        }
+    }
     None
 }
 
@@ -236,6 +287,18 @@ fn required_str(args: &Value, key: &str) -> Result<String, String> {
         Some(Value::String(_)) => Err(format!("参数 {key} 为空字符串")),
         Some(_) => Err(format!("参数 {key} 类型错误,应为字符串")),
         None => Err(format!("缺少必填参数 {key}")),
+    }
+}
+
+/// 取可选字符串参数(如 set_dynamic_wallpaper 的 url):缺失 → Ok(None);
+/// 空字符串按缺失处理(宽松);非字符串 → Err。
+fn optional_str(args: &Value, key: &str) -> Result<Option<String>, String> {
+    let obj = args.as_object().ok_or_else(|| "参数必须是 JSON 对象".to_string())?;
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        Some(Value::String(_)) => Ok(None), // 空串按缺失处理
+        Some(_) => Err(format!("参数 {key} 类型错误,应为字符串")),
     }
 }
 
@@ -288,10 +351,10 @@ mod tests {
     // ---------- tools_json:6 工具字段完整、required 正确 ----------
 
     #[test]
-    fn tools_json_has_exactly_six_tools() {
+    fn tools_json_has_exactly_eight_tools() {
         let tools = tools_json();
         let arr = tools.as_array().expect("tools_json 应为数组");
-        assert_eq!(arr.len(), 6, "工具数必须为 6(白名单固定)");
+        assert_eq!(arr.len(), 8, "工具数必须为 8(白名单固定;Phase5 新增壁纸两工具)");
         for t in arr {
             assert_eq!(t["type"], "function", "每个工具条目 type 应为 function");
             let f = &t["function"];
@@ -319,6 +382,8 @@ mod tests {
                 "set_wallpaper",
                 "get_system_status",
                 "get_clipboard_history",
+                "set_dynamic_wallpaper",
+                "stop_dynamic_wallpaper",
             ]
         );
     }
@@ -536,5 +601,70 @@ mod tests {
         assert_eq!(rule_match(""), None);
         assert_eq!(rule_match("打开"), None, "剩余词为空 → None");
         assert_eq!(rule_match("查找"), None, "剩余词为空 → None");
+    }
+
+    // ---------- Phase5 5.3:动态壁纸工具(设计文档 §3)----------
+
+    #[test]
+    fn route_set_dynamic_wallpaper_requires_path_or_url() {
+        // 缺全部必填 → Err
+        assert!(route("set_dynamic_wallpaper", &json!({})).is_err());
+        // 相对路径 → Err
+        assert!(route("set_dynamic_wallpaper", &json!({"file_path": "videos\\a.mp4"})).is_err());
+        // 合法:绝对路径
+        let ok = route("set_dynamic_wallpaper", &json!({"file_path": r"C:\mat\a.mp4"}));
+        assert_eq!(
+            ok,
+            Ok(ToolAction::SetDynamicWallpaper { path: r"C:\mat\a.mp4".to_string(), url: None })
+        );
+        // 合法:url 网页素材
+        let ok2 = route("set_dynamic_wallpaper", &json!({"url": "https://example.com/bg.html"}));
+        assert_eq!(
+            ok2,
+            Ok(ToolAction::SetDynamicWallpaper {
+                path: String::new(),
+                url: Some("https://example.com/bg.html".to_string())
+            })
+        );
+        // file_path 与 url 同时给 → 接受(file_path 优先消费)
+        let ok3 =
+            route("set_dynamic_wallpaper", &json!({"file_path": r"C:\mat\a.mp4", "url": "https://x.com/y.html"}));
+        assert!(matches!(ok3, Ok(ToolAction::SetDynamicWallpaper { path, url }) if path == r"C:\mat\a.mp4" && url.as_deref() == Some("https://x.com/y.html")));
+    }
+
+    #[test]
+    fn route_stop_dynamic_wallpaper_no_args() {
+        // 空参数 OK;多余字段宽松通过(与 get_system_status 的 ensure_no_args 语义一致)
+        assert!(route("stop_dynamic_wallpaper", &json!({})).is_ok());
+        assert!(route("stop_dynamic_wallpaper", &json!({"extra": 1})).is_ok());
+        assert_eq!(route("stop_dynamic_wallpaper", &json!({})), Ok(ToolAction::StopDynamicWallpaper));
+    }
+
+    #[test]
+    fn rule_match_set_wallpaper_keywords() {
+        assert!(matches!(rule_match("把这个视频设为壁纸"), Some(ToolAction::SetDynamicWallpaper { .. })));
+        assert!(matches!(rule_match("换成壁纸"), Some(ToolAction::SetDynamicWallpaper { .. })));
+        assert!(matches!(rule_match("设置壁纸"), Some(ToolAction::SetDynamicWallpaper { .. })));
+        assert!(matches!(rule_match("改成壁纸"), Some(ToolAction::SetDynamicWallpaper { .. })));
+    }
+
+    #[test]
+    fn rule_match_stop_wallpaper_keywords() {
+        assert!(matches!(rule_match("停止壁纸"), Some(ToolAction::StopDynamicWallpaper)));
+        assert!(matches!(rule_match("关闭壁纸"), Some(ToolAction::StopDynamicWallpaper)));
+        // 组合词子串回归(3.2 老坑):"设置壁纸"不能误匹配 stop
+        assert!(matches!(rule_match("设置壁纸"), Some(ToolAction::SetDynamicWallpaper { .. })));
+    }
+
+    #[test]
+    fn tools_json_contains_dynamic_wallpaper_tools() {
+        let tools = tools_json();
+        let arr = tools.as_array().unwrap();
+        let names: Vec<&str> = arr
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&"set_dynamic_wallpaper"));
+        assert!(names.contains(&"stop_dynamic_wallpaper"));
     }
 }
