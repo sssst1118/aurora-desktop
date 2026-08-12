@@ -1,15 +1,63 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useConfigStore } from "../../stores/config";
 import WallpaperPanel from "./WallpaperPanel.vue";
 
 const store = useConfigStore();
 const emit = defineEmits<{ (e: "close"): void }>();
 
-onMounted(() => {
+onMounted(async () => {
   void store.load();
   void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
+  try {
+    appVersion.value = await getVersion();
+  } catch {
+    appVersion.value = "";
+  }
+  // 订阅后台检查/托盘检查结果与下载事件(后端驱动,前端只展示)
+  const unlisteners = [
+    await listen("update-available", (ev) => {
+      const p = ev.payload as { version?: string | null; notes?: string | null };
+      updateStatus.value = "available";
+      updateVersion.value = p.version ?? "";
+      updateNotes.value = p.notes ?? "";
+    }),
+    await listen("update-check-result", (ev) => {
+      const p = ev.payload as {
+        status: string;
+        version?: string | null;
+        notes?: string | null;
+        error?: string | null;
+      };
+      if (p.status === "available") {
+        updateStatus.value = "available";
+        updateVersion.value = p.version ?? "";
+        updateNotes.value = p.notes ?? "";
+      } else if (p.status === "latest") {
+        updateStatus.value = "latest";
+        updateVersion.value = p.version ?? "";
+      } else {
+        updateStatus.value = "error";
+        updateError.value = p.error ?? "检查更新失败";
+      }
+    }),
+    await listen("update-downloaded", () => {
+      updateStatus.value = "downloaded";
+    }),
+    await listen("update-error", (ev) => {
+      updateStatus.value = "error";
+      updateError.value = String((ev.payload as { message?: string }).message ?? "下载失败");
+    }),
+  ];
+  updateListeners = unlisteners;
+});
+
+onUnmounted(() => {
+  updateListeners.forEach((u) => u());
+  updateListeners = [];
 });
 
 async function toggleIsland() {
@@ -229,6 +277,66 @@ async function setAccent(name: string) {
   if (!store.cfg) return;
   store.cfg.theme_accent = name;
   await store.save();
+}
+
+// ---- Phase5 5.1 自动更新(自研 updater;命令契约见 docs/Phase5-设计.md §1)----
+
+const appVersion = ref("");
+const updateStatus = ref("idle"); // idle | checking | latest | available | downloading | downloaded | error
+const updateVersion = ref("");
+const updateNotes = ref("");
+const updateError = ref("");
+let updateListeners: UnlistenFn[] = [];
+
+/** 手动检查更新(update_check 三态:latest/available/error) */
+async function checkUpdate() {
+  updateStatus.value = "checking";
+  updateError.value = "";
+  try {
+    const r = await invoke<{
+      status: string;
+      version: string | null;
+      notes: string | null;
+      error: string | null;
+    }>("update_check");
+    if (r.status === "available") {
+      updateStatus.value = "available";
+      updateVersion.value = r.version ?? "";
+      updateNotes.value = r.notes ?? "";
+    } else if (r.status === "latest") {
+      updateStatus.value = "latest";
+      updateVersion.value = r.version ?? "";
+    } else {
+      updateStatus.value = "error";
+      updateError.value = r.error ?? "检查更新失败";
+    }
+  } catch (e) {
+    updateStatus.value = "error";
+    updateError.value = String(e);
+  }
+}
+
+/** 下载并安装:update_download(进度经事件)成功后 update_install(静默安装 + 退出重启) */
+async function downloadAndInstall() {
+  updateStatus.value = "downloading";
+  updateError.value = "";
+  try {
+    await invoke("update_download");
+    // 已下载完成,交给安装器(命令内部 spawn 独立进程并退出 app)
+    await invoke("update_install");
+  } catch (e) {
+    updateStatus.value = "error";
+    updateError.value = String(e);
+  }
+}
+
+/** 打开下载目录(手动安装兜底) */
+async function openUpdatesFolder() {
+  try {
+    await invoke("update_open_folder");
+  } catch (e) {
+    updateError.value = String(e);
+  }
 }
 
 /** 开关组件标记(纯展示辅助,避免模板重复) */
@@ -1049,6 +1157,67 @@ async function uiaType() {
             :title="c"
             @click="setAccent(c)"
           />
+        </div>
+      </div>
+
+      <!-- Phase5 5.1 自动更新区块(自研 updater;latest.json 源见设计文档 §1) -->
+      <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm">自动更新</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">
+              当前版本 v{{ appVersion || "?" }},启动 15s 后 + 每 6 小时静默检查
+            </div>
+          </div>
+          <button
+            class="text-[10px] px-2.5 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+            :disabled="updateStatus === 'checking' || updateStatus === 'downloading'"
+            @click="checkUpdate"
+          >
+            {{ updateStatus === "checking" ? "检查中…" : "检查更新" }}
+          </button>
+        </div>
+
+        <div v-if="updateError" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+          {{ updateError }}
+        </div>
+        <div
+          v-else-if="updateStatus === 'latest'"
+          class="text-xs text-emerald-300 bg-emerald-500/10 rounded-lg px-3 py-1.5"
+        >
+          已是最新版本(更新源 v{{ updateVersion || "?" }})
+        </div>
+        <div
+          v-else-if="updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded'"
+          class="text-xs bg-[var(--aurora-field)]/60 rounded-lg px-3 py-1.5 space-y-1"
+        >
+          <div class="text-[var(--aurora-text)]">
+            发现新版本 v{{ updateVersion || "?" }}
+            <span v-if="updateStatus === 'downloading'" class="text-[var(--aurora-text-dim)]">
+              (正在下载…)
+            </span>
+            <span v-else-if="updateStatus === 'downloaded'" class="text-emerald-300">
+              (下载完成)
+            </span>
+          </div>
+          <div v-if="updateNotes" class="text-[var(--aurora-text-dim)] break-all leading-relaxed">
+            {{ updateNotes }}
+          </div>
+          <div class="flex items-center gap-2 pt-0.5">
+            <button
+              v-if="updateStatus === 'available' || updateStatus === 'downloaded'"
+              class="text-[10px] px-2.5 py-1 rounded bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white"
+              @click="downloadAndInstall"
+            >
+              {{ updateStatus === "downloaded" ? "立即安装并重启" : "下载并安装" }}
+            </button>
+            <button
+              class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+              @click="openUpdatesFolder"
+            >
+              打开下载目录
+            </button>
+          </div>
         </div>
       </div>
     </div>

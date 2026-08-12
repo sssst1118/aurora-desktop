@@ -1,7 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Listener,
+    AppHandle, Emitter, Listener,
 };
 
 /// 2.5 托盘 tooltip 文本(CPU/内存/网络,纯函数便于单测)
@@ -46,6 +46,8 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let hide_item = MenuItem::with_id(app, "hide_all", "隐藏全部窗口", true, None::<&str>)?;
     let drawer_item = MenuItem::with_id(app, "toggle_drawer", "桌面抽屉", true, None::<&str>)?;
     let clipboard_item = MenuItem::with_id(app, "toggle_clipboard", "剪贴板历史", true, None::<&str>)?;
+    // 5.1 自动更新:入口按 update_enabled 开关条件加入(关闭时不显示)
+    let update_item = MenuItem::with_id(app, "check_update", "检查更新", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     // Phase3 AI 对话入口:enable_ai 总开关关闭时不显示(设计文档 §1.5),按配置条件加入
     let mut menu_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
@@ -54,6 +56,9 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     if crate::commands::config::load_from(&crate::commands::config::config_path(app)).enable_ai {
         ai_item = MenuItem::with_id(app, "toggle_ai_panel", "AI 对话", true, None::<&str>)?;
         menu_items.push(&ai_item);
+    }
+    if crate::commands::config::load_from(&crate::commands::config::config_path(app)).update_enabled {
+        menu_items.push(&update_item);
     }
     menu_items.push(&quit_item);
     let menu = Menu::with_items(app, &menu_items)?;
@@ -68,6 +73,17 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "toggle_drawer" => crate::hotkey::toggle_drawer_window(app),
             "toggle_clipboard" => crate::hotkey::toggle_clipboard_window(app),
             "toggle_ai_panel" => crate::hotkey::toggle_ai_panel_window(app),
+            // 5.1 检查更新:结果广播 update-check-result(前端/托盘弹窗均可消费)
+            "check_update" => {
+                let tray_app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let r = crate::commands::updater_cmd::update_check(tray_app.clone()).await;
+                    let _ = tray_app.emit(
+                        "update-check-result",
+                        &serde_json::json!({ "status": r.status, "version": r.version, "notes": r.notes, "error": r.error }),
+                    );
+                });
+            }
             "quit" => app.exit(0),
             _ => {}
         })

@@ -5,9 +5,9 @@
 //! - 下载:SHA-256 校验(sha2 crate,防中间人;签名证书未采购前的替代防线);
 //! - 安装:退出 app 前 spawn cmd 包装脚本(等安装器静默完成 → 启动新版本)。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateInfo {
     pub version: String,
     pub url: String,

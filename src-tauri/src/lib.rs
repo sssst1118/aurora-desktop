@@ -9,7 +9,7 @@ mod wallpaper_dynamic;
 mod win_utils;
 
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -58,6 +58,34 @@ pub fn run() {
             // Phase4 4.1 电池降载:总开关+降载开关都开才启动 30s 检测线程(状态变化才 emit wallpaper-power)
             if cfg.enable_dynamic_wallpaper && cfg.wallpaper_battery_downshift {
                 crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
+            }
+            // 5.1 自动更新:启动 15s 后 + 每 6h 静默检查;发现新版 emit update-available
+            if crate::commands::config::load_from(&crate::commands::config::config_path(&handle))
+                .update_enabled
+            {
+                let upd_app = handle.clone();
+                std::thread::Builder::new()
+                    .name("updater-watch".to_string())
+                    .spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(15));
+                        loop {
+                            // 注意:app2 由 async 块独占(move),emit 也在块内用 app2,
+                            // 外层循环只持有 upd_app 用于 clone,避免 use-after-move
+                            let app2 = upd_app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let r = crate::commands::updater_cmd::update_check(app2.clone())
+                                    .await;
+                                if r.status == "available" {
+                                    let _ = app2.emit(
+                                        "update-available",
+                                        &serde_json::json!({ "version": r.version, "notes": r.notes }),
+                                    );
+                                }
+                            });
+                            std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
+                        }
+                    })
+                    .ok();
             }
             // Phase5 多屏热插拔:2s 轮询显示器布局签名(数量/坐标/尺寸/主屏),变化即重建多屏 attach;
             // 线程内部自行判开关(运行中开/关多屏都响应),总开关关时不做事只重置基线
@@ -136,6 +164,11 @@ pub fn run() {
             commands::wallpaper_dynamic::wallpaper_multi_monitors,
             commands::wallpaper_dynamic::wallpaper_multi_apply,
             commands::wallpaper_dynamic::wallpaper_dynamic_set_monitor,
+            // ---- Phase5 5.1 自动更新(自研 updater;定时检查在 setup 线程)----
+            commands::updater_cmd::update_check,
+            commands::updater_cmd::update_download,
+            commands::updater_cmd::update_install,
+            commands::updater_cmd::update_open_folder,
             // ---- Phase4 4.3 UIA 控件自动化(Uia* 句柄式 API;入口校验在命令内)----
             commands::uia_cmd::uia_find_window,
             commands::uia_cmd::uia_get_window_info,
