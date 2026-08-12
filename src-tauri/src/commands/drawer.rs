@@ -1,7 +1,8 @@
 //! 2.2 FileDrawer 桌面文件抽屉。
 //!
-//! - `drawer_list_files` / `drawer_refresh`:扫用户桌面(FOLDERID_Desktop,仅此一个目录)
-//!   按扩展名分组(见 classify.rs),**逻辑收纳**——文件原位不动,只读展示;
+//! - `drawer_list_files` / `drawer_refresh`:扫"资源管理器桌面"= 用户桌面(FOLDERID_Desktop)
+//!   + 公共桌面(FOLDERID_PublicDesktop)合并,按扩展名分组(见 classify.rs),
+//!   **逻辑收纳**——文件原位不动,只读展示;两个桌面同名文件以用户桌面为准;
 //! - `drawer_open`:仅允许桌面目录内路径,转发 Phase1 `open_item`(文件/文件夹通吃);
 //! - `init_watcher`:notify(ReadDirectoryChangesW 事件驱动,非轮询)监听桌面目录,
 //!   变化 200ms 防抖后重扫 → 更新内存缓存 → emit "drawer-updated"(payload 空,信号用途),
@@ -57,6 +58,32 @@ static CACHE: Mutex<Option<Vec<DrawerGroup>>> = Mutex::new(None);
 /// 用户桌面目录(FOLDERID_Desktop;桌面可被库重定向,不硬编码 C:\Users\...\Desktop)
 pub fn desktop_dir() -> Option<PathBuf> {
     known_folders::get_known_folder_path(known_folders::KnownFolder::Desktop)
+}
+
+/// 公共桌面目录(FOLDERID_PublicDesktop,通常为 C:\Users\Public\Desktop)。
+/// 软件安装时常把快捷方式放这里,资源管理器将公共桌面与用户桌面合并显示,
+/// 抽屉必须一并扫描,否则用户会看到桌面图标缺失(如"联想浏览器")。
+pub fn public_desktop_dir() -> Option<PathBuf> {
+    known_folders::get_known_folder_path(known_folders::KnownFolder::PublicDesktop)
+}
+
+/// 把 secondary 的条目并入 primary 分组(重名跳过,primary 优先);
+/// primary 需已按 CATEGORY_ORDER 建好全部分组(scan_dir 保证)。
+fn merge_groups(primary: &mut Vec<DrawerGroup>, secondary: Vec<DrawerGroup>) {
+    for g in secondary {
+        for f in g.files {
+            // 两个桌面同名文件:保留 primary 那份(与资源管理器"用户桌面优先"一致)
+            let dup = primary
+                .iter()
+                .any(|g2| g2.files.iter().any(|f2| f2.name == f.name));
+            if dup {
+                continue;
+            }
+            if let Some(slot) = primary.iter_mut().find(|g2| g2.category == g.category) {
+                slot.files.push(f);
+            }
+        }
+    }
 }
 
 /// 隐藏判定:文件名以 . 开头(Unix 约定,如 .gitignore)或带 Windows 隐藏属性。
@@ -128,10 +155,17 @@ pub fn scan_dir(dir: &Path) -> Result<ScanResult, String> {
     Ok(ScanResult { groups })
 }
 
-/// 扫描用户桌面目录
+/// 扫描"资源管理器桌面" = 用户桌面 + 公共桌面,分组合并
+/// (公共桌面缺失/不可读时退化为仅用户桌面,不影响主流程)
 pub fn scan_desktop() -> Result<ScanResult, String> {
-    let dir = desktop_dir().ok_or_else(|| "无法获取用户桌面目录".to_string())?;
-    scan_dir(&dir)
+    let user = desktop_dir().ok_or_else(|| "无法获取用户桌面目录".to_string())?;
+    let mut r = scan_dir(&user)?;
+    if let Some(public) = public_desktop_dir() {
+        if let Ok(pr) = scan_dir(&public) {
+            merge_groups(&mut r.groups, pr.groups);
+        }
+    }
+    Ok(r)
 }
 
 /// 候选路径是否位于根目录内:两端规范化(处理大小写/符号链接)后做组件级前缀比较。
@@ -144,9 +178,22 @@ pub fn path_is_within(root: &Path, candidate: &Path) -> bool {
     candidate.starts_with(&root)
 }
 
-/// 仅允许打开桌面目录内的路径(文件/文件夹通吃,转发 Phase1 open_item)
-pub fn open_within_desktop(desktop: &Path, path: &str) -> bool {
-    if !path_is_within(desktop, Path::new(path)) {
+/// 仅允许打开桌面目录内的路径(用户桌面或公共桌面均可;文件/文件夹通吃,转发 Phase1 open_item)
+pub fn open_within_desktop(path: &str) -> bool {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(u) = desktop_dir() {
+        roots.push(u);
+    }
+    if let Some(p) = public_desktop_dir() {
+        roots.push(p);
+    }
+    open_within_roots(&roots, path)
+}
+
+/// 候选路径位于任一根目录内时才放行(纯校验逻辑,单测直接测这里)
+fn open_within_roots(roots: &[PathBuf], path: &str) -> bool {
+    let candidate = Path::new(path);
+    if !roots.iter().any(|r| path_is_within(r, candidate)) {
         eprintln!("[aurora] drawer_open 拒绝桌面目录外路径: {path}");
         return false;
     }
@@ -184,14 +231,10 @@ pub fn drawer_list_files() -> Vec<DrawerGroup> {
     read_cache().or_else(refresh_scan).unwrap_or_default()
 }
 
-/// 打开抽屉内文件/文件夹(仅桌面目录内路径)
+/// 打开抽屉内文件/文件夹(仅用户桌面/公共桌面内的路径)
 #[tauri::command]
 pub fn drawer_open(path: String) -> bool {
-    let Some(desktop) = desktop_dir() else {
-        eprintln!("[aurora] drawer_open: 无法获取用户桌面目录");
-        return false;
-    };
-    open_within_desktop(&desktop, &path)
+    open_within_desktop(&path)
 }
 
 /// 手动刷新(强制重扫并更新缓存)
@@ -238,6 +281,10 @@ pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
         },
     )?;
     watcher.watch(&desktop, notify::RecursiveMode::NonRecursive)?;
+    // 公共桌面一并监听(软件安装可能往公共桌面放快捷方式;目录缺失则跳过)
+    if let Some(public) = public_desktop_dir() {
+        let _ = watcher.watch(&public, notify::RecursiveMode::NonRecursive);
+    }
     // 保活 watcher(不 drop 即持续监听;热生效停止时替换回 None)
     app.manage(Mutex::new(Some(watcher)));
     WATCHER_ACTIVE.store(true, Ordering::SeqCst);
@@ -472,20 +519,59 @@ mod tests {
     #[test]
     fn open_rejects_path_outside_desktop() {
         let desktop = tmp_dir("open_desktop");
+        let public = tmp_dir("open_public");
         let outside = tmp_dir("open_outside");
         write(&desktop.join("ok.txt"), "x");
+        write(&public.join("pub.txt"), "x");
         write(&outside.join("evil.txt"), "x");
+        let roots = [desktop.clone(), public.clone()];
         // 桌面外路径:拒绝,不触发打开
         let outside_path = outside.join("evil.txt").to_string_lossy().into_owned();
-        assert!(!open_within_desktop(&desktop, &outside_path));
-        // 桌面内路径:open_within_desktop 会真正调用 opener,单测不触发;
-        // 这里只验证校验函数本身放行(真实打开由 opener 承担)
+        assert!(!open_within_roots(&roots, &outside_path));
+        // 用户桌面内与公共桌面内路径都放行(真实打开由 opener 承担,单测不触发)
         assert!(path_is_within(&desktop, &desktop.join("ok.txt")));
+        assert!(path_is_within(&public, &public.join("pub.txt")));
         // 不存在路径:拒绝
         let missing = desktop.join("不存在.txt").to_string_lossy().into_owned();
-        assert!(!open_within_desktop(&desktop, &missing));
+        assert!(!open_within_roots(&roots, &missing));
         let _ = std::fs::remove_dir_all(&desktop);
+        let _ = std::fs::remove_dir_all(&public);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// 用户桌面 + 公共桌面合并:独有文件都并入;同名文件只留用户桌面那份
+    #[test]
+    fn merge_groups_user_desktop_wins_on_duplicate() {
+        let primary = tmp_dir("merge_pri");
+        let secondary = tmp_dir("merge_sec");
+        write(&primary.join("同名.txt"), "user");
+        write(&primary.join("user_only.txt"), "x");
+        write(&secondary.join("同名.txt"), "public");
+        write(&secondary.join("public_only.txt"), "x");
+        let mut r = scan_dir(&primary).unwrap();
+        let sec = scan_dir(&secondary).unwrap();
+        merge_groups(&mut r.groups, sec.groups);
+        let shown: usize = r.groups.iter().map(|g| g.files.len()).sum();
+        assert_eq!(shown, 3, "同名只留一份,两个独有文件都并入");
+        let names: Vec<&str> = r
+            .groups
+            .iter()
+            .flat_map(|g| g.files.iter())
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(names.contains(&"user_only.txt"));
+        assert!(names.contains(&"public_only.txt"));
+        assert_eq!(names.iter().filter(|n| **n == "同名.txt").count(), 1);
+        // 留下的同名条目来自用户桌面
+        let doc = r
+            .groups
+            .iter()
+            .find(|g| g.category == classify::CATEGORY_DOC)
+            .unwrap();
+        let dup = doc.files.iter().find(|f| f.name == "同名.txt").unwrap();
+        assert_eq!(dup.path, primary.join("同名.txt").to_string_lossy());
+        let _ = std::fs::remove_dir_all(&primary);
+        let _ = std::fs::remove_dir_all(&secondary);
     }
 
     #[test]
