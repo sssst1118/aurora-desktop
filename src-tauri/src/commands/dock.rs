@@ -12,8 +12,8 @@
 //!                      (lnk 用 COM IShellLinkW 解析目标)后返回被收录的运行条目路径
 //!   - dock_get_icon    转发 dock_icon(ExtractIconExW→GetDIBits→png→base64 双缓存)
 //!
-//! 自动隐藏(设计 §1.6 GetCursorPos 200ms):后台线程由首个 Dock 命令惰性启动,
-//! 不依赖 lib.rs 改动;光标进入对应边缘 8px 立即浮现,移出 Dock 区域 1.5s 后隐藏。
+//! 说明:Dock 已并入搜索窗口(2026-08-12 用户定调),本模块只提供数据命令
+//! (条目/运行态/图标),无窗口/定位/自动隐藏逻辑;旧 dock 窗口与其交互已删除。
 //!
 //! 文件结构:dock_icon.rs 为 dock.rs 的私有子模块(设计原计划放 src 根,但 lib.rs
 //! 属集成 agent 所有无法加 mod 声明,放 commands/ 下由 dock.rs 声明,功能等价)。
@@ -26,7 +26,7 @@ use std::sync::{Mutex, OnceLock};
 
 use tauri::Manager;
 use windows_sys::core::{GUID, PCWSTR};
-use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, POINT};
+use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM};
 use windows_sys::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
@@ -34,62 +34,11 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetCursorPos, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, SetForegroundWindow, ShowWindow, SM_CYSCREEN, SW_RESTORE,
+    EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+    ShowWindow, SW_RESTORE,
 };
 
 use super::config::{config_path, load_from, save_to, DockItem};
-
-// ==================== 主屏工作区(任务栏避让) ====================
-
-/// 主屏工作区(x, y, w, h):屏幕减去任务栏(贴底/贴顶时)后的可用区域。
-///
-/// 任务栏 z 序高于置顶窗口,Dock 若压在任务栏区域会被遮挡且真实鼠标点击全被
-/// 任务栏吃掉(实测:窗口 T1024 B1097 与任务栏 T1019 B1067 重叠 43px,右键全无反应)。
-///
-/// 不用 SPI_GETWORKAREA:其返回值语义随进程 DPI awareness 变化(本机 150% 缩放,
-/// 与 set_position 的物理坐标不同步,实测偏 30px)。这里用 GetWindowRect(Shell_TrayWnd)
-/// + GetSystemMetrics,同一进程内必然同一坐标系(不管 DPI awareness 如何),与
-/// PhysicalPosition/SetWindowPos 自洽,无换算歧义。返回 None 仅当系统调用失败,
-/// 调用方回退整屏。
-pub fn primary_workarea() -> Option<(i32, i32, i32, i32)> {
-    unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN,
-        };
-        let screen_w = GetSystemMetrics(SM_CXSCREEN);
-        let screen_h = GetSystemMetrics(SM_CYSCREEN);
-        let tray = FindWindowW(windows_sys::core::w!("Shell_TrayWnd"), std::ptr::null());
-        if tray.is_null() {
-            return Some((0, 0, screen_w, screen_h));
-        }
-        let mut r: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
-        if GetWindowRect(tray, &mut r) == 0 {
-            return Some((0, 0, screen_w, screen_h));
-        }
-        if r.bottom >= screen_h - 16 {
-            Some((0, 0, screen_w, r.top)) // 任务栏贴底 → 工作区在任务栏上方
-        } else if r.top <= 16 {
-            Some((0, r.bottom, screen_w, screen_h - r.bottom)) // 任务栏贴顶 → 工作区在下方
-        } else {
-            Some((0, 0, screen_w, screen_h)) // 任务栏在左右 → 不影响底部定位,返回整屏
-        }
-    }
-}
-
-/// 主屏工作区查询命令(Dock 前端定位用;失败返回 None → 前端回退整屏逻辑)
-#[derive(serde::Serialize)]
-pub struct WorkArea {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
-
-#[tauri::command]
-pub fn dock_get_workarea() -> Option<WorkArea> {
-    primary_workarea().map(|(x, y, w, h)| WorkArea { x, y, width: w, height: h })
-}
 
 // ==================== 运行检测(纯函数 + 系统枚举) ====================
 
@@ -344,106 +293,11 @@ pub fn save_items(cfg_path: &Path, items: &[DockItem]) -> bool {
     true
 }
 
-// ==================== 自动隐藏(设计 §1.6:GetCursorPos 200ms 轮询) ====================
-
-/// 距对应边缘多少像素内视为"到达边缘区域"(立即浮现)
-pub const EDGE_ZONE_PX: i32 = 8;
-/// 鼠标移出 Dock 区域多久后隐藏
-pub const HIDE_DELAY_MS: u64 = 1500;
-
-static AUTO_HIDE_THREAD: OnceLock<Mutex<()>> = OnceLock::new();
-
-/// 惰性启动自动隐藏线程(首个带 AppHandle 的 Dock 命令调用时;不依赖 lib.rs 改动)
-fn ensure_auto_hide_thread(app: &tauri::AppHandle) {
-    let _ = AUTO_HIDE_THREAD.get_or_init(|| {
-        let handle = app.clone();
-        std::thread::spawn(move || auto_hide_loop(handle));
-        Mutex::new(())
-    });
-}
-
-/// 纯函数:光标是否位于屏幕对应边缘 8px 区域内(position: "top"/"bottom")
-pub fn cursor_in_edge_zone(y: i32, screen_h: i32, position: &str) -> bool {
-    if screen_h <= 0 {
-        return false;
-    }
-    match position {
-        "top" => y <= EDGE_ZONE_PX,
-        _ => y >= screen_h - EDGE_ZONE_PX,
-    }
-}
-
-/// 纯函数:点 (x, y) 是否在矩形 (rx, ry, rw, rh) 内
-pub fn cursor_in_rect(x: i32, y: i32, rx: i32, ry: i32, rw: i32, rh: i32) -> bool {
-    rw > 0 && rh > 0 && x >= rx && x < rx + rw && y >= ry && y < ry + rh
-}
-
-fn auto_hide_loop(app: tauri::AppHandle) {
-    use std::time::{Duration, Instant};
-    let mut cfg_refresh_at = Instant::now() - Duration::from_secs(3); // 首轮立即刷新
-    let mut cfg_cache: Option<(bool, bool, String)> = None; // (enable_dock, dock_auto_hide, dock_position)
-    let mut hide_since: Option<Instant> = None;
-    loop {
-        std::thread::sleep(Duration::from_millis(200));
-        let now = Instant::now();
-        // 配置 2s 刷新一次(极小文件;运行中切换设置可被感知)
-        if now.duration_since(cfg_refresh_at) >= Duration::from_secs(2) {
-            cfg_refresh_at = now;
-            let cfg = load_from(&config_path(&app));
-            cfg_cache = Some((cfg.enable_dock, cfg.dock_auto_hide, cfg.dock_position.clone()));
-        }
-        let Some((enable_dock, auto_hide, position)) = &cfg_cache else {
-            continue;
-        };
-        if !*enable_dock || !*auto_hide {
-            hide_since = None;
-            continue;
-        }
-        let Some(win) = app.get_webview_window("dock") else {
-            continue;
-        };
-        let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-        let mut pt = POINT { x: 0, y: 0 };
-        unsafe {
-            GetCursorPos(&mut pt);
-        }
-        // 边缘 8px 内 → 立即浮现
-        if cursor_in_edge_zone(pt.y, screen_h, position) {
-            hide_since = None;
-            let _ = win.show();
-            continue;
-        }
-        // 光标仍在 Dock 窗口内 → 不隐藏
-        let over = match (win.outer_position(), win.outer_size()) {
-            (Ok(pos), Ok(size)) => cursor_in_rect(
-                pt.x,
-                pt.y,
-                pos.x,
-                pos.y,
-                size.width as i32,
-                size.height as i32,
-            ),
-            _ => false,
-        };
-        if over {
-            hide_since = None;
-            continue;
-        }
-        // 移出 Dock 区域累计 ≥1.5s → 隐藏
-        let since = *hide_since.get_or_insert(now);
-        if now.duration_since(since) >= Duration::from_millis(HIDE_DELAY_MS) {
-            hide_since = None;
-            let _ = win.hide();
-        }
-    }
-}
-
 // ==================== 命令 ====================
 
 /// 读取 Dock 条目(内存缓存)
 #[tauri::command]
 pub fn dock_get_items(app: tauri::AppHandle) -> Vec<DockItem> {
-    ensure_auto_hide_thread(&app);
     load_items(&config_path(&app))
 }
 
@@ -473,7 +327,6 @@ pub fn dock_launch(item: DockItem) -> bool {
 /// 运行中且被 Dock 收录的应用条目路径集合(前端小圆点渲染用)
 #[tauri::command]
 pub fn dock_get_running(app: tauri::AppHandle) -> Vec<String> {
-    ensure_auto_hide_thread(&app);
     let items = load_items(&config_path(&app));
     let windows = running_windows();
     items
@@ -665,30 +518,6 @@ mod tests {
         assert!(save_items(&cfg_path, &[]));
         assert!(load_items(&cfg_path).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    // ---- 自动隐藏纯函数 ----
-
-    #[test]
-    fn edge_zone_logic() {
-        let h = 1080;
-        assert!(cursor_in_edge_zone(0, h, "bottom") == false);
-        assert!(cursor_in_edge_zone(h - 8, h, "bottom"));
-        assert!(cursor_in_edge_zone(h - 1, h, "bottom"));
-        assert!(!cursor_in_edge_zone(h - 64, h, "bottom"));
-        assert!(cursor_in_edge_zone(0, h, "top"));
-        assert!(cursor_in_edge_zone(8, h, "top"));
-        assert!(!cursor_in_edge_zone(64, h, "top"));
-        assert!(!cursor_in_edge_zone(0, 0, "bottom")); // 非法屏幕高
-    }
-
-    #[test]
-    fn rect_containment_logic() {
-        assert!(cursor_in_rect(100, 50, 100, 50, 800, 64));
-        assert!(cursor_in_rect(899, 113, 100, 50, 800, 64));
-        assert!(!cursor_in_rect(99, 50, 100, 50, 800, 64));
-        assert!(!cursor_in_rect(100, 114, 100, 50, 800, 64));
-        assert!(!cursor_in_rect(0, 0, 0, 0, 0, 0));
     }
 
     // ---- 系统枚举冒烟 ----

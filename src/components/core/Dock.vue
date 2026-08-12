@@ -1,150 +1,70 @@
 <script setup lang="ts">
-// Dock 栏组件(Phase2 2.1) — 仅组件与样式,挂载接线待集成收尾:
-// 集成 agent 把本组件挂进 label="dock" 的 800×64 窗口即可;命令在 dock.rs 已实现。
-// 自动隐藏由后端线程处理(dock.rs,GetCursorPos 200ms + 1.5s 离开隐藏),本组件无需干预。
+// Dock 图标排组件(Phase2 2.1) — 2026-08-12 形态定调:独立 dock 窗口已废弃,
+// 本组件嵌入 SearchBar 底部渲染。添加应用 = 从桌面/Explorer 拖拽 exe/lnk 进本区域
+// (Tauri 2 dragDropEnabled 默认拦截 DOM 拖放,必须用 onDragDropEvent 官方 API);
+// 删除 = 悬停图标 ✕;点击 = 运行中聚焦/未运行启动;绿点 = 运行指示(2s 轮询)。
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize, type Monitor } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface DockItem {
   name: string;
   path: string;
 }
 
-interface AppEntry {
-  name: string;
-  path: string;
-}
-
-/** 本组件用到的 config 子集(config_load 返回完整对象,多取无妨) */
-interface ConfigSubset {
-  dock_items: DockItem[];
-  dock_position: string;
-  dock_auto_hide: boolean;
-}
-
 const items = ref<DockItem[]>([]);
 const icons = ref<Map<string, string>>(new Map());
 const running = ref<Set<string>>(new Set());
-const position = ref<"top" | "bottom">("bottom");
-const autoHide = ref(true);
-
-// 右键菜单与添加面板
-const menu = ref<{ x: number; y: number; item: DockItem | null } | null>(null);
-const addOpen = ref(false);
-const addQuery = ref("");
-const addResults = ref<AppEntry[]>([]);
-
-// DnD 排序:拖拽源下标 + 悬停目标下标(用于高亮)
+// 文件拖入窗口悬停(高亮投放区;仅拖到 Dock 区内才点亮)
+const fileDragOver = ref(false);
+// 内部 DnD 排序:拖拽源下标 + 悬停目标下标(用于高亮)
 const dragIdx = ref(-1);
 const overIdx = ref(-1);
 
 let runningTimer: number | undefined;
-let cfgTimer: number | undefined;
+let dragLeaveTimer: number | undefined;
 
-/** Dock 窗口基准高度(与 tauri.conf.json 的 64 一致) */
-const BASE_H = 64;
-/** 右键菜单/添加面板弹出时的扩展高度(容纳 ~270px 添加面板 + 间隙) */
-const EXPAND_H = 380;
-/** 高度调整串行链:连续开关菜单时保证 setSize/setPosition 按调用顺序落地,末尾者胜 */
-let heightChain: Promise<void> = Promise.resolve();
+const win = getCurrentWindow();
 
-function pad(s: string) {
-  return s.length > 1 ? s : s + " ";
+/** 判断拖放位置是否落在 Dock 区(窗口底部 ~64px,图标排高度) */
+function inDockZone(y: number): boolean {
+  return y >= window.innerHeight - 64;
 }
 
-/** 加载条目(后端内存缓存,首次自动从 config 读) */
-async function loadItems() {
+/** 拖拽进来的文件路径 → 条目名(去掉 .exe/.lnk 后缀) */
+function nameOf(path: string): string {
+  const base = path.split(/[\\/]/).pop() ?? path;
+  return base.replace(/\.(lnk|exe)$/i, "");
+}
+
+/** 过滤出可添加的快捷方式文件(exe/lnk) */
+function pickAppPaths(paths: string[]): string[] {
+  return paths.filter((p) => /\.(lnk|exe)$/i.test(p));
+}
+
+/** 添加条目(去重;写后端持久化 + 刷新图标) */
+async function addItems(paths: string[]) {
+  const fresh = paths.filter((p) => !items.value.some((it) => it.path === p));
+  if (fresh.length === 0) return;
+  const next = [...items.value, ...fresh.map((p) => ({ name: nameOf(p), path: p }))];
   try {
-    items.value = (await invoke<DockItem[]>("dock_get_items")) ?? [];
-    void refreshIcons();
+    await invoke<boolean>("dock_set_items", { items: next });
+    items.value = next;
+    for (const p of fresh) void iconOf(p);
   } catch (e) {
-    console.error("dock_get_items failed", e);
+    console.error("dock_set_items failed", e);
   }
 }
 
-/** 2s 轮询运行状态(后端枚举可见窗口与条目路径匹配,返回被收录的运行条目 path) */
-async function pollRunning() {
+/** 悬停 ✕ 移除条目 */
+async function removeItem(item: DockItem) {
+  const next = items.value.filter((it) => it.path !== item.path);
   try {
-    const paths = (await invoke<string[]>("dock_get_running")) ?? [];
-    running.value = new Set(paths);
+    await invoke<boolean>("dock_set_items", { items: next });
+    items.value = next;
   } catch (e) {
-    console.error("dock_get_running failed", e);
+    console.error("dock_set_items failed", e);
   }
-}
-
-/** 3s 轮询位置/自动隐藏配置(后端 auto-hide 线程每 2s 重读 config,写配置即时生效) */
-async function pollConfig() {
-  try {
-    const cfg = (await invoke<ConfigSubset>("config_load")) as ConfigSubset;
-    const p = cfg.dock_position === "top" ? "top" : "bottom";
-    if (p !== position.value) {
-      position.value = p;
-      void applyPosition();
-    }
-    if (typeof cfg.dock_auto_hide === "boolean") autoHide.value = cfg.dock_auto_hide;
-  } catch (e) {
-    console.error("config_load failed", e);
-  }
-}
-
-/** 主屏工作区(任务栏之外,物理像素);取不到时回退整屏逻辑 */
-let workarea = ref<{ x: number; y: number; width: number; height: number } | null>(null);
-
-async function loadWorkArea() {
-  try {
-    workarea.value = await invoke<{ x: number; y: number; width: number; height: number } | null>(
-      "dock_get_workarea",
-    );
-  } catch {
-    workarea.value = null;
-  }
-}
-
-/**
- * 定位区域:主屏用工作区(避让任务栏——任务栏 z 序高于置顶窗口,dock 压上会被遮挡,
- * 真实鼠标点击全被任务栏吃掉),次屏/取不到工作区回退整屏。
- */
-function layoutArea(mon: Monitor): { x: number; y: number; width: number; height: number } {
-  const wa = workarea.value;
-  if (wa && mon.position.x === 0 && mon.position.y === 0) return wa;
-  return { x: mon.position.x, y: mon.position.y, width: mon.size.width, height: mon.size.height };
-}
-
-/** 按 dock_position 把窗口摆到对应区域边缘中央(物理坐标,多显示器取当前屏) */
-async function applyPosition() {
-  try {
-    const mon = await currentMonitor();
-    if (!mon) return;
-    const win = getCurrentWindow();
-    const outer = await win.outerSize();
-    const area = layoutArea(mon);
-    const x = Math.round(area.x + (area.width - outer.width) / 2);
-    const y = position.value === "top" ? area.y : area.y + area.height - outer.height;
-    await win.setPosition(new PhysicalPosition(x, y));
-  } catch (e) {
-    console.error("setPosition failed", e);
-  }
-}
-
-/** 调整 Dock 窗口高度(宽度不变,居中 x 同 applyPosition),Dock 边缘始终贴定位区域(工作区/整屏)边缘 */
-function setDockHeight(h: number): Promise<void> {
-  heightChain = heightChain.then(async () => {
-    try {
-      const mon = await currentMonitor();
-      if (!mon) return;
-      const win = getCurrentWindow();
-      const outer = await win.outerSize();
-      const area = layoutArea(mon);
-      const x = Math.round(area.x + (area.width - outer.width) / 2);
-      const y = position.value === "top" ? area.y : area.y + area.height - h;
-      await win.setSize(new PhysicalSize(outer.width, h));
-      await win.setPosition(new PhysicalPosition(x, y));
-    } catch (e) {
-      console.error("setDockHeight failed", e);
-    }
-  });
-  return heightChain;
 }
 
 /** 图标 data URL(后端双缓存);失败返回 undefined → 占位首字符 */
@@ -179,99 +99,55 @@ async function launch(item: DockItem) {
   }
 }
 
-/** 右键菜单(item 为 null = 空白处右键,菜单不含"移除"项) */
-function openMenu(ev: MouseEvent, item: DockItem | null) {
-  void setDockHeight(EXPAND_H); // 菜单约 200px 高,64px 窗口放不下,先加高再弹
-  menu.value = {
-    x: Math.min(ev.clientX, window.innerWidth - 170),
-    y: ev.clientY,
-    item,
-  };
-  addOpen.value = false;
-}
-
-async function closeMenu() {
-  menu.value = null;
-  addOpen.value = false;
-  addQuery.value = "";
-  addResults.value = [];
-  await setDockHeight(BASE_H); // 菜单/面板关闭,窗口恢复 64px 基准高
-}
-
-/** 移除条目 */
-async function removeItem(item: DockItem) {
-  const next = items.value.filter((it) => it.path !== item.path);
+/** 2s 轮询运行状态(后端枚举可见窗口与条目路径匹配,返回被收录的运行条目 path) */
+async function pollRunning() {
   try {
-    await invoke<boolean>("dock_set_items", { items: next });
-    items.value = next;
+    const paths = (await invoke<string[]>("dock_get_running")) ?? [];
+    running.value = new Set(paths);
   } catch (e) {
-    console.error("dock_set_items failed", e);
-  }
-  closeMenu();
-}
-
-/** 添加面板:首次打开扫全量,输入后模糊搜索(复用 Phase1 search_apps) */
-async function openAdd() {
-  // 关掉右键菜单但保持窗口扩展高(closeMenu 会恢复 64px,故不调用,直接清状态)
-  menu.value = null;
-  addOpen.value = false;
-  addResults.value = [];
-  await setDockHeight(EXPAND_H); // 从菜单点进来时已扩展,幂等;直接触发时兜底
-  addOpen.value = true;
-  addQuery.value = "";
-  await searchApps("");
-}
-
-async function searchApps(q: string) {
-  try {
-    addResults.value = (await invoke<AppEntry[]>("search_apps", { query: q })) ?? [];
-  } catch (e) {
-    console.error("search_apps failed", e);
-    addResults.value = [];
+    console.error("dock_get_running failed", e);
   }
 }
 
-async function addApp(entry: AppEntry) {
-  const next = [...items.value, { name: entry.name, path: entry.path }];
+async function loadItems() {
   try {
-    await invoke<boolean>("dock_set_items", { items: next });
-    items.value = next;
+    items.value = (await invoke<DockItem[]>("dock_get_items")) ?? [];
+    void refreshIcons();
   } catch (e) {
-    console.error("dock_set_items failed", e);
+    console.error("dock_get_items failed", e);
   }
-  closeMenu();
 }
 
-/** 切换顶部/底部:写 config + 立即 reposition */
-async function togglePosition() {
-  const next = position.value === "top" ? "bottom" : "top";
-  position.value = next;
-  try {
-    const cfg = (await invoke<ConfigSubset>("config_load")) as ConfigSubset;
-    cfg.dock_position = next;
-    await invoke<boolean>("config_save", { cfg });
-  } catch (e) {
-    console.error("config_save failed", e);
-  }
-  // 先恢复基准高再摆位:菜单打开时窗口是扩展高,按扩展高算 y 会让 Dock 脱离屏幕边缘
-  await closeMenu();
-  void applyPosition();
+// ---- 文件拖入添加(Tauri 拦截 DOM 拖放,官方 API 接管) ----
+
+// 拖拽悬停期间 Tauri 会连续发 enter/over,leave 在移出窗口时触发;
+// 用一个短延时兜底:enter/over 反复点亮时刷新,若突然断流(无 leave)也能熄灭
+function markDragZone() {
+  fileDragOver.value = true;
+  if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
+  dragLeaveTimer = window.setTimeout(() => {
+    fileDragOver.value = false;
+  }, 300);
 }
 
-/** 自动隐藏开关(后端线程 2s 内感知) */
-async function toggleAutoHide() {
-  autoHide.value = !autoHide.value;
-  try {
-    const cfg = (await invoke<ConfigSubset>("config_load")) as ConfigSubset;
-    cfg.dock_auto_hide = autoHide.value;
-    await invoke<boolean>("config_save", { cfg });
-  } catch (e) {
-    console.error("config_save failed", e);
+win.onDragDropEvent((event) => {
+  const payload = event.payload;
+  if (payload.type === "enter" || payload.type === "over") {
+    if (inDockZone(payload.position.y)) markDragZone();
+  } else if (payload.type === "leave") {
+    fileDragOver.value = false;
+    if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
+  } else if (payload.type === "drop") {
+    fileDragOver.value = false;
+    if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
+    // 只有松手在 Dock 区才算添加(拖到搜索列表区 = 误拖,不处理)
+    if (inDockZone(payload.position.y)) {
+      void addItems(pickAppPaths(payload.paths));
+    }
   }
-  closeMenu();
-}
+});
 
-// ---- DnD 排序(拖拽高亮目标位,松手写回) ----
+// ---- 内部 DnD 排序(HTML5 元素拖拽,Tauri 只拦截文件拖入,不影响) ----
 
 function dragStart(i: number) {
   dragIdx.value = i;
@@ -301,125 +177,84 @@ async function dropAt(i: number) {
   }
 }
 
+function pad(s: string) {
+  return s.length > 1 ? s : s + " ";
+}
+
 onMounted(async () => {
-  await loadWorkArea(); // 先取工作区,后续 applyPosition/setDockHeight 定位才能避让任务栏
   await loadItems();
   await pollRunning();
-  await pollConfig();
   runningTimer = window.setInterval(pollRunning, 2000);
-  cfgTimer = window.setInterval(pollConfig, 3000);
 });
 
 onUnmounted(() => {
   if (runningTimer) window.clearInterval(runningTimer);
-  if (cfgTimer) window.clearInterval(cfgTimer);
+  if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
 });
 </script>
 
 <template>
   <div
-    class="relative h-full w-full select-none bg-[var(--aurora-panel)] backdrop-blur-md"
-    @click="closeMenu"
-    @contextmenu.prevent="openMenu($event, null)"
+    class="relative flex items-center gap-1 border-t border-[var(--aurora-border)] px-2 py-1.5 min-h-14 select-none transition-colors"
+    :class="fileDragOver ? 'bg-[var(--aurora-accent)]/20' : ''"
   >
-    <!-- 条目区:absolute 贴 Dock 边缘,窗口扩展时菜单/面板位于其内侧,不再被裁剪 -->
+    <!-- 文件拖入投放提示(悬停时浮在图标排上方) -->
     <div
-      class="absolute inset-x-0 h-16 flex items-center gap-1 px-2"
-      :class="position === 'bottom' ? 'bottom-0' : 'top-0'"
+      v-if="fileDragOver"
+      class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded-md bg-[var(--aurora-panel)] border border-[var(--aurora-border)] px-3 py-1 text-xs text-[var(--aurora-accent)] shadow-lg"
     >
-      <div
-        v-for="(it, i) in items"
-        :key="it.path"
-        class="group relative flex h-12 w-12 items-center justify-center rounded-xl transition-colors"
-        :class="[
-          i === overIdx && dragIdx >= 0 ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]',
-          dragIdx === i ? 'opacity-40' : '',
-        ]"
-        :draggable="true"
-        @dragstart="dragStart(i)"
-        @dragover.prevent="dragOver(i)"
-        @dragleave="dragLeave"
-        @drop.prevent="dropAt(i)"
-        @click.stop="launch(it)"
-        @contextmenu.stop="openMenu($event, it)"
-        :title="it.name"
-      >
-        <img
-          v-if="icons.has(it.path) && icons.get(it.path)"
-          :src="icons.get(it.path)"
-          class="h-9 w-9 pointer-events-none"
-          draggable="false"
-          alt=""
-        />
-        <span
-          v-else
-          class="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--aurora-field)] text-sm font-medium text-[var(--aurora-text)]"
-          >{{ pad(it.name.slice(0, 1)) }}</span
-        >
-        <!-- 运行中指示点 -->
-        <span
-          v-if="running.has(it.path)"
-          class="absolute bottom-1 h-1.5 w-1.5 rounded-full bg-green-400"
-        ></span>
-      </div>
-
-      <div v-if="items.length === 0" class="text-xs text-[var(--aurora-text-dim)] select-none">
-        右键添加应用
-      </div>
+      松手添加应用
     </div>
 
-    <!-- 右键菜单(窗口扩展态下位于条目区内侧,不再 top-full/bottom-full 弹出窗外) -->
     <div
-      v-if="menu"
-      class="absolute z-10 w-40 overflow-hidden rounded-lg border border-[var(--aurora-border)] bg-[var(--aurora-panel)] backdrop-blur-md text-xs text-[var(--aurora-text)] shadow-xl"
-      :class="position === 'bottom' ? 'bottom-20' : 'top-20'"
-      :style="{ left: `${menu.x}px` }"
-      @click.stop
+      v-for="(it, i) in items"
+      :key="it.path"
+      class="group relative flex h-10 w-10 items-center justify-center rounded-xl transition-colors"
+      :class="[
+        i === overIdx && dragIdx >= 0 ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]',
+        dragIdx === i ? 'opacity-40' : '',
+      ]"
+      :draggable="true"
+      @dragstart="dragStart(i)"
+      @dragover.prevent="dragOver(i)"
+      @dragleave="dragLeave"
+      @drop.prevent="dropAt(i)"
+      @click.stop="launch(it)"
+      :title="it.name"
     >
-      <button class="block w-full px-3 py-2 text-left hover:bg-[var(--aurora-field)]" @click="openAdd">
-        ＋ 添加应用
-      </button>
-      <button
-        v-if="menu.item"
-        class="block w-full px-3 py-2 text-left text-red-300 hover:bg-[var(--aurora-field)]"
-        @click="removeItem(menu.item!)"
-      >
-        移除
-      </button>
-      <div class="my-1 border-t border-[var(--aurora-border)]"></div>
-      <button class="block w-full px-3 py-2 text-left hover:bg-[var(--aurora-field)]" @click="togglePosition">
-        {{ position === "top" ? "移到底部" : "移到顶部" }}
-      </button>
-      <button class="block w-full px-3 py-2 text-left hover:bg-[var(--aurora-field)]" @click="toggleAutoHide">
-        {{ autoHide ? "自动隐藏:开" : "自动隐藏:关" }}
-      </button>
-    </div>
-
-    <!-- 添加应用 mini 列表(扩展态下位于条目区内侧) -->
-    <div
-      v-if="addOpen"
-      class="absolute left-1/2 z-10 w-72 -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--aurora-border)] bg-[var(--aurora-panel)] backdrop-blur-md text-xs text-[var(--aurora-text)] shadow-xl"
-      :class="position === 'bottom' ? 'bottom-20' : 'top-20'"
-      @click.stop
-    >
-      <input
-        v-model="addQuery"
-        class="w-full border-b border-[var(--aurora-border)] bg-transparent px-3 py-2 outline-none placeholder:text-[var(--aurora-text-dim)]"
-        placeholder="搜索应用…"
-        @input="searchApps(addQuery)"
+      <img
+        v-if="icons.has(it.path) && icons.get(it.path)"
+        :src="icons.get(it.path)"
+        class="h-7 w-7 pointer-events-none"
+        draggable="false"
+        alt=""
       />
-      <div class="max-h-56 overflow-y-auto">
-        <button
-          v-for="a in addResults"
-          :key="a.path"
-          class="block w-full truncate px-3 py-1.5 text-left hover:bg-[var(--aurora-field)]"
-          :title="a.path"
-          @click="addApp(a)"
-        >
-          {{ a.name }}
-        </button>
-        <div v-if="addResults.length === 0" class="px-3 py-2 text-[var(--aurora-text-dim)]">无匹配</div>
-      </div>
+      <span
+        v-else
+        class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--aurora-field)] text-sm font-medium text-[var(--aurora-text)]"
+        >{{ pad(it.name.slice(0, 1)) }}</span
+      >
+      <!-- 悬停 ✕ 删除(不触发启动:stop 掉点击) -->
+      <button
+        class="absolute -top-1.5 -right-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] leading-none text-white shadow group-hover:flex"
+        :title="`移除 ${it.name}`"
+        @click.stop="removeItem(it)"
+      >
+        ✕
+      </button>
+      <!-- 运行中指示点 -->
+      <span
+        v-if="running.has(it.path)"
+        class="absolute bottom-0.5 h-1.5 w-1.5 rounded-full bg-green-400"
+      ></span>
+    </div>
+
+    <div
+      v-if="items.length === 0"
+      class="text-[10px] text-[var(--aurora-text-dim)] select-none"
+      :class="fileDragOver ? 'text-[var(--aurora-accent)]' : ''"
+    >
+      拖拽应用到这里
     </div>
   </div>
 </template>

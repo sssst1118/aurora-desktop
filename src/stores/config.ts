@@ -15,9 +15,8 @@ export interface AppConfig {
   enable_file_drawer: boolean;
   enable_clipboard_history: boolean;
   // ---- Phase2 新增(与 src-tauri/src/commands/config.rs 同步)----
+  // 2.1 Dock 并入搜索窗口后仅剩条目;dock_position/dock_auto_hide 已废弃 2026-08-12
   dock_items: DockItem[];
-  dock_position: string;
-  dock_auto_hide: boolean;
   drawer_hotkey: string;
   drawer_open_on_launch: boolean;
   clipboard_max_items: number;

@@ -42,7 +42,7 @@ static HIDDEN_SNAPSHOT: Mutex<Option<Vec<String>>> = Mutex::new(None);
 /// 隐藏全部交互窗口(wallpaper 壁纸渲染窗口不受托盘管理,不参与);
 /// 隐藏前记录当前可见窗口,供 show_all 恢复
 pub fn hide_all(app: &AppHandle) {
-    const LABELS: [&str; 6] = ["island", "search", "dock", "drawer", "clipboard", "ai_panel"];
+    const LABELS: [&str; 5] = ["island", "search", "drawer", "clipboard", "ai_panel"];
     let visible: Vec<String> = LABELS
         .iter()
         .filter(|l| {

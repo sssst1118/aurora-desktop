@@ -494,11 +494,11 @@ async function uiaType() {
         </button>
       </div>
 
-      <!-- Dock 栏:悬停呼出,无全局热键 -->
+      <!-- Dock 栏:并入搜索窗口底部,拖拽添加 -->
       <div class="flex items-center justify-between">
         <div>
           <div class="text-sm">Dock 栏</div>
-          <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,悬停呼出,重启后生效</div>
+          <div class="text-[10px] text-[var(--aurora-text-dim)]">搜索窗口底部快捷栏,拖拽 exe/lnk 添加,下次呼出生效</div>
         </div>
         <button
           class="w-10 h-5 rounded-full relative transition-colors"

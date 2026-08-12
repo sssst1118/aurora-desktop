@@ -40,19 +40,6 @@
         "skipTaskbar": true
       },
       {
-        "label": "dock",
-        "title": "Aurora-Dock",
-        "width": 800,
-        "height": 64,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "visible": false,
-        "focus": false,
-        "skipTaskbar": true
-      },
-      {
         "label": "drawer",
         "title": "Aurora-FileDrawer",
         "width": 720,

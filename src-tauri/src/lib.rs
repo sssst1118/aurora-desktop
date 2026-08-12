@@ -28,31 +28,6 @@ pub fn run() {
                     let _ = win.hide();
                 }
             }
-            // 2.1 Dock:enable_dock 开启时显示,初始位置工作区底部中央(默认 dock_position=bottom);
-            // 任务栏 z 序高于置顶窗口,dock 压上去会被遮挡、真实鼠标点击全被任务栏吃掉
-            // (用户实测 dock 右键"没反应"的根因)。定位基于主屏工作区(见 dock::primary_workarea),
-            // 高度用 outer_size 实测值——配置 64 但窗口含 DWM 扩展实际 73,写死 64 会溢出压栏
-            if cfg.enable_dock {
-                if let Some(win) = app.get_webview_window("dock") {
-                    let (x, y) = match crate::commands::dock::primary_workarea() {
-                        Some((wx, _, ww, wh)) => {
-                            let outer_h = win.outer_size().map(|s| s.height as i32).unwrap_or(64);
-                            (wx + (ww - 800) / 2, wh - outer_h)
-                        }
-                        None => app
-                            .primary_monitor()
-                            .ok()
-                            .flatten()
-                            .map(|mon| {
-                                let size = mon.size();
-                                ((size.width as i32 - 800) / 2, size.height as i32 - 64)
-                            })
-                            .unwrap_or((0, 0)),
-                    };
-                    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-                    let _ = win.show();
-                }
-            }
             // 2.2 FileDrawer:drawer_open_on_launch 时启动即显示抽屉窗口
             if cfg.enable_file_drawer && cfg.drawer_open_on_launch {
                 if let Some(win) = app.get_webview_window("drawer") {
@@ -143,7 +118,6 @@ pub fn run() {
             commands::dock::dock_launch,
             commands::dock::dock_get_running,
             commands::dock::dock_get_icon,
-            commands::dock::dock_get_workarea,
             // ---- Phase2 2.2 FileDrawer ----
             commands::drawer::drawer_list_files,
             commands::drawer::drawer_open,

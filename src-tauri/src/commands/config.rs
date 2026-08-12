@@ -21,10 +21,8 @@ pub struct AppConfig {
     pub enable_dock: bool,
     pub enable_file_drawer: bool,
     pub enable_clipboard_history: bool,
-    // ---- Phase2 2.1 Dock ----
+    // ---- Phase2 2.1 Dock(并入搜索窗口后仅剩条目;position/auto_hide 已废弃 2026-08-12)----
     pub dock_items: Vec<DockItem>,
-    pub dock_position: String,
-    pub dock_auto_hide: bool,
     // ---- Phase2 2.2 FileDrawer ----
     pub drawer_hotkey: String,
     pub drawer_open_on_launch: bool,
@@ -76,8 +74,6 @@ impl Default for AppConfig {
             enable_file_drawer: false,
             enable_clipboard_history: false,
             dock_items: Vec::new(),
-            dock_position: "bottom".to_string(),
-            dock_auto_hide: false,
             drawer_hotkey: "ctrl+alt+d".to_string(),
             drawer_open_on_launch: false,
             clipboard_max_items: 200,

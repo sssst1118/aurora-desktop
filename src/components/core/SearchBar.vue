@@ -3,6 +3,7 @@ import { ref, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Settings from "./Settings.vue";
+import Dock from "./Dock.vue";
 
 interface AppEntry {
   name: string;
@@ -14,9 +15,20 @@ const results = ref<AppEntry[]>([]);
 const selected = ref(0);
 const inputEl = ref<HTMLInputElement | null>(null);
 const showSettings = ref(false);
+// 2.1 Dock(并入搜索窗口形态):每次窗口显示时重读开关,设置改动下次呼出生效
+const enableDock = ref(false);
 let debounceTimer: number | undefined;
 
 const win = getCurrentWindow();
+
+async function loadDockFlag() {
+  try {
+    const cfg = await invoke<{ enable_dock: boolean }>("config_load");
+    enableDock.value = cfg.enable_dock ?? false;
+  } catch {
+    enableDock.value = false;
+  }
+}
 
 async function doSearch() {
   const q = query.value.trim();
@@ -70,12 +82,13 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-/** 窗口每次显示时:关闭设置、清空输入、聚焦输入框 */
+/** 窗口每次显示时:关闭设置、清空输入、聚焦输入框、重读 Dock 开关 */
 function onShown() {
   if (showSettings.value) showSettings.value = false;
   query.value = "";
   results.value = [];
   selected.value = 0;
+  void loadDockFlag();
   void nextTick().then(() => inputEl.value?.focus());
 }
 
@@ -132,5 +145,7 @@ function toggleSettings() {
       </div>
     </template>
     <Settings v-else @close="toggleSettings" />
+    <!-- 2.1 Dock 并入搜索窗口:底部图标排(开关在设置页,下次呼出生效) -->
+    <Dock v-if="enableDock" />
   </div>
 </template>
