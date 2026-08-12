@@ -28,16 +28,24 @@ pub fn run() {
                     let _ = win.hide();
                 }
             }
-            // 2.1 Dock:enable_dock 开启时显示,初始位置屏幕底部中央(默认 dock_position=bottom)
+            // 2.1 Dock:enable_dock 开启时显示,初始位置工作区底部中央(默认 dock_position=bottom);
+            // 用 SPI_GETWORKAREA 避开任务栏——任务栏 z 序高于置顶窗口,dock 压上去会被遮挡,
+            // 真实鼠标点击全被任务栏吃掉(用户实测 dock 右键"没反应"的根因)
             if cfg.enable_dock {
                 if let Some(win) = app.get_webview_window("dock") {
-                    if let Ok(Some(mon)) = app.primary_monitor() {
-                        let size = mon.size();
-                        let _ = win.set_position(tauri::PhysicalPosition::new(
-                            (size.width as i32 - 800) / 2,
-                            size.height as i32 - 64,
-                        ));
-                    }
+                    let pos = match crate::commands::dock::primary_workarea() {
+                        Some((wx, _, ww, wh)) => (wx + (ww - 800) / 2, wh - 64),
+                        None => app
+                            .primary_monitor()
+                            .ok()
+                            .flatten()
+                            .map(|mon| {
+                                let size = mon.size();
+                                ((size.width as i32 - 800) / 2, size.height as i32 - 64)
+                            })
+                            .unwrap_or((0, 0)),
+                    };
+                    let _ = win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
                     let _ = win.show();
                 }
             }
@@ -131,6 +139,7 @@ pub fn run() {
             commands::dock::dock_launch,
             commands::dock::dock_get_running,
             commands::dock::dock_get_icon,
+            commands::dock::dock_get_workarea,
             // ---- Phase2 2.2 FileDrawer ----
             commands::drawer::drawer_list_files,
             commands::drawer::drawer_open,

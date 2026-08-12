@@ -40,6 +40,37 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::config::{config_path, load_from, save_to, DockItem};
 
+// ==================== 主屏工作区(任务栏避让) ====================
+
+/// 主屏工作区(物理像素 x, y, w, h):SPI_GETWORKAREA 返回任务栏之外的可用区域。
+/// 任务栏 z 序高于置顶窗口,Dock 若压在任务栏区域会被遮挡且真实鼠标点击全被
+/// 任务栏吃掉(实车验证:窗口 T1024 B1097 与任务栏 T1019 B1067 重叠 43px,右键
+/// 全无反应)。因此 Dock 定位必须基于工作区而非整屏。失败返回 None,调用方回退整屏。
+pub fn primary_workarea() -> Option<(i32, i32, i32, i32)> {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
+        let mut wa: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut core::ffi::c_void, 0) == 0 {
+            return None;
+        }
+        Some((wa.left, wa.top, wa.right - wa.left, wa.bottom - wa.top))
+    }
+}
+
+/// 主屏工作区查询命令(Dock 前端定位用;失败返回 None → 前端回退整屏逻辑)
+#[derive(serde::Serialize)]
+pub struct WorkArea {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[tauri::command]
+pub fn dock_get_workarea() -> Option<WorkArea> {
+    primary_workarea().map(|(x, y, w, h)| WorkArea { x, y, width: w, height: h })
+}
+
 // ==================== 运行检测(纯函数 + 系统枚举) ====================
 
 /// 窗口采样(单测友好纯数据):hwnd / pid / 可见性 / 是否有标题

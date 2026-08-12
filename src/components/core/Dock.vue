@@ -4,7 +4,7 @@
 // 自动隐藏由后端线程处理(dock.rs,GetCursorPos 200ms + 1.5s 离开隐藏),本组件无需干预。
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize, type Monitor } from "@tauri-apps/api/window";
 
 interface DockItem {
   name: string;
@@ -88,25 +88,46 @@ async function pollConfig() {
   }
 }
 
-/** 按 dock_position 把窗口摆到对应边缘中央(物理坐标,多显示器取当前屏) */
+/** 主屏工作区(任务栏之外,物理像素);取不到时回退整屏逻辑 */
+let workarea = ref<{ x: number; y: number; width: number; height: number } | null>(null);
+
+async function loadWorkArea() {
+  try {
+    workarea.value = await invoke<{ x: number; y: number; width: number; height: number } | null>(
+      "dock_get_workarea",
+    );
+  } catch {
+    workarea.value = null;
+  }
+}
+
+/**
+ * 定位区域:主屏用工作区(避让任务栏——任务栏 z 序高于置顶窗口,dock 压上会被遮挡,
+ * 真实鼠标点击全被任务栏吃掉),次屏/取不到工作区回退整屏。
+ */
+function layoutArea(mon: Monitor): { x: number; y: number; width: number; height: number } {
+  const wa = workarea.value;
+  if (wa && mon.position.x === 0 && mon.position.y === 0) return wa;
+  return { x: mon.position.x, y: mon.position.y, width: mon.size.width, height: mon.size.height };
+}
+
+/** 按 dock_position 把窗口摆到对应区域边缘中央(物理坐标,多显示器取当前屏) */
 async function applyPosition() {
   try {
     const mon = await currentMonitor();
     if (!mon) return;
     const win = getCurrentWindow();
     const outer = await win.outerSize();
-    const x = Math.round(mon.position.x + (mon.size.width - outer.width) / 2);
-    const y =
-      position.value === "top"
-        ? mon.position.y
-        : mon.position.y + mon.size.height - outer.height;
+    const area = layoutArea(mon);
+    const x = Math.round(area.x + (area.width - outer.width) / 2);
+    const y = position.value === "top" ? area.y : area.y + area.height - outer.height;
     await win.setPosition(new PhysicalPosition(x, y));
   } catch (e) {
     console.error("setPosition failed", e);
   }
 }
 
-/** 调整 Dock 窗口高度(宽度不变,居中 x 同 applyPosition),Dock 边缘始终贴屏幕边缘 */
+/** 调整 Dock 窗口高度(宽度不变,居中 x 同 applyPosition),Dock 边缘始终贴定位区域(工作区/整屏)边缘 */
 function setDockHeight(h: number): Promise<void> {
   heightChain = heightChain.then(async () => {
     try {
@@ -114,11 +135,9 @@ function setDockHeight(h: number): Promise<void> {
       if (!mon) return;
       const win = getCurrentWindow();
       const outer = await win.outerSize();
-      const x = Math.round(mon.position.x + (mon.size.width - outer.width) / 2);
-      const y =
-        position.value === "top"
-          ? mon.position.y
-          : mon.position.y + mon.size.height - h;
+      const area = layoutArea(mon);
+      const x = Math.round(area.x + (area.width - outer.width) / 2);
+      const y = position.value === "top" ? area.y : area.y + area.height - h;
       await win.setSize(new PhysicalSize(outer.width, h));
       await win.setPosition(new PhysicalPosition(x, y));
     } catch (e) {
@@ -283,6 +302,7 @@ async function dropAt(i: number) {
 }
 
 onMounted(async () => {
+  await loadWorkArea(); // 先取工作区,后续 applyPosition/setDockHeight 定位才能避让任务栏
   await loadItems();
   await pollRunning();
   await pollConfig();
