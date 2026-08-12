@@ -39,3 +39,5 @@ futures-util = "0.3"
 sha2 = "0.10"
 # SSE idle 超时(30s 无增量视为断线)用 tokio::time::timeout;tauri 依赖树已含 tokio,这里显式声明以免 3.1 模块编译报未声明依赖
 tokio = { version = "1", features = ["time"] }
+image = "0.25.10"
+base64 = "0.23.1"

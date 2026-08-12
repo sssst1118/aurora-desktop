@@ -1,12 +1,12 @@
 <script setup lang="ts">
 // 2.4 静态壁纸:目录输入 + 缩略图网格 + 点击应用 + 当前壁纸高亮。
 // 挂载点:Settings.vue 壁纸区块(由集成 agent 接线),毛玻璃风格与 Island/Settings 一致。
-// 预览走 Tauri asset 协议(tauri.conf.json security.assetProtocol.scope 限定
-// $HOME/Pictures/**——注意必须是 Tauri 变量集内的名字,如 $HOME/$PICTURE,
-// 不能用 Windows 环境变量 $USERPROFILE(不识别会被当字面路径,预览全挂);
-// 自定义目录在 scope 外时缩略图显示占位,设置仍可用。
-import { ref, onMounted } from "vue";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+// 预览不走 asset 协议——scope 只认 Tauri 变量集($HOME/$PICTURE 等,Windows 环境变量
+// $USERPROFILE 不识别会当字面路径)且无运行时扩展授权 API,自定义壁纸目录(如
+// C:\ProgramData\Lenovo\Themes)一律 403 预览全挂;改为后端缩略图命令
+// wallpaper_thumbnail:任意目录均可读,缩到 480px JPEG base64 data URI 传回。
+import { ref, onMounted, onUnmounted } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore } from "../../stores/config";
 
 interface WallpaperEntry {
@@ -24,7 +24,10 @@ const loading = ref(false);
 const applying = ref<string | null>(null);
 const error = ref("");
 const notice = ref("");
-const imgErrors = ref<Record<string, boolean>>({});
+// path → data URI(缩略图);加载中 = 未出现;失败 = thumbErrors
+const thumbs = ref<Record<string, string>>({});
+const thumbErrors = ref<Record<string, boolean>>({});
+let disposed = false;
 
 function fmtSize(n: number): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
@@ -37,12 +40,25 @@ function isCurrent(path: string): boolean {
   return cur !== null && path.toLowerCase() === cur.toLowerCase();
 }
 
+/** 逐张生成缩略图(后台 invoke;组件卸载后丢弃结果) */
+async function loadThumb(path: string) {
+  try {
+    const uri = await invoke<string>("wallpaper_thumbnail", { filePath: path });
+    if (!disposed) thumbs.value[path] = uri;
+  } catch {
+    if (!disposed) thumbErrors.value[path] = true;
+  }
+}
+
 async function refresh() {
   loading.value = true;
   error.value = "";
   try {
     entries.value = await invoke<WallpaperEntry[]>("wallpaper_list_local");
     currentPath.value = await invoke<string | null>("wallpaper_get_current");
+    thumbs.value = {};
+    thumbErrors.value = {};
+    for (const e of entries.value) void loadThumb(e.path);
     if (entries.value.length === 0) {
       error.value = `目录中没有可用图片:${store.cfg?.wallpaper_dir ?? "默认目录"}`;
     }
@@ -87,6 +103,10 @@ onMounted(async () => {
   await store.load();
   dirInput.value = store.cfg?.wallpaper_dir ?? "";
   void refresh();
+});
+
+onUnmounted(() => {
+  disposed = true;
 });
 </script>
 
@@ -138,18 +158,22 @@ onMounted(async () => {
       >
         <div class="aspect-square">
           <img
-            v-if="!imgErrors[entry.path]"
-            :src="convertFileSrc(entry.path)"
+            v-if="thumbs[entry.path]"
+            :src="thumbs[entry.path]"
             class="w-full h-full object-cover"
-            loading="lazy"
             draggable="false"
-            @error="imgErrors[entry.path] = true"
           />
           <div
-            v-else
+            v-else-if="thumbErrors[entry.path]"
             class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[10px] px-1 text-center"
           >
             预览不可用
+          </div>
+          <div
+            v-else
+            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[10px] animate-pulse"
+          >
+            加载中…
           </div>
         </div>
         <span

@@ -15,7 +15,10 @@
 //!   集成 agent 切换 invoke_handler 时用 `commands::wallpaper::wallpaper_set_static_cmd`;
 //!   删除 stubs.rs 对应项后,可将函数名改回原名并去掉 rename(可选)。
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use image::GenericImageView; // DynamicImage::dimensions 是 trait 方法,须导入
 use serde::{Deserialize, Serialize};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -147,6 +150,44 @@ pub fn wallpaper_set_static_cmd(file_path: String) -> Result<(), String> {
 pub fn wallpaper_list_local_cmd() -> Vec<WallpaperEntry> {
     let dir = pick_dir(configured_wallpaper_dir());
     scan_dir(&dir)
+}
+
+/// 缩略图最长边(像素):预览网格用,控制 IPC 传输量(原图可达数 MB,缩略后几十 KB)
+const THUMB_MAX_EDGE: u32 = 480;
+
+/// 生成缩略图 data URI(jpeg base64)。
+/// 不走 asset 协议(scope 只认 Tauri 变量集且无运行时扩展 API,自定义目录
+/// 如 C:\ProgramData\Lenovo\Themes 全部 403)——改为后端读图缩略后返回,
+/// 任意目录均可预览;读取/解码/编码失败返回 Err,前端显示"预览不可用"占位。
+#[tauri::command(rename = "wallpaper_thumbnail")]
+pub fn wallpaper_thumbnail_cmd(file_path: String) -> Result<String, String> {
+    if file_path.trim().is_empty() {
+        return Err("壁纸路径为空".to_string());
+    }
+    let p = Path::new(&file_path);
+    if !p.is_absolute() || !p.is_file() {
+        return Err(format!("壁纸文件不存在: {file_path}"));
+    }
+    let img = image::ImageReader::open(p)
+        .map_err(|e| format!("读取图片失败: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("识别图片格式失败: {e}"))?
+        .decode()
+        .map_err(|e| format!("解码图片失败: {e}"))?;
+    // 等比缩到最长边 THUMB_MAX_EDGE(已是小图则原样输出)
+    let (w, h) = img.dimensions();
+    let (tw, th) = if w > THUMB_MAX_EDGE || h > THUMB_MAX_EDGE {
+        let scale = THUMB_MAX_EDGE as f32 / w.max(h) as f32;
+        (((w as f32 * scale) as u32).max(1), ((h as f32 * scale) as u32).max(1))
+    } else {
+        (w, h)
+    };
+    let thumb = img.resize(tw, th, image::imageops::FilterType::Lanczos3);
+    let mut buf = Cursor::new(Vec::new());
+    thumb
+        .write_to(&mut buf, image::ImageFormat::Jpeg)
+        .map_err(|e| format!("编码缩略图失败: {e}"))?;
+    Ok(format!("data:image/jpeg;base64,{}", B64.encode(buf.get_ref())))
 }
 
 /// 读取当前壁纸路径(SPI_GETDESKWALLPAPER;底层即 HKCU\Control Panel\Desktop\WallPaper)
@@ -282,5 +323,61 @@ mod tests {
         assert_eq!(pick_dir(Some(r"D:\wp".to_string())), PathBuf::from(r"D:\wp"));
         assert_eq!(pick_dir(Some("  ".to_string())).to_string_lossy(), default_pictures_dir().to_string_lossy());
         assert_eq!(pick_dir(None).to_string_lossy(), default_pictures_dir().to_string_lossy());
+    }
+
+    // ---- 缩略图 ----
+
+    /// 造一张可解码的真实 PNG(临时目录,自产自销)
+    fn make_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, (x + y) as u8])
+        });
+        let p = dir.join(name);
+        img.save(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn thumbnail_returns_jpeg_data_uri_scaled() {
+        let dir = tmp_dir("thumb");
+        let p = make_png(&dir, "big.png", 1000, 800); // 超过最长边,应缩到 480
+
+        let out = wallpaper_thumbnail_cmd(p.to_string_lossy().into_owned()).unwrap();
+        assert!(out.starts_with("data:image/jpeg;base64,"));
+
+        // base64 解回真实 JPEG,尺寸最长边 = 480
+        let b64 = out.trim_start_matches("data:image/jpeg;base64,");
+        let bytes = B64.decode(b64).unwrap();
+        let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).unwrap();
+        let (w, h) = decoded.dimensions();
+        assert_eq!(w.max(h), 480);
+        assert_eq!(w * 4, h * 5); // 等比:1000x800
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnail_small_image_kept_as_is() {
+        let dir = tmp_dir("thumb_small");
+        let p = make_png(&dir, "small.png", 320, 240); // 本就小于上限,不缩放
+        let out = wallpaper_thumbnail_cmd(p.to_string_lossy().into_owned()).unwrap();
+        let b64 = out.trim_start_matches("data:image/jpeg;base64,");
+        let bytes = B64.decode(b64).unwrap();
+        let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).unwrap();
+        assert_eq!(decoded.dimensions(), (320, 240));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnail_rejects_bad_inputs() {
+        assert!(wallpaper_thumbnail_cmd(String::new()).is_err());
+        assert!(wallpaper_thumbnail_cmd("   ".to_string()).is_err());
+        assert!(wallpaper_thumbnail_cmd(r"Pictures\a.jpg".to_string()).is_err()); // 相对路径
+        let dir = tmp_dir("thumb_bad");
+        assert!(wallpaper_thumbnail_cmd(dir.join("none.png").to_string_lossy().into_owned()).is_err());
+        let txt = dir.join("a.txt");
+        std::fs::write(&txt, b"not an image").unwrap();
+        assert!(wallpaper_thumbnail_cmd(txt.to_string_lossy().into_owned()).is_err()); // 非图片
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

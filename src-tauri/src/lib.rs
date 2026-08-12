@@ -170,6 +170,7 @@ pub fn run() {
             // ---- Phase2 2.4 壁纸(函数名带 _cmd 后缀,tauri::command(rename) 保持外部命令名) ----
             commands::wallpaper::wallpaper_set_static_cmd,
             commands::wallpaper::wallpaper_list_local_cmd,
+            commands::wallpaper::wallpaper_thumbnail_cmd,
             commands::wallpaper::wallpaper_get_current_cmd,
             // ---- Phase3 3.1 AI 对话(流式/非流式/单轮工具执行) ----
             commands::ai::ai_chat_stream,
