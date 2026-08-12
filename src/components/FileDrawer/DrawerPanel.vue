@@ -73,6 +73,17 @@ function toggleCollapse(category: string) {
   collapsed.value = next;
 }
 
+/** 左侧分类 tab 点击:切换选中;若该分组曾在"全部"视图下被折叠,
+ *  切换时自动展开,避免折叠状态残留导致右侧看不到文件 */
+function selectCategory(category: string) {
+  selected.value = category;
+  if (category !== "全部" && collapsed.value.has(category)) {
+    const next = new Set(collapsed.value);
+    next.delete(category);
+    collapsed.value = next;
+  }
+}
+
 /** 右上角关闭按钮:隐藏窗口(热键/托盘可再次呼出) */
 function closeWindow() {
   getCurrentWindow()
@@ -146,7 +157,7 @@ onUnmounted(() => {
               ? 'bg-[var(--aurora-field)] text-[var(--aurora-text)]'
               : 'text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)]'
           "
-          @click="selected = t.category"
+          @click="selectCategory(t.category)"
         >
           <span class="text-sm leading-none">{{ iconOf(t.category, false) }}</span>
           <span class="flex-1 min-w-0 text-left truncate">{{ t.category }}</span>
@@ -206,6 +217,13 @@ onUnmounted(() => {
                 :file="f"
                 :icon="iconOf(g.category, f.is_dir)"
               />
+              <!-- 单分类视图下空组:明确提示,避免"点了分类没内容"的困惑 -->
+              <div
+                v-if="g.files.length === 0 && selected !== '全部'"
+                class="px-2 py-2 text-[11px] text-[var(--aurora-text-dim)]"
+              >
+                该分类暂无文件
+              </div>
             </div>
           </section>
         </template>
