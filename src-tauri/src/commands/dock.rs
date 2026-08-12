@@ -42,18 +42,38 @@ use super::config::{config_path, load_from, save_to, DockItem};
 
 // ==================== 主屏工作区(任务栏避让) ====================
 
-/// 主屏工作区(物理像素 x, y, w, h):SPI_GETWORKAREA 返回任务栏之外的可用区域。
+/// 主屏工作区(x, y, w, h):屏幕减去任务栏(贴底/贴顶时)后的可用区域。
+///
 /// 任务栏 z 序高于置顶窗口,Dock 若压在任务栏区域会被遮挡且真实鼠标点击全被
-/// 任务栏吃掉(实车验证:窗口 T1024 B1097 与任务栏 T1019 B1067 重叠 43px,右键
-/// 全无反应)。因此 Dock 定位必须基于工作区而非整屏。失败返回 None,调用方回退整屏。
+/// 任务栏吃掉(实测:窗口 T1024 B1097 与任务栏 T1019 B1067 重叠 43px,右键全无反应)。
+///
+/// 不用 SPI_GETWORKAREA:其返回值语义随进程 DPI awareness 变化(本机 150% 缩放,
+/// 与 set_position 的物理坐标不同步,实测偏 30px)。这里用 GetWindowRect(Shell_TrayWnd)
+/// + GetSystemMetrics,同一进程内必然同一坐标系(不管 DPI awareness 如何),与
+/// PhysicalPosition/SetWindowPos 自洽,无换算歧义。返回 None 仅当系统调用失败,
+/// 调用方回退整屏。
 pub fn primary_workarea() -> Option<(i32, i32, i32, i32)> {
     unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
-        let mut wa: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
-        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut _ as *mut core::ffi::c_void, 0) == 0 {
-            return None;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN,
+        };
+        let screen_w = GetSystemMetrics(SM_CXSCREEN);
+        let screen_h = GetSystemMetrics(SM_CYSCREEN);
+        let tray = FindWindowW(windows_sys::core::w!("Shell_TrayWnd"), std::ptr::null());
+        if tray.is_null() {
+            return Some((0, 0, screen_w, screen_h));
         }
-        Some((wa.left, wa.top, wa.right - wa.left, wa.bottom - wa.top))
+        let mut r: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+        if GetWindowRect(tray, &mut r) == 0 {
+            return Some((0, 0, screen_w, screen_h));
+        }
+        if r.bottom >= screen_h - 16 {
+            Some((0, 0, screen_w, r.top)) // 任务栏贴底 → 工作区在任务栏上方
+        } else if r.top <= 16 {
+            Some((0, r.bottom, screen_w, screen_h - r.bottom)) // 任务栏贴顶 → 工作区在下方
+        } else {
+            Some((0, 0, screen_w, screen_h)) // 任务栏在左右 → 不影响底部定位,返回整屏
+        }
     }
 }
 
