@@ -150,7 +150,6 @@ pub struct ChatRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Value,
-    pub connect_timeout: Duration,
     pub total_timeout: Duration,
 }
 
@@ -159,8 +158,9 @@ pub struct ChatRequest {
 /// - base_url / model 空串 → Err(配置类错误);
 /// - tools 为 Some → body 附 tools 数组;stream → body.stream=true;
 /// - temperature 0.7 固定;max_tokens 不设(模型默认)。
+/// - `_provider` 当前构造不依赖(连接超时差异已在 client_for 层),保留作未来按服务商默认参数的扩展位。
 pub fn build_request(
-    provider: &str,
+    _provider: &str,
     base_url: &str,
     model: &str,
     api_key: Option<&str>,
@@ -190,12 +190,9 @@ pub fn build_request(
     if let Some(t) = tools {
         body["tools"] = t;
     }
-    let connect_timeout = if provider == "ollama" {
-        OLLAMA_CONNECT_TIMEOUT
-    } else {
-        DEEPSEEK_CONNECT_TIMEOUT
-    };
-    Ok(ChatRequest { url, headers, body, connect_timeout, total_timeout: TOTAL_TIMEOUT })
+    // 注:连接超时(ollama 3s / deepseek 15s)已在 build_client 层(Client 构建参数)生效,
+    // ChatRequest 不携带(避免死代码)
+    Ok(ChatRequest { url, headers, body, total_timeout: TOTAL_TIMEOUT })
 }
 
 // ==================== SSE 行解析(纯函数) ====================
@@ -447,7 +444,6 @@ mod tests {
         assert_eq!(req.body["temperature"], 0.7);
         assert_eq!(req.body["messages"][0]["content"], "你好");
         assert!(req.body.get("tools").is_none(), "未传 tools 时 body 不应出现");
-        assert_eq!(req.connect_timeout, DEEPSEEK_CONNECT_TIMEOUT);
         assert_eq!(req.total_timeout, TOTAL_TIMEOUT);
     }
 
@@ -466,7 +462,6 @@ mod tests {
         assert_eq!(req.url, "http://127.0.0.1:11434/v1/chat/completions");
         assert!(req.headers.is_empty(), "ollama 无认证头");
         assert_eq!(req.body["stream"], true);
-        assert_eq!(req.connect_timeout, OLLAMA_CONNECT_TIMEOUT);
         // 尾斜杠多串也容忍
         let req2 = build_request("ollama", "http://127.0.0.1:11434/v1///", "m", None, vec![], None, false).unwrap();
         assert_eq!(req2.url, "http://127.0.0.1:11434/v1/chat/completions");

@@ -294,6 +294,7 @@ pub fn icon_data_url(path: &str, icons_dir: &Path) -> Option<String> {
 }
 
 /// 清空内存缓存(测试用;磁盘缓存保留,下一次命中自动回填)
+#[cfg_attr(not(test), allow(dead_code))] // 仅测试模块调用;保留以隔离测试间缓存
 pub fn clear_memory_cache() {
     if let Ok(mut g) = mem_cache().lock() {
         g.clear();

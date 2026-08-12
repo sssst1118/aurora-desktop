@@ -9,7 +9,7 @@ mod wallpaper_dynamic;
 mod win_utils;
 
 use std::sync::Mutex;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -177,6 +177,12 @@ pub fn run() {
             commands::uia_cmd::uia_click_control,
             commands::uia_cmd::uia_type_into,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // 退出时停止剪贴板监听,不留后台线程(与 setup 的启动对称)
+            if let RunEvent::ExitRequested { .. } = event {
+                crate::commands::clipboard::teardown(app);
+            }
+        });
 }

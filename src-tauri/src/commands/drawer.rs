@@ -6,7 +6,7 @@
 //! - `init_watcher`:notify(ReadDirectoryChangesW 事件驱动,非轮询)监听桌面目录,
 //!   变化 200ms 防抖后重扫 → 更新内存缓存 → emit "drawer-updated"(payload 空,信号用途),
 //!   由集成 agent 在 lib.rs setup 中 enable_file_drawer=true 时调用;
-//! - 上限保护:条目超过 [MAX_FILES] 时只展示排序后前 1500,总数记录在 [ScanResult::total]。
+//! - 上限保护:条目超过 [MAX_FILES] 时只展示排序后前 1500。
 //!
 //! 命令签名与 docs/Phase2-设计.md §2.2 及 commands/stubs.rs 占位完全一致。
 
@@ -38,10 +38,9 @@ pub struct DrawerGroup {
     pub files: Vec<DrawerFile>,
 }
 
-/// 扫描结果:分组 + 桌面真实条目总数(截断判断用;命令只返回 groups)
+/// 扫描结果:分组(命令只返回 groups;截断见 [MAX_FILES])
 pub struct ScanResult {
     pub groups: Vec<DrawerGroup>,
-    pub total: usize,
 }
 
 /// 内存缓存:watcher 事件驱动刷新后写入;drawer_list_files 优先读缓存(免重复磁盘扫描)
@@ -63,7 +62,6 @@ pub fn scan_dir(dir: &Path) -> Result<ScanResult, String> {
             .map(|n| n.to_string_lossy().to_lowercase())
             .unwrap_or_default()
     });
-    let total = entries.len();
     entries.truncate(MAX_FILES);
 
     // 固定顺序建组(空组也保留,前端左侧分类 tab 稳定)
@@ -97,7 +95,7 @@ pub fn scan_dir(dir: &Path) -> Result<ScanResult, String> {
             g.files.push(file);
         }
     }
-    Ok(ScanResult { groups, total })
+    Ok(ScanResult { groups })
 }
 
 /// 扫描用户桌面目录
@@ -252,7 +250,8 @@ mod tests {
         std::fs::create_dir(dir.join("项目资料")).unwrap();
 
         let r = scan_dir(&dir).unwrap();
-        assert_eq!(r.total, 10);
+        let shown: usize = r.groups.iter().map(|g| g.files.len()).sum();
+        assert_eq!(shown, 10);
         // 全部 9 组都在,且按固定顺序
         let cats: Vec<&str> = r.groups.iter().map(|g| g.category.as_str()).collect();
         assert_eq!(cats, CATEGORY_ORDER.to_vec());
@@ -291,7 +290,6 @@ mod tests {
     fn scan_empty_dir_returns_all_empty_groups() {
         let dir = tmp_dir("scan_empty");
         let r = scan_dir(&dir).unwrap();
-        assert_eq!(r.total, 0);
         assert_eq!(r.groups.len(), CATEGORY_ORDER.len());
         assert!(r.groups.iter().all(|g| g.files.is_empty()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -305,7 +303,6 @@ mod tests {
             write(&dir.join(format!("file{i:04}.txt")), "x");
         }
         let r = scan_dir(&dir).unwrap();
-        assert_eq!(r.total, 1600, "真实总数不截断");
         let shown: usize = r.groups.iter().map(|g| g.files.len()).sum();
         assert_eq!(shown, MAX_FILES, "展示数被截到上限");
         let names: Vec<&str> = r
@@ -329,7 +326,8 @@ mod tests {
         write(&dir.join(".gitignore"), "node_modules");
         write(&dir.join("README"), "x");
         let r = scan_dir(&dir).unwrap();
-        assert_eq!(r.total, 2);
+        let shown: usize = r.groups.iter().map(|g| g.files.len()).sum();
+        assert_eq!(shown, 2);
         let other = r
             .groups
             .iter()

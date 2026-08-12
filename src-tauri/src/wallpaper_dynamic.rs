@@ -339,25 +339,6 @@ pub fn enum_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
     out
 }
 
-/// 虚拟桌面整体 rect(所有屏并集;纯函数):返回 (x, y, w, h);
-/// 空列表 → (0, 0, 1920, 1080) 兜底(与 attach 现状一致)
-pub fn span_viewport(monitors: &[MonitorInfo]) -> (i32, i32, i32, i32) {
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-    for m in monitors {
-        min_x = min_x.min(m.x);
-        min_y = min_y.min(m.y);
-        max_x = max_x.max(m.x + m.width);
-        max_y = max_y.max(m.y + m.height);
-    }
-    if min_x == i32::MAX {
-        return (0, 0, 1920, 1080);
-    }
-    (min_x, min_y, max_x - min_x, max_y - min_y)
-}
-
 /// 布局签名(纯函数,热插拔检测用):屏数 + 每屏 (x,y,w,h,primary) 排序后拼接。
 /// 排序保证枚举顺序变化不误触发;任一屏移动/改分辨率/增减屏都会改变签名
 pub fn layout_signature(monitors: &[MonitorInfo]) -> String {
@@ -980,23 +961,6 @@ mod tests {
     }
 
     // ---- Phase5 5.2 多屏(设计文档 §2):纯函数可单测,枚举/注入动作手动验收 ----
-
-    #[test]
-    fn span_viewport_computes_virtual_desktop_rect() {
-        let mons = vec![
-            MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true },
-            MonitorInfo { index: 1, x: 1920, y: 0, width: 1280, height: 720, primary: false },
-            MonitorInfo { index: 2, x: -1280, y: 200, width: 1280, height: 1024, primary: false },
-        ];
-        let (x, y, w, h) = span_viewport(&mons);
-        // min_x=-1280, min_y=0, max_x=1920+1280=3200, max_y=max(1080, 720, 200+1024=1224)=1224
-        assert_eq!((x, y, w, h), (-1280, 0, 4480, 1224));
-    }
-
-    #[test]
-    fn span_viewport_empty_returns_default() {
-        assert_eq!(span_viewport(&[]), (0, 0, 1920, 1080));
-    }
 
     #[test]
     fn layout_signature_changes_when_monitors_change() {

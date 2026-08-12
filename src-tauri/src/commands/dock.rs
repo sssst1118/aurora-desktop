@@ -64,7 +64,6 @@ pub fn filter_windows(samples: Vec<WindowSample>) -> Vec<WindowSample> {
 #[derive(Clone, Debug)]
 pub struct WindowInfo {
     pub hwnd: usize,
-    pub pid: u32,
     pub exe: String,
 }
 
@@ -96,7 +95,6 @@ pub fn running_windows() -> Vec<WindowInfo> {
             let exe = process_exe_path(w.pid)?;
             Some(WindowInfo {
                 hwnd: w.hwnd,
-                pid: w.pid,
                 exe,
             })
         })
