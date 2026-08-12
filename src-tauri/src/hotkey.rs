@@ -46,7 +46,8 @@ fn toggle_window(app: &AppHandle, label: &str, set_top: bool) {
         return;
     }
     let _ = win.show();
-    if set_top {
+    // 置顶幂等:已置顶则跳过,避免每次呼出都做无谓的 Z 序操作(显示更跟手)
+    if set_top && !win.is_always_on_top().unwrap_or(false) {
         let _ = win.set_always_on_top(true);
     }
     unsafe {

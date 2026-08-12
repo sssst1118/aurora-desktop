@@ -61,10 +61,11 @@ const ARCHIVE_EXTS: &[&str] = &[
     "arj",
 ];
 
-/// 程序/可执行类扩展名
+/// 程序/可执行类扩展名(含 lnk:快捷方式指向应用,归程序类而非"其他",
+/// 抽屉/Dock 场景下大量桌面快捷方式据此归类)
 const PROGRAM_EXTS: &[&str] = &[
     "exe", "msi", "bat", "cmd", "com", "scr", "appx", "msix", "apk", "msixbundle",
-    "appxbundle",
+    "appxbundle", "lnk",
 ];
 
 /// 代码/配置类扩展名
@@ -168,6 +169,13 @@ mod tests {
         for n in ["a.exe", "b.msi", "c.bat", "d.cmd", "e.appx", "f.apk"] {
             assert_class(n, CATEGORY_PROGRAM);
         }
+    }
+
+    #[test]
+    fn lnk_goes_to_program() {
+        // 桌面快捷方式(联想浏览器.lnk 等)归程序类,不落"其他"
+        assert_class("联想浏览器.lnk", CATEGORY_PROGRAM);
+        assert_class("a.LNK", CATEGORY_PROGRAM);
     }
 
     #[test]

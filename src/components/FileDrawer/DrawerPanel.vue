@@ -210,17 +210,20 @@ onUnmounted(() => {
                 {{ g.files.length }}
               </span>
             </button>
-            <div v-if="!collapsed.has(g.category)" class="mt-1 space-y-0.5">
+            <!-- 图标网格(参考 Dock:真实图标 + 名称下注,点击打开) -->
+            <div
+              v-if="!collapsed.has(g.category)"
+              class="mt-1.5 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-1.5"
+            >
               <FileItem
                 v-for="f in g.files"
                 :key="f.path"
                 :file="f"
-                :icon="iconOf(g.category, f.is_dir)"
               />
               <!-- 单分类视图下空组:明确提示,避免"点了分类没内容"的困惑 -->
               <div
                 v-if="g.files.length === 0 && selected !== '全部'"
-                class="px-2 py-2 text-[11px] text-[var(--aurora-text-dim)]"
+                class="col-span-full px-2 py-3 text-[11px] text-[var(--aurora-text-dim)]"
               >
                 该分类暂无文件
               </div>

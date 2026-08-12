@@ -248,8 +248,10 @@ static WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// 启动桌面目录 watcher(事件驱动,非轮询)。
 /// 集成 agent 在 lib.rs setup 中调用一次即可;`enable_file_drawer` 关闭时自动跳过。
-/// 目录变化(Create/Modify/Remove)→ 200ms 防抖合并 → 重扫 → 更新缓存 →
+/// 目录变化(Create/Modify/Remove)→ 1s 防抖合并 → 重扫 → 更新缓存 →
 /// emit "drawer-updated"(payload 空,信号用途)→ 前端收到后调 drawer_list_files 拉取。
+/// 防抖 1s:桌面被大文件下载/日志持续写入时,合并高频事件为低频重扫,避免重扫风暴;
+/// 同时后台预热一次缓存(打开抽屉即出数据,无需等首次同步扫描)。
 /// watcher 放入 managed state 保活;热生效时 [stop_watcher] 可停止并重建。
 /// 幂等:已启动时不重复创建。
 pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
@@ -289,12 +291,17 @@ pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
     app.manage(Mutex::new(Some(watcher)));
     WATCHER_ACTIVE.store(true, Ordering::SeqCst);
 
-    // 防抖线程:首个事件后 200ms 窗口内的后续事件合并为一次重扫;
+    // 后台预热缓存:首次打开抽屉即出数据,不用等同步扫描(失败无碍,首次打开兜底重扫)
+    std::thread::spawn(|| {
+        let _ = refresh_scan();
+    });
+
+    // 防抖线程:首个事件后 1s 窗口内的后续事件合并为一次重扫;
     // 停止后 rx 通道关闭(发送端随 watcher drop),recv 返回 Err 退出线程
     let app2 = app.clone();
     std::thread::spawn(move || {
         while rx.recv().is_ok() {
-            while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
+            while rx.recv_timeout(Duration::from_secs(1)).is_ok() {}
             refresh_scan();
             let _ = app2.emit("drawer-updated", ());
         }
