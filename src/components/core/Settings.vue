@@ -494,7 +494,15 @@ async function uiaType() {
             >{{ store.cfg?.hotkey_clipboard ?? "Ctrl+Alt+V" }}</span
           >
         </div>
-        <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出搜索框(固定值);抽屉/剪贴板可在各自区块修改</p>
+        <div class="flex items-center justify-between text-xs">
+          <!-- 全部显示/隐藏:与托盘菜单同语义,共用快照(固定值,见 hotkey.rs ALL_HOTKEY) -->
+          <span>全部显示/隐藏</span>
+          <span
+            class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
+            >Ctrl+Shift+H</span
+          >
+        </div>
+        <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出搜索框;全部显示/隐藏为固定值;抽屉/剪贴板可在各自区块修改</p>
       </div>
 
       <div class="flex items-center justify-between">

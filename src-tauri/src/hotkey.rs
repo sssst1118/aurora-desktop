@@ -10,6 +10,9 @@ use crate::commands::config::AppConfig;
 /// 呼出/隐藏搜索框的全局热键
 pub const SEARCH_HOTKEY: &str = "ctrl+shift+space";
 
+/// 全部显示/隐藏的全局热键(按下:全部窗口隐藏并记快照;再按:按快照恢复)
+pub const ALL_HOTKEY: &str = "ctrl+shift+h";
+
 /// 动态热键当前注册表:用途 → 已注册的键(热生效 diff 依据)。
 /// 搜索热键固定注册、不参与 diff;本表只管抽屉/剪贴板/AI 三个可配置热键。
 static REGISTERED: Mutex<Option<HashMap<&'static str, String>>> = Mutex::new(None);
@@ -151,7 +154,13 @@ pub fn setup_hotkey(app: &AppHandle) -> Result<(), tauri_plugin_global_shortcut:
     // 1) Phase1 搜索热键(固定默认值,失败向上传播由 setup 告警,保持 Phase1 行为)
     register_hotkey(app, SEARCH_HOTKEY, |app| crate::win_utils::toggle_search_window(app))?;
 
-    // 2) 可配置热键(抽屉/剪贴板/AI):与 config_save 后的热生效走同一 diff 逻辑
+    // 2) 全部显示/隐藏热键(固定值;注册失败仅告警,不影响其他热键与应用运行)
+    if let Err(e) = register_hotkey(app, ALL_HOTKEY, |app| crate::win_utils::toggle_all_windows(app))
+    {
+        eprintln!("[aurora] 全部显示/隐藏热键 {ALL_HOTKEY} 注册失败(可能被占用): {e}");
+    }
+
+    // 3) 可配置热键(抽屉/剪贴板/AI):与 config_save 后的热生效走同一 diff 逻辑
     let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(app));
     apply_hotkeys(app, &cfg);
     Ok(())

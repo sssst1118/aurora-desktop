@@ -76,6 +76,18 @@ pub fn show_all(app: &AppHandle) {
     }
 }
 
+/// 全局快捷键"全部显示/隐藏"切换:当前无快照(处于正常状态)→ 隐藏全部并记快照;
+/// 已有快照(处于全隐藏状态)→ 按快照恢复。与托盘 hide_all/show_all 共用同一快照,
+/// 两种入口互相同步:托盘隐藏后按键恢复、按键隐藏后托盘可恢复。
+pub fn toggle_all_windows(app: &AppHandle) {
+    let has_snapshot = HIDDEN_SNAPSHOT.lock().map(|g| g.is_some()).unwrap_or(false);
+    if has_snapshot {
+        show_all(app);
+    } else {
+        hide_all(app);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
