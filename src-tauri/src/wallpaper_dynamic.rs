@@ -1,0 +1,767 @@
+//! 4.1 动态壁纸(WorkerW 注入 + 电池降载)实现层(Windows 专用)
+//!
+//! - WorkerW 注入:FindWindowW("Progman") → SendMessageTimeoutW(0x052C) →
+//!   FindWindowExW 找 Progman 的子 WorkerW(壁纸层;本机实测 DefView 是 Progman 的子窗口,
+//!   与设计文档 §1.3"EnumWindows 找顶层 DefView"不同,详见 find_workerw 注释)→
+//!   SetParent(webview_hwnd, workerw) + SetWindowPos 铺满主屏;
+//! - 电池降载:GetSystemPowerStatus 每 wallpaper_battery_check_sec(默认 30)s 检测一次,
+//!   仅状态翻转时 emit `wallpaper-power{on_battery}`(事件契约见设计文档 §0.3);
+//! - 素材扫描:只扫配置目录(wallpaper_dynamic_dir → 2.4 wallpaper_dir →
+//!   %USERPROFILE%\Pictures 回退链),白名单 mp4/webm/avi/mov/jpg/png/webp/bmp/gif/html,
+//!   按名称排序截 100,目录不存在返回空列表不 panic;
+//! - URL 两段式(设计 §1.5):默认 Pictures 内素材走 asset 协议(前端 convertFileSrc,
+//!   url=None);目录外素材由 set 命令后端读文件转 base64 data URL(≤50MB,超出报错提示
+//!   放 Pictures 下)。base64 无依赖手写(Cargo.toml 属集成 agent 不可加依赖,
+//!   与 2.5 手写等价 FFI 同风格)。
+//!
+//! windows-sys 0.59 feature 门控(集成 agent 已在 Cargo.toml 启用):
+//! - Win32_System_Power:GetSystemPowerStatus / SYSTEM_POWER_STATUS;
+//! - Win32_UI_WindowsAndMessaging:窗口注入全套 API。
+//! 全部 unsafe 逐调用包裹 + 注释(风格参考 hotkey.rs / dock_icon.rs);
+//! 注入动作本身无法单测(手动验收覆盖),纯函数(is_battery_mode / 素材过滤 /
+//! 回退链 / find_workerw 不 panic / base64 / URL 两段式)已带单测。
+
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, Once, OnceLock};
+use std::time::Duration;
+
+use tauri::{AppHandle, Emitter};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, SendMessageTimeoutW, SetParent,
+    SetWindowPos, ShowWindow, HWND_BOTTOM, SMTO_NORMAL, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
+};
+
+use crate::commands::wallpaper::WallpaperEntry;
+
+/// 触发系统创建 WorkerW 的消息(WM_SPAWN_WORKERW):向 Progman 发送后,
+/// 桌面图标层(SHELLDLL_DefView)会挂到新分裂出的 WorkerW 子窗口下
+const WM_SPAWN_WORKERW: u32 = 0x052C;
+/// 注入消息超时(ms)
+const SPAWN_TIMEOUT_MS: u32 = 1000;
+/// 素材列表白名单(视频/图片/html,大小写不敏感;与设计 §1.1 一致)
+pub const DYNAMIC_EXT_WHITELIST: [&str; 11] = [
+    "mp4", "webm", "avi", "mov", "jpg", "jpeg", "png", "webp", "bmp", "gif", "html",
+];
+/// 列表展示上限(有节制,不扫全盘)
+const MAX_DYNAMIC_LIST: usize = 100;
+/// 目录外素材走 data URL 的体积上限(50MB,与视频壁纸素材量级匹配)
+const MAX_DATA_URL_BYTES: u64 = 50 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// 素材目录与列表
+// ---------------------------------------------------------------------------
+
+/// 默认图片目录:%USERPROFILE%\Pictures(缺失时回退公共 Pictures,与 2.4 同款)
+pub fn default_pictures_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(|u| Path::new(&u).join("Pictures"))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Public\Pictures"))
+}
+
+/// 动态壁纸素材目录回退链(纯函数,可单测):
+/// 配置 wallpaper_dynamic_dir → 2.4 wallpaper_dir → %USERPROFILE%\Pictures
+pub fn pick_dynamic_dir(configured: Option<String>, fallback_2_4: Option<String>) -> PathBuf {
+    match non_empty(configured) {
+        Some(dir) => PathBuf::from(dir),
+        None => match non_empty(fallback_2_4) {
+            Some(dir) => PathBuf::from(dir),
+            None => default_pictures_dir(),
+        },
+    }
+}
+
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// 扩展名是否命中动态壁纸白名单(大小写不敏感)
+fn ext_whitelisted(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| DYNAMIC_EXT_WHITELIST.iter().any(|w| e.eq_ignore_ascii_case(w)))
+}
+
+/// 素材类型(纯函数):"image" | "video" | "html" | "other"
+pub fn material_kind(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "mp4" | "webm" | "avi" | "mov" => "video",
+        "html" => "html",
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" => "image",
+        _ => "other",
+    }
+}
+
+/// 扫描动态壁纸素材目录:白名单扩展名 + 非隐藏 + 常规文件,按名称排序截 100(纯函数,可单测);
+/// 目录不存在/无权限 → 空列表(前端显示错误提示),不 panic
+pub fn scan_dynamic_dir(dir: &Path) -> Vec<WallpaperEntry> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for item in rd.flatten() {
+        let path = item.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = item.file_name().to_str().map(String::from) else {
+            continue; // 非 UTF-8 文件名跳过
+        };
+        if name.starts_with('.') {
+            continue; // 隐藏文件
+        }
+        if !ext_whitelisted(&name) {
+            continue;
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        out.push(WallpaperEntry { name, path: path.to_string_lossy().into_owned(), size });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.truncate(MAX_DYNAMIC_LIST);
+    out
+}
+
+/// 校验动态壁纸素材:绝对路径 + 白名单扩展名 + 文件存在(纯函数,可单测)
+pub fn validate_set_args(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("壁纸素材路径为空".to_string());
+    }
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err(format!("壁纸素材路径必须是绝对路径: {path}"));
+    }
+    if !ext_whitelisted(path) {
+        return Err(format!(
+            "不支持的素材格式,仅支持 mp4/webm/avi/mov/jpg/png/webp/bmp/gif/html: {path}"
+        ));
+    }
+    if !p.is_file() {
+        return Err(format!("壁纸素材文件不存在: {path}"));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// WorkerW 注入(设计 §1.3 经典三连,全部 Win32_UI_WindowsAndMessaging,零新 feature)
+// ---------------------------------------------------------------------------
+
+/// 触发系统创建 WorkerW:向 Progman 发送 WM_SPAWN_WORKERW(0x052C)。
+/// 发送失败(空句柄/超时)不视为致命——桌面可能已处于目标结构,继续枚举即可
+fn spawn_workerw(progman: HWND) -> bool {
+    if progman.is_null() {
+        return false;
+    }
+    let mut result: usize = 0;
+    // SendMessageTimeoutW:同步等待 Progman 处理完(超时 1s),防止注入时桌面结构未就绪
+    let rc = unsafe {
+        SendMessageTimeoutW(
+            progman,
+            WM_SPAWN_WORKERW,
+            0,
+            0,
+            SMTO_NORMAL,
+            SPAWN_TIMEOUT_MS,
+            &mut result,
+        )
+    };
+    rc != 0
+}
+
+/// EnumWindows 回调(分裂结构兜底):找类名 "WorkerW" 且含子窗口 "SHELLDLL_DefView" 的窗口
+/// (即桌面图标层的宿主),结果写入 LPARAM 携带的 Option<HWND>
+unsafe extern "system" fn enum_workerw_with_defview(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let out = unsafe { &mut *(lparam as *mut Option<HWND>) };
+    let mut buf = [0u16; 256];
+    let len = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+    if len == 0 {
+        return 1; // 无类名,继续枚举
+    }
+    let class = String::from_utf16_lossy(&buf[..len as usize]);
+    if class != "WorkerW" {
+        return 1;
+    }
+    // 该 WorkerW 的子窗口中是否有桌面图标层(SHELLDLL_DefView)
+    let defview = unsafe {
+        FindWindowExW(
+            hwnd,
+            std::ptr::null_mut(),
+            windows_sys::core::w!("SHELLDLL_DefView"),
+            std::ptr::null(),
+        )
+    };
+    if !defview.is_null() {
+        *out = Some(hwnd);
+        return 0; // 找到即停止枚举
+    }
+    1
+}
+
+/// 分裂结构兜底:枚举顶层窗口,找含 SHELLDLL_DefView 子窗口的 WorkerW
+/// (设计文档 §1.3 描述的"DefView 父窗口即 WorkerW"场景;Win10/11 实测
+/// DefView 直接挂在 Progman 下,通常走不到这里)
+fn find_workerw_via_defview() -> Option<HWND> {
+    let mut result: Option<HWND> = None;
+    unsafe {
+        EnumWindows(Some(enum_workerw_with_defview), &mut result as *mut Option<HWND> as LPARAM);
+    }
+    result
+}
+
+/// 查找 WorkerW 壁纸层窗口(纯函数,可单测不 panic)。
+///
+/// ⚠️ 本机实测(Win11)与设计文档 §1.3 描述的"EnumWindows 找顶层 SHELLDLL_DefView"
+/// 不符:实际桌面结构中 **SHELLDLL_DefView 是 Progman 的子窗口**(非顶层,EnumWindows
+/// 永远枚举不到它);0x052C 后 Progman 新增一个**子 WorkerW**——它才是壁纸层
+/// (在 DefView 之下渲染,壁纸自然显示在图标后面)。查找顺序:
+/// ① Progman 的子 WorkerW(Windows 10/11 主路径,本项目最低支持 Win10 21H2);
+/// ② 分裂结构兜底:含 SHELLDLL_DefView 子窗口的顶层 WorkerW(Win7/8 风格)。
+/// 两轮未果返回 None(由调用方报错提示)
+pub fn find_workerw(progman: HWND) -> Option<HWND> {
+    if progman.is_null() {
+        return None;
+    }
+    for _ in 0..2 {
+        spawn_workerw(progman);
+        // ① Win10/11 主路径:Progman 的子 WorkerW 即壁纸层
+        let child = unsafe {
+            FindWindowExW(
+                progman,
+                std::ptr::null_mut(),
+                windows_sys::core::w!("WorkerW"),
+                std::ptr::null(),
+            )
+        };
+        if !child.is_null() {
+            return Some(child);
+        }
+        // ② 分裂结构兜底
+        if let Some(workerw) = find_workerw_via_defview() {
+            return Some(workerw);
+        }
+    }
+    None
+}
+
+/// 把 webview 窗口注入 WorkerW 壁纸层并铺满主屏(仅主屏,Phase4 不做多屏)。
+/// 注入失败返回错误,窗口保持原样(不残留半注入状态)
+pub fn attach_to_workerw(hwnd: HWND, width: i32, height: i32) -> Result<(), String> {
+    // 1) 拿桌面窗口 Progman(Windows 桌面宿主,自 Vista 起稳定存在)
+    let progman = unsafe { FindWindowW(windows_sys::core::w!("Progman"), std::ptr::null()) };
+    if progman.is_null() {
+        return Err("未找到桌面窗口(Progman),请确认资源管理器运行中".to_string());
+    }
+    // 2) 触发并查找 WorkerW
+    let workerw = find_workerw(progman)
+        .ok_or_else(|| "WorkerW 壁纸层查找失败(桌面结构异常,建议重启资源管理器)".to_string())?;
+    // 3) 注入:SetParent 到 WorkerW + 铺满主屏(不激活、立即显示、置兄弟最底)
+    unsafe {
+        // SetParent:把壁纸窗口挂到 WorkerW 下,成为桌面图标层的兄弟
+        SetParent(hwnd, workerw);
+        // SetWindowPos:铺满主屏;HWND_BOTTOM 压到兄弟窗口最底(兜底路径下保证图标在上);
+        // SWP_NOACTIVATE 不抢焦点,SWP_SHOWWINDOW 立即显示
+        SetWindowPos(
+            hwnd,
+            HWND_BOTTOM,
+            0,
+            0,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+    Ok(())
+}
+
+/// 从 WorkerW 撤下:SetParent 回 null(恢复为独立顶层窗口)+ 隐藏。
+/// 不碰系统壁纸——WorkerW 只是"盖在图标后面的一层",撤掉即恢复原壁纸显示(设计 §1.3)
+pub fn detach_from_workerw(hwnd: HWND) {
+    unsafe {
+        SetParent(hwnd, std::ptr::null_mut());
+        ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 电池降载(设计 §1.4,Win32_System_Power)
+// ---------------------------------------------------------------------------
+
+/// 电池降载判定(设计 §1.4 原文,纯函数,可单测):
+/// - ACLineStatus:1 = AC 供电,0 = 电池;
+/// - BatteryFlag:8 = 充电中(拔电源但插着充电线也算充电 → 不降载),255 = 未知;
+/// - BatteryLifePercent:0-100,255 = 未知。
+/// 未知电量(255)在默认阈值 0 下按"用电池即降载"(255<=0 分支由 threshold==0 短路覆盖);
+/// 显式阈值下未知电量视为高于阈值(不误降载,宁可多耗电不可打断壁纸)
+pub fn is_battery_mode(st: &SYSTEM_POWER_STATUS, threshold_pct: u8) -> bool {
+    if st.ACLineStatus == 1 {
+        return false; // 接电源
+    }
+    if st.BatteryFlag == 8 {
+        return false; // 充电中
+    }
+    if threshold_pct == 0 {
+        return true; // 默认:用电池即降载(含电量未知 255)
+    }
+    st.BatteryLifePercent <= threshold_pct // 阈值模式:电量低于阈值才降载
+}
+
+/// `wallpaper-power` 事件 payload(公共契约,见设计文档 §0.3;Settings 区块也会消费)
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct WallpaperPowerPayload {
+    pub on_battery: bool,
+}
+
+/// 最新电池状态(None = 尚无检测结果,视为非降载;get_state 命令层读取)
+pub fn battery_latest() -> bool {
+    BATTERY_LATEST
+        .get()
+        .and_then(|m| m.lock().ok())
+        .and_then(|g| *g)
+        .unwrap_or(false)
+}
+
+/// 电池检测线程只启动一次(幂等)
+static BATTERY_WATCHER_ONCE: Once = Once::new();
+/// 最近一次检测到的电池状态(跨线程共享)
+static BATTERY_LATEST: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
+
+/// 启动电池检测线程(内部按配置开关自判,幂等;集成 agent 在 lib.rs setup 中调用):
+/// - enable_dynamic_wallpaper 或 wallpaper_battery_downshift 关闭 → 不启动(开关重启生效);
+/// - 每 wallpaper_battery_check_sec(默认 30)s 调 GetSystemPowerStatus(轻量轮询,无窗口/无 COM);
+/// - 仅状态翻转时 emit `wallpaper-power{on_battery}`(不变化不广播,防轮询风暴);
+/// - 线程随进程结束,无句柄/线程泄漏(托盘退出由集成收尾验证)。
+pub fn spawn_battery_watcher(app: AppHandle, cfg: &crate::commands::config::AppConfig) {
+    if !cfg.enable_dynamic_wallpaper || !cfg.wallpaper_battery_downshift {
+        return; // 开关未开:不启动电池检测(与"关闭时不启动电池检测"联动)
+    }
+    let threshold = cfg.wallpaper_battery_threshold_pct;
+    let interval = Duration::from_secs(cfg.wallpaper_battery_check_sec.max(1) as u64);
+    BATTERY_WATCHER_ONCE.call_once(|| {
+        // 首轮立即检测并 emit(不必等满一个周期,设置区徽标/壁纸窗口立即可见)
+        let handle = app.clone();
+        check_battery(&handle, threshold);
+        if let Err(e) = std::thread::Builder::new()
+            .name("battery-watcher".to_string())
+            .spawn(move || loop {
+                std::thread::sleep(interval);
+                check_battery(&handle, threshold);
+            })
+        {
+            eprintln!("[aurora] 启动 battery-watcher 线程失败: {e}");
+        }
+    });
+}
+
+/// 单轮检测:读电源状态 → 判定 → 仅状态翻转时 emit(读取失败保持上次状态)
+fn check_battery(app: &AppHandle, threshold: u8) {
+    let mut st: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetSystemPowerStatus(&mut st) };
+    if ok == 0 {
+        return; // 读取失败:保持上次状态,不翻转不广播
+    }
+    let on_battery = is_battery_mode(&st, threshold);
+    let Some(mut m) = BATTERY_LATEST.get_or_init(|| Mutex::new(None)).lock().ok() else {
+        return;
+    };
+    if *m == Some(on_battery) {
+        return; // 状态未变化,不广播(防轮询风暴)
+    }
+    *m = Some(on_battery);
+    drop(m);
+    let _ = app.emit("wallpaper-power", &WallpaperPowerPayload { on_battery });
+}
+
+// ---------------------------------------------------------------------------
+// 当前素材内存状态(静态 Mutex,无需 manage;set/clear/get_state 共享)
+// ---------------------------------------------------------------------------
+
+/// 当前动态壁纸素材记录(内存态;图片与视频/html 均记录,供 get_state 与幂等判断)
+#[derive(Clone, Debug)]
+pub struct WallpaperState {
+    pub path: String,
+    pub kind: String,        // "image" | "video" | "html"
+    pub url: Option<String>, // video/html 目录外素材的 data URL;Pictures 内为 None(前端 convertFileSrc)
+}
+
+fn state_slot() -> &'static Mutex<Option<WallpaperState>> {
+    static STATE: OnceLock<Mutex<Option<WallpaperState>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(None))
+}
+
+/// 读当前素材状态(无记录 → None)
+pub fn current_state() -> Option<WallpaperState> {
+    state_slot().lock().ok().and_then(|g| g.clone())
+}
+
+/// 写当前素材状态(None = 清除)
+pub fn set_state(st: Option<WallpaperState>) {
+    if let Ok(mut g) = state_slot().lock() {
+        *g = st;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// URL 两段式(设计 §1.5/AD-2):Pictures 内走 asset 协议;目录外走 data URL
+// ---------------------------------------------------------------------------
+
+/// 素材 MIME(仅视频/html 需要 data URL;图片不走到这里,兜底 video/mp4)
+pub fn mime_for_path(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "html" | "htm" => "text/html",
+        _ => "video/mp4",
+    }
+}
+
+/// path 是否位于 dir 内(规范化后前缀判断;两侧都解析失败视为不在内)
+fn path_in_dir(path: &Path, dir: &Path) -> bool {
+    let (Ok(p), Ok(d)) = (std::fs::canonicalize(path), std::fs::canonicalize(dir)) else {
+        return false;
+    };
+    p.starts_with(&d)
+}
+
+/// 素材 URL 两段式(纯函数,可单测):
+/// 素材在默认图片目录(Pictures)内 → Ok(None)(前端用 convertFileSrc 走 asset 协议);
+/// 目录外 → 后端读文件转 base64 data URL(≤50MB,超出报错提示放 Pictures 下)
+pub fn resolve_material_url(path: &str, default_pictures: &Path) -> Result<Option<String>, String> {
+    if path_in_dir(Path::new(path), default_pictures) {
+        return Ok(None);
+    }
+    let meta = std::fs::metadata(path).map_err(|e| format!("读取素材失败: {e}"))?;
+    if meta.len() > MAX_DATA_URL_BYTES {
+        return Err("素材超过 50MB,请放到默认图片目录(Pictures)下使用".to_string());
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("读取素材失败: {e}"))?;
+    Ok(Some(format!(
+        "data:{};base64,{}",
+        mime_for_path(path),
+        base64_encode(&bytes)
+    )))
+}
+
+/// base64 编码(RFC 4648;无依赖手写——Cargo.toml 属集成 agent 不可加依赖,
+/// 与 2.5 手写等价 FFI 同风格;纯函数,标准向量单测覆盖)
+pub fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// 单元测试(纯函数全覆盖;注入动作本身无法单测,由 §1.6 手动验收覆盖)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::core::w;
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("aurora_wp_dyn_{tag}_{nanos}"));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn touch(p: &Path) {
+        std::fs::write(p, b"fake bytes").unwrap();
+    }
+
+    /// 构造 SYSTEM_POWER_STATUS(ACLineStatus / BatteryFlag / BatteryLifePercent)
+    fn sp(ac: u8, flag: u8, pct: u8) -> SYSTEM_POWER_STATUS {
+        SYSTEM_POWER_STATUS {
+            ACLineStatus: ac,
+            BatteryFlag: flag,
+            BatteryLifePercent: pct,
+            SystemStatusFlag: 0,
+            BatteryLifeTime: 0,
+            BatteryFullLifeTime: 0,
+        }
+    }
+
+    // ---- is_battery_mode 全分支(设计 §1.4) ----
+
+    #[test]
+    fn battery_ac_power_never_downshift() {
+        assert!(!is_battery_mode(&sp(1, 1, 100), 0)); // AC + 高电量
+        assert!(!is_battery_mode(&sp(1, 255, 255), 0)); // AC + 全未知
+        assert!(!is_battery_mode(&sp(1, 8, 50), 20)); // AC + 充电中
+    }
+
+    #[test]
+    fn battery_charging_never_downshift() {
+        assert!(!is_battery_mode(&sp(0, 8, 50), 0)); // 电池但充电中(插着充电线)
+        assert!(!is_battery_mode(&sp(0, 8, 255), 20));
+        assert!(!is_battery_mode(&sp(0, 8, 5), 10)); // 电量低于阈值但充电中 → 不降载
+    }
+
+    #[test]
+    fn battery_threshold_zero_downshift_on_battery() {
+        assert!(is_battery_mode(&sp(0, 1, 100), 0)); // 默认阈值 0:高电量也用电池即降载
+        assert!(is_battery_mode(&sp(0, 255, 255), 0)); // 电量未知(255)按阈值 0 规则 → 降载
+        assert!(is_battery_mode(&sp(0, 1, 0), 0));
+    }
+
+    #[test]
+    fn battery_threshold_percent_boundary() {
+        assert!(is_battery_mode(&sp(0, 1, 20), 20)); // == 阈值 → 降载(边界)
+        assert!(is_battery_mode(&sp(0, 1, 19), 20)); // 低于阈值 → 降载
+        assert!(!is_battery_mode(&sp(0, 1, 21), 20)); // 高于阈值 → 不降载
+        assert!(!is_battery_mode(&sp(0, 1, 255), 20)); // 未知电量 + 显式阈值 → 不误降载
+    }
+
+    // ---- 素材列表过滤(设计 §1.6) ----
+
+    #[test]
+    fn scan_filters_dynamic_whitelist_sorted() {
+        let dir = tmp_dir("scan");
+        touch(&dir.join("b.mp4"));
+        touch(&dir.join("A.WEBM")); // 大写扩展名
+        touch(&dir.join("c.html"));
+        touch(&dir.join("d.jpg"));
+        touch(&dir.join("e.gif"));
+        touch(&dir.join("f.avi"));
+        touch(&dir.join("g.mov"));
+        touch(&dir.join("note.txt")); // 非白名单
+        touch(&dir.join("h.bin"));
+        touch(&dir.join(".hidden.mp4")); // 隐藏文件
+        std::fs::create_dir_all(dir.join("subdir")).unwrap();
+        touch(&dir.join("subdir/inside.mp4")); // 不递归子目录
+        let list = scan_dynamic_dir(&dir);
+        let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["A.WEBM", "b.mp4", "c.html", "d.jpg", "e.gif", "f.avi", "g.mov"]);
+        assert!(list.iter().all(|e| e.size > 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_missing_dir_returns_empty() {
+        let dir = tmp_dir("missing");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(scan_dynamic_dir(&dir).is_empty());
+    }
+
+    #[test]
+    fn scan_truncates_to_100() {
+        let dir = tmp_dir("cap");
+        for i in 0..105 {
+            touch(&dir.join(format!("mat_{i:03}.mp4")));
+        }
+        let list = scan_dynamic_dir(&dir);
+        assert_eq!(list.len(), MAX_DYNAMIC_LIST);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- 目录回退链(设计 §1.1) ----
+
+    #[test]
+    fn pick_dir_fallback_chain() {
+        let pictures = default_pictures_dir();
+        // 配置优先
+        assert_eq!(
+            pick_dynamic_dir(Some(r"D:\dynamic".to_string()), None),
+            PathBuf::from(r"D:\dynamic")
+        );
+        // 配置为空 → 2.4 wallpaper_dir
+        assert_eq!(
+            pick_dynamic_dir(None, Some(r"D:\wp".to_string())),
+            PathBuf::from(r"D:\wp")
+        );
+        // 配置为空串/纯空白 → 2.4 wallpaper_dir
+        assert_eq!(
+            pick_dynamic_dir(Some("   ".to_string()), Some(r"D:\wp".to_string())),
+            PathBuf::from(r"D:\wp")
+        );
+        // 两者皆空 → %USERPROFILE%\Pictures
+        assert_eq!(pick_dynamic_dir(None, None), pictures);
+        assert_eq!(pick_dynamic_dir(Some(" ".to_string()), None), pictures);
+    }
+
+    // ---- set 校验(设计 §1.6) ----
+
+    #[test]
+    fn set_rejects_relative_path() {
+        assert!(validate_set_args(r"Pictures\a.mp4").is_err());
+    }
+
+    #[test]
+    fn set_rejects_missing_file() {
+        let dir = tmp_dir("missing_set");
+        let p = dir.join("none.mp4");
+        assert!(validate_set_args(&p.to_string_lossy()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_rejects_non_whitelist_ext() {
+        let dir = tmp_dir("badext");
+        touch(&dir.join("a.txt"));
+        touch(&dir.join("b.exe"));
+        assert!(validate_set_args(&dir.join("a.txt").to_string_lossy()).is_err());
+        assert!(validate_set_args(&dir.join("b.exe").to_string_lossy()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_rejects_empty_path() {
+        assert!(validate_set_args("").is_err());
+        assert!(validate_set_args("   ").is_err());
+    }
+
+    #[test]
+    fn set_accepts_absolute_whitelist() {
+        let dir = tmp_dir("good");
+        touch(&dir.join("a.mp4"));
+        touch(&dir.join("b.HTML")); // 大小写不敏感
+        touch(&dir.join("c.PNG"));
+        assert!(validate_set_args(&dir.join("a.mp4").to_string_lossy()).is_ok());
+        assert!(validate_set_args(&dir.join("b.HTML").to_string_lossy()).is_ok());
+        assert!(validate_set_args(&dir.join("c.PNG").to_string_lossy()).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- 素材类型 ----
+
+    #[test]
+    fn kind_classification() {
+        assert_eq!(material_kind("a.MP4"), "video");
+        assert_eq!(material_kind("a.webm"), "video");
+        assert_eq!(material_kind("a.html"), "html");
+        assert_eq!(material_kind("a.JPG"), "image");
+        assert_eq!(material_kind("a.jpeg"), "image");
+        assert_eq!(material_kind("a.webp"), "image");
+        assert_eq!(material_kind("a.txt"), "other");
+    }
+
+    // ---- base64(RFC 4648 标准向量) ----
+
+    #[test]
+    fn base64_standard_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(&[0x00, 0x01, 0x02]), "AAEC");
+    }
+
+    #[test]
+    fn base64_random_binary_roundtrip() {
+        // 随机字节编码后按 base64 字符集校验(防 0x00 截断类错误)
+        let data: Vec<u8> = (0..256u16).map(|i| (i as u8).wrapping_mul(7)).collect();
+        let enc = base64_encode(&data);
+        assert!(enc.len() % 4 == 0);
+        assert!(enc.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'+' || c == b'/' || c == b'='));
+    }
+
+    // ---- URL 两段式(设计 §1.5) ----
+
+    #[test]
+    fn mime_mapping() {
+        assert_eq!(mime_for_path("a.mp4"), "video/mp4");
+        assert_eq!(mime_for_path("a.WEBM"), "video/webm");
+        assert_eq!(mime_for_path("a.avi"), "video/x-msvideo");
+        assert_eq!(mime_for_path("a.mov"), "video/quicktime");
+        assert_eq!(mime_for_path("a.html"), "text/html");
+        assert_eq!(mime_for_path("a.htm"), "text/html");
+        assert_eq!(mime_for_path("a.unknown"), "video/mp4");
+    }
+
+    #[test]
+    fn resolve_url_inside_pictures_returns_none() {
+        let pictures = tmp_dir("pics");
+        touch(&pictures.join("a.mp4"));
+        let r = resolve_material_url(&pictures.join("a.mp4").to_string_lossy(), &pictures);
+        assert!(matches!(r, Ok(None)));
+        let _ = std::fs::remove_dir_all(&pictures);
+    }
+
+    #[test]
+    fn resolve_url_outside_pictures_returns_data_url() {
+        let pictures = tmp_dir("pics2");
+        let outside = tmp_dir("out2");
+        std::fs::write(outside.join("v.mp4"), b"testvideo").unwrap();
+        let r = resolve_material_url(&outside.join("v.mp4").to_string_lossy(), &pictures);
+        // data URL 前缀 + base64("testvideo") 尾缀
+        assert!(matches!(&r, Ok(Some(u)) if u.starts_with("data:video/mp4;base64,")));
+        assert_eq!(r.unwrap().unwrap(), format!("data:video/mp4;base64,{}", base64_encode(b"testvideo")));
+        let _ = std::fs::remove_dir_all(&pictures);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn resolve_url_html_data_url() {
+        let pictures = tmp_dir("pics3");
+        let outside = tmp_dir("out3");
+        std::fs::write(outside.join("page.html"), b"<html></html>").unwrap();
+        let r = resolve_material_url(&outside.join("page.html").to_string_lossy(), &pictures);
+        assert!(matches!(&r, Ok(Some(u)) if u.starts_with("data:text/html;base64,")));
+        let _ = std::fs::remove_dir_all(&pictures);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn resolve_url_oversize_rejected() {
+        let pictures = tmp_dir("pics4");
+        let outside = tmp_dir("out4");
+        let big = outside.join("big.mp4");
+        std::fs::write(&big, vec![0u8; (MAX_DATA_URL_BYTES + 1) as usize]).unwrap();
+        let r = resolve_material_url(&big.to_string_lossy(), &pictures);
+        assert!(r.is_err());
+        assert!(r.unwrap_err().contains("50MB"));
+        let _ = std::fs::remove_dir_all(&pictures);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    // ---- find_workerw 不 panic(注入动作本身手动验收覆盖,设计 §1.6) ----
+
+    #[test]
+    fn find_workerw_null_progman_no_panic() {
+        // 空窗口句柄场景:不应 panic(发送失败即返回,枚举照常进行)
+        let _ = find_workerw(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn find_workerw_real_desktop() {
+        // 真实桌面:Progman 存在时应能找到 WorkerW(本机即 Windows 桌面环境);
+        // 无桌面环境(CI/远程会话异常)直接跳过
+        let progman = unsafe { FindWindowW(w!("Progman"), std::ptr::null()) };
+        if progman.is_null() {
+            return;
+        }
+        let workerw = find_workerw(progman);
+        assert!(workerw.is_some(), "本机桌面结构异常:WorkerW 应可找到");
+        assert!(!workerw.unwrap().is_null());
+    }
+}
