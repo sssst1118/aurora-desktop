@@ -20,7 +20,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11, built to **
 | **Clipboard History** | ✅ | Background event-driven clipboard monitoring; history is searchable, re-pasteable, and persisted locally. *Phase 2 done; GUI verified 2026-08-12* |
 | **Wallpaper Engine** | ✅ | Static wallpaper switching plus a dynamic engine (video / HTML / live WebGL injected beneath the desktop via WorkerW), battery-aware downshift, and multi-monitor support with hot-plug auto rebuild. *Phase 2 static + Phase 4 dynamic + Phase 5 multi-monitor done* |
 | **System Monitor** | ✅ | Real-time CPU / memory / network sampling (backend 2s thread) surfaced in the Island and the tray tooltip. *Phase 2 done* |
-| **AI Assistant** | 🚧 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set static/dynamic wallpapers, find files). *Phase 3 core + Phase 5 dynamic-wallpaper tools done; manual acceptance pending* |
+| **AI Assistant** | ✅ | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set static/dynamic wallpapers, find files). *Phase 3 core + Phase 5 dynamic-wallpaper tools done; GUI verified 2026-08-12* |
 | **UI Automation** | ✅ | Keyboard/mouse simulation (SendInput) and Windows UI Automation control manipulation (search windows, read text, click, type). *Phase 4 done* |
 | **Auto Update** | ✅ | Self-built updater (no signing needed): semantic version compare + SHA-256 verify + silent NSIS install; manual check / auto check (6h) / one-click update from Settings. *Phase 5 done; signing hookup documented in [docs/代码签名接入.md](./docs/代码签名接入.md)* |
 
@@ -97,7 +97,7 @@ aurora-desktop/
 |---|---|---|
 | **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | ✅ Done (verified 2026-08-12) |
 | **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | ✅ Done (GUI verified 2026-08-12) |
-| **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 🚧 Code complete; manual acceptance pending |
+| **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | ✅ Done (GUI verified 2026-08-12) |
 | **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | ✅ Done (manual GUI verification pending) |
 | **Phase 5** Release | NSIS installer + self-built auto update (with signing hookup), multi-monitor wallpapers, AI dynamic-wallpaper tools, dead-code cleanup | ✅ Done (manual GUI verification pending) |
 
