@@ -43,19 +43,24 @@ pub const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 static CLIENT_DS: OnceLock<Client> = OnceLock::new();
 static CLIENT_OLLAMA: OnceLock<Client> = OnceLock::new();
 
-fn build_client(connect_timeout: Duration) -> Client {
-    Client::builder()
-        .connect_timeout(connect_timeout)
-        .build()
-        .expect("reqwest Client 构建失败")
+/// local_only=true 时禁用全部代理(reqwest 0.12 默认启用系统代理,Windows 上会读
+/// 注册表代理设置;实测本机系统代理 127.0.0.1:7897 对 127.0.0.1 目标返回 502,
+/// Ollama 请求被转发给代理后必挂 → 本机地址显式 no_proxy();
+/// DeepSeek(公网)保留系统代理行为,走代理或直连由系统设置决定)
+fn build_client(connect_timeout: Duration, local_only: bool) -> Client {
+    let mut builder = Client::builder().connect_timeout(connect_timeout);
+    if local_only {
+        builder = builder.no_proxy();
+    }
+    builder.build().expect("reqwest Client 构建失败")
 }
 
-/// 按服务商取全局惰性 Client(ollama=3s 快速失败,其余=15s)
+/// 按服务商取全局惰性 Client(ollama=3s 快速失败+禁代理,其余=15s 保留系统代理)
 fn client_for(provider: &str) -> &'static Client {
     if provider == "ollama" {
-        CLIENT_OLLAMA.get_or_init(|| build_client(OLLAMA_CONNECT_TIMEOUT))
+        CLIENT_OLLAMA.get_or_init(|| build_client(OLLAMA_CONNECT_TIMEOUT, true))
     } else {
-        CLIENT_DS.get_or_init(|| build_client(DEEPSEEK_CONNECT_TIMEOUT))
+        CLIENT_DS.get_or_init(|| build_client(DEEPSEEK_CONNECT_TIMEOUT, false))
     }
 }
 
