@@ -18,10 +18,11 @@ Aurora is an open-source desktop productivity hub for Windows 10/11, built to **
 | **Dock** | ✅ | A customizable app shortcut bar with drag-to-reorder icons, running-application indicators, and switchable top/bottom edges. *Phase 2 done; GUI verification pending* |
 | **Desktop File Drawer** | ✅ | Desktop file organization: logical grouping (files stay put), auto-classification by extension, event-driven auto refresh. *Phase 2 done; physical archiving deferred to Phase 4; GUI verification pending* |
 | **Clipboard History** | ✅ | Background event-driven clipboard monitoring; history is searchable, re-pasteable, and persisted locally. *Phase 2 done; GUI verification pending* |
-| **Wallpaper Engine** | ✅ | One-click static wallpaper switching (immediate + persisted via SPIF_UPDATEINIFILE). *Phase 2 done; dynamic wallpapers + battery-aware downshift deferred to Phase 4; GUI verification pending* |
+| **Wallpaper Engine** | ✅ | Static wallpaper switching plus a dynamic engine (video / HTML / live WebGL injected beneath the desktop via WorkerW), battery-aware downshift, and multi-monitor support with hot-plug auto rebuild. *Phase 2 static + Phase 4 dynamic + Phase 5 multi-monitor done* |
 | **System Monitor** | ✅ | Real-time CPU / memory / network sampling (backend 2s thread) surfaced in the Island and the tray tooltip. *Phase 2 done* |
-| **AI Assistant** | 🚧 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set wallpapers, find files). *Phase 3 code complete; manual acceptance pending* |
-| **UI Automation** | 📋 | Keyboard/mouse simulation and Windows UI Automation control manipulation (an advanced feature with well-defined boundaries) |
+| **AI Assistant** | 🚧 | Dual-mode: cloud DeepSeek + local Ollama; natural-language commands drive system actions directly (open apps, set static/dynamic wallpapers, find files). *Phase 3 core + Phase 5 dynamic-wallpaper tools done; manual acceptance pending* |
+| **UI Automation** | ✅ | Keyboard/mouse simulation (SendInput) and Windows UI Automation control manipulation (search windows, read text, click, type). *Phase 4 done* |
+| **Auto Update** | ✅ | Self-built updater (no signing needed): semantic version compare + SHA-256 verify + silent NSIS install; manual check / auto check (6h) / one-click update from Settings. *Phase 5 done; signing hookup documented in [docs/代码签名接入.md](./docs/代码签名接入.md)* |
 
 ## Interface Preview
 
@@ -71,8 +72,11 @@ pnpm tauri dev        # Launch dev mode (Rust compilation + frontend hot reload)
 ### Build
 
 ```bash
-pnpm tauri build      # Produce an MSI installer
+pnpm tauri build      # Produce MSI + NSIS installers (NSIS = auto-update target)
 ```
+
+> Build prerequisites: MSI (WiX) and NSIS toolchains are downloaded automatically;
+> behind a proxy, export `HTTPS_PROXY=http://127.0.0.1:7897` first.
 
 ## Project Structure
 
@@ -94,7 +98,8 @@ aurora-desktop/
 | **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | 🚧 Code complete; manual acceptance pending |
 | **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | ✅ Done (manual GUI verification pending) |
 | **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 🚧 Code complete; manual acceptance pending |
-| **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | 📋 |
+| **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | ✅ Done (manual GUI verification pending) |
+| **Phase 5** Release | NSIS installer + self-built auto update (with signing hookup), multi-monitor wallpapers, AI dynamic-wallpaper tools, dead-code cleanup | ✅ Done (manual GUI verification pending) |
 
 ## Design Principles
 
