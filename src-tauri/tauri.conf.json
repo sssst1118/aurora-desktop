@@ -115,12 +115,18 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": ["msi", "nsis"],
     "icon": ["icons/icon.ico"],
     "publisher": "Aurora Desktop",
     "copyright": "Copyright © 2026 sssst1118",
     "category": "Utility",
     "shortDescription": "Aurora - AI 增强模块化桌面效率中心",
-    "longDescription": "灵动岛 / Dock / 全局搜索 / 文件抽屉 / 剪贴板历史 / 壁纸引擎 / AI 助手"
+    "longDescription": "灵动岛 / Dock / 全局搜索 / 文件抽屉 / 剪贴板历史 / 壁纸引擎 / AI 助手",
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"],
+        "installMode": "currentUser"
+      }
+    }
   }
 }
