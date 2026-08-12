@@ -15,7 +15,8 @@ const results = ref<AppEntry[]>([]);
 const selected = ref(0);
 const inputEl = ref<HTMLInputElement | null>(null);
 const showSettings = ref(false);
-// 2.1 Dock(并入搜索窗口形态):每次窗口显示时重读开关,设置改动下次呼出生效
+// 2.1 Dock(并入搜索窗口形态):启动立即 + 每次窗口显示时重读开关,
+// 设置页保存后经 aurora:config-saved 事件即时刷新(热生效)
 const enableDock = ref(false);
 let debounceTimer: number | undefined;
 
@@ -25,6 +26,9 @@ const win = getCurrentWindow();
 // 用户呼出搜索栏时图标已就绪(否则首次呼出才挂载,COM 初始化的 ~1.9s 成本
 // 会压在"打开搜索栏之后"——实测首 lnk 图标提取独占 1.85s)
 void loadDockFlag();
+
+// 热生效:设置页保存成功 → 立即重读 Dock 开关(无需重启/下次呼出)
+window.addEventListener("aurora:config-saved", () => void loadDockFlag());
 
 async function loadDockFlag() {
   try {

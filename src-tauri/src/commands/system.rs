@@ -107,7 +107,7 @@ pub(crate) fn get_snapshot() -> SysStatus {
 
 /// 实时系统状态命令:保持向后兼容(返回全量字段,旧前端忽略新增字段)。
 /// 读取常驻采样线程的最近快照(不再命令内 sleep 采样);首次调用幂等触发
-/// 采样线程懒启动(集成 agent 亦可在 setup 调 ensure_started,Once 保证只启一次)。
+/// 采样线程懒启动(热生效:enable_island 关闭时 runtime::apply 会 stop 线程)。
 #[tauri::command]
 pub fn sys_get_status(app: tauri::AppHandle) -> SysStatus {
     system_sampler::ensure_started(&app);

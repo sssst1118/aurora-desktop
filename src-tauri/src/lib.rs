@@ -3,6 +3,7 @@ mod automation;
 mod commands;
 mod hotkey;
 mod indexer;
+mod runtime;
 mod tray;
 mod updater;
 mod wallpaper_dynamic;
@@ -21,7 +22,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             crate::tray::setup_tray(&handle)?;
-            // 设置开关生效:enable_island 关闭时隐藏灵动岛窗口(重启生效)
+            // 设置开关生效:enable_island 关闭时隐藏灵动岛窗口(运行时改动走 runtime::apply 热生效)
             let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(&handle));
             if !cfg.enable_island {
                 if let Some(win) = app.get_webview_window("island") {
@@ -42,10 +43,9 @@ pub fn run() {
             crate::commands::clipboard::setup(&handle)?;
             // 2.2 FileDrawer:启动桌面目录 watcher(事件驱动;内部按 enable_file_drawer 开关自判)
             crate::commands::drawer::init_watcher(handle.clone())?;
-            // Phase4 4.1 电池降载:总开关+降载开关都开才启动 30s 检测线程(状态变化才 emit wallpaper-power)
-            if cfg.enable_dynamic_wallpaper && cfg.wallpaper_battery_downshift {
-                crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
-            }
+            // Phase4 4.1 电池降载:常驻检测线程,内部每轮重读配置
+            // (热生效:总开关/降载开关/阈值/周期运行时改配置即时生效,不重启)
+            crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
             // 5.1 自动更新:启动 15s 后 + 每 6h 静默检查;发现新版 emit update-available
             if crate::commands::config::load_from(&crate::commands::config::config_path(&handle))
                 .update_enabled
@@ -56,49 +56,54 @@ pub fn run() {
                     .spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(15));
                         loop {
-                            // 注意:app2 由 async 块独占(move),emit 也在块内用 app2,
-                            // 外层循环只持有 upd_app 用于 clone,避免 use-after-move
-                            let app2 = upd_app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let r = crate::commands::updater_cmd::update_check(app2.clone())
-                                    .await;
-                                if r.status == "available" {
-                                    let _ = app2.emit(
-                                        "update-available",
-                                        &serde_json::json!({ "version": r.version, "notes": r.notes }),
-                                    );
-                                }
-                            });
+                            // 热生效:每轮重读 update_enabled,运行时关开关即停止检查(开恢复)
+                            let cfg = crate::commands::config::load_from(
+                                &crate::commands::config::config_path(&upd_app),
+                            );
+                            if cfg.update_enabled {
+                                // 注意:app2 由 async 块独占(move),emit 也在块内用 app2,
+                                // 外层循环只持有 upd_app 用于 clone,避免 use-after-move
+                                let app2 = upd_app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let r = crate::commands::updater_cmd::update_check(app2.clone())
+                                        .await;
+                                    if r.status == "available" {
+                                        let _ = app2.emit(
+                                            "update-available",
+                                            &serde_json::json!({ "version": r.version, "notes": r.notes }),
+                                        );
+                                    }
+                                });
+                            }
                             std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
                         }
                     })
                     .ok();
             }
             // Phase5 多屏热插拔:2s 轮询显示器布局签名(数量/坐标/尺寸/主屏),变化即重建多屏 attach;
-            // 线程内部自行判开关(运行中开/关多屏都响应),总开关关时不做事只重置基线
-            if cfg.enable_dynamic_wallpaper {
-                let probe = handle.clone();
-                std::thread::spawn(move || {
-                    let mut last = String::new();
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(2));
-                        let cur = crate::commands::config::load_from(
-                            &crate::commands::config::config_path(&probe),
-                        );
-                        if !cur.enable_dynamic_wallpaper || !cur.wallpaper_multi_monitor {
-                            last.clear();
-                            continue;
-                        }
-                        let sig = crate::wallpaper_dynamic::layout_signature(
-                            &crate::wallpaper_dynamic::enum_monitors(&probe),
-                        );
-                        if sig != last {
-                            last = sig;
-                            let _ = crate::wallpaper_dynamic::multi_apply(&probe);
-                        }
+            // 常驻线程内部自行判开关(热生效:运行中开/关动态壁纸与多屏都响应),
+            // 总开关或多屏关时不做事只重置基线
+            let probe = handle.clone();
+            std::thread::spawn(move || {
+                let mut last = String::new();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let cur = crate::commands::config::load_from(
+                        &crate::commands::config::config_path(&probe),
+                    );
+                    if !cur.enable_dynamic_wallpaper || !cur.wallpaper_multi_monitor {
+                        last.clear();
+                        continue;
                     }
-                });
-            }
+                    let sig = crate::wallpaper_dynamic::layout_signature(
+                        &crate::wallpaper_dynamic::enum_monitors(&probe),
+                    );
+                    if sig != last {
+                        last = sig;
+                        let _ = crate::wallpaper_dynamic::multi_apply(&probe);
+                    }
+                }
+            });
             // 2.5 采样线程无需接线:首个 sys_get_status invoke(灵动岛挂载)时幂等懒启动;
             // 托盘 tooltip 的更新订阅在 tray::setup_tray 内完成
             Ok(())

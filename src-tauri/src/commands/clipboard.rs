@@ -103,6 +103,13 @@ fn monitor_started() -> &'static AtomicBool {
     &FLAG
 }
 
+/// 事件监听是否已注册(独立于 monitor 启停:热生效时 stop/start 反复切换,
+/// 监听器只注册一次,避免重复注册导致一次剪贴板更新触发多次入库)
+fn listener_registered() -> &'static AtomicBool {
+    static FLAG: AtomicBool = AtomicBool::new(false);
+    &FLAG
+}
+
 /// 历史文件路径:%APPDATA%\com.aurora.desktop\clipboard.json(与 config.json 同级)
 pub fn history_path(app: &AppHandle) -> PathBuf {
     app.path()
@@ -154,11 +161,7 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
 
 /// 停止监听(托盘退出流程调用;不留后台线程)。幂等。
 pub fn teardown(app: &AppHandle) {
-    if monitor_started().swap(false, Ordering::SeqCst) {
-        let _ = app
-            .state::<tauri_plugin_clipboard::Clipboard>()
-            .stop_monitor(app.clone());
-    }
+    stop_monitor_if_needed(app);
 }
 
 /// 惰性初始化(幂等):历史装载 + 配置上限 + 按开关启动监听
@@ -177,19 +180,46 @@ fn ensure_ready(app: &AppHandle) {
     }
 }
 
-/// 启动插件 monitor(幂等;插件内部同样防重复启动)
-fn start_monitor_if_needed(app: &AppHandle) {
-    if !monitor_started().swap(true, Ordering::SeqCst) {
+/// 注册插件事件监听(仅一次;后续 start/stop 只开关 monitor)
+fn ensure_listener(app: &AppHandle) {
+    if !listener_registered().swap(true, Ordering::SeqCst) {
         let listener_app = app.clone();
         app.listen(EVENT_PLUGIN_UPDATE, move |_event| {
             handle_clipboard_update(&listener_app);
         });
+    }
+}
+
+/// 启动插件 monitor(幂等;插件内部同样防重复启动)
+fn start_monitor_if_needed(app: &AppHandle) {
+    ensure_listener(app);
+    if !monitor_started().swap(true, Ordering::SeqCst) {
         if let Err(e) = app
             .state::<tauri_plugin_clipboard::Clipboard>()
             .start_monitor(app.clone())
         {
             eprintln!("[aurora] 剪贴板监听启动失败: {e}");
         }
+    }
+}
+
+/// 停止插件 monitor(幂等;监听器保留,再次启动不需重注册)
+fn stop_monitor_if_needed(app: &AppHandle) {
+    if monitor_started().swap(false, Ordering::SeqCst) {
+        let _ = app
+            .state::<tauri_plugin_clipboard::Clipboard>()
+            .stop_monitor(app.clone());
+    }
+}
+
+/// 热生效入口(config_save 后调用):开关开 → 启动监听;关 → 停止(监听器保留)。
+/// 幂等,与启动路径共用。
+pub fn apply_config(app: &AppHandle, cfg: &super::config::AppConfig) {
+    ensure_ready(app);
+    if cfg.enable_clipboard_history {
+        start_monitor_if_needed(app);
+    } else {
+        stop_monitor_if_needed(app);
     }
 }
 

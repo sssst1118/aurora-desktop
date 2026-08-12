@@ -62,7 +62,10 @@ export const useConfigStore = defineStore("config", {
       this.cfg = await invoke<AppConfig>("config_load");
     },
     async save() {
-      if (this.cfg) await invoke<boolean>("config_save", { cfg: this.cfg });
+      if (!this.cfg) return;
+      const ok = await invoke<boolean>("config_save", { cfg: this.cfg });
+      // 热生效:保存成功即广播,依赖配置的组件(如 Dock 开关)监听后即时刷新,无需重启/下次呼出
+      if (ok) window.dispatchEvent(new CustomEvent("aurora:config-saved"));
     },
   },
 });

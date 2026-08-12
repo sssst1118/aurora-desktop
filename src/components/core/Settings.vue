@@ -66,7 +66,7 @@ async function toggleIsland() {
   await store.save();
 }
 
-/** Phase2 模块开关(重启生效:窗口显隐/watcher/监听器都在启动时按配置初始化) */
+/** Phase2 模块开关(热生效:config_save 后 runtime::apply 同步 watcher/监听器/窗口显隐) */
 async function toggleModule(
   key: "enable_dock" | "enable_file_drawer" | "enable_clipboard_history",
 ) {
@@ -75,7 +75,7 @@ async function toggleModule(
   await store.save();
 }
 
-/** Phase3 AI 总开关(重启生效:热键/托盘入口在启动时按配置初始化) */
+/** Phase3 AI 总开关(热生效:热键注册走 apply_hotkeys diff,关闭即注销) */
 async function toggleAiEnable() {
   if (!store.cfg) return;
   store.cfg.enable_ai = !store.cfg.enable_ai;
@@ -94,7 +94,7 @@ async function saveText() {
   await store.save();
 }
 
-/** Phase3 工具调用总开关(重启后随请求生效) */
+/** Phase3 工具调用总开关(热生效:命令内每次请求实时读配置) */
 async function toggleAiTools() {
   if (!store.cfg) return;
   store.cfg.ai_tools_enabled = !store.cfg.ai_tools_enabled;
@@ -119,7 +119,7 @@ async function clearApiKey() {
   await store.save();
 }
 
-// ---- Phase4 模块开关(全部重启后生效:窗口/线程/命令门控都在启动时按配置初始化)----
+// ---- Phase4 模块开关(全部热生效:壁纸撤下/电池线程/命令门控均实时响应配置)----
 
 /** Phase4 4.1 动态壁纸总开关 */
 async function toggleDynamicWallpaper() {
@@ -480,7 +480,7 @@ async function uiaType() {
       <div class="flex items-center justify-between">
         <div>
           <div class="text-sm">灵动岛</div>
-          <div class="text-[10px] text-[var(--aurora-text-dim)]">顶部常驻:时间 + CPU/内存/网络,重启后生效</div>
+          <div class="text-[10px] text-[var(--aurora-text-dim)]">顶部常驻:时间 + CPU/内存/网络,保存后生效</div>
         </div>
         <button
           class="w-10 h-5 rounded-full relative transition-colors"
@@ -517,7 +517,7 @@ async function uiaType() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">文件抽屉</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,重启后生效</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,保存后生效</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
@@ -537,7 +537,7 @@ async function uiaType() {
             class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
             @change="saveText"
           />
-          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">重启后生效</span>
+          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">保存后生效</span>
         </div>
         <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
@@ -549,7 +549,7 @@ async function uiaType() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">剪贴板历史</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,重启后生效</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,保存后生效</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
@@ -569,7 +569,7 @@ async function uiaType() {
             class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
             @change="saveText"
           />
-          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">重启后生效</span>
+          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">保存后生效</span>
         </div>
         <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
@@ -588,7 +588,7 @@ async function uiaType() {
           <div>
             <div class="text-sm">AI 助手</div>
             <div class="text-[10px] text-[var(--aurora-text-dim)]">
-              总开关,关闭时不注册热键、不显示托盘入口,重启后生效
+              总开关,关闭时热键立即注销,保存后生效
             </div>
           </div>
           <button
@@ -734,7 +734,7 @@ async function uiaType() {
               class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
               @change="saveText"
             />
-            <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">重启后生效</span>
+            <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">保存后生效</span>
           </div>
         </div>
       </div>
@@ -745,7 +745,7 @@ async function uiaType() {
           <div>
             <div class="text-sm">动态壁纸</div>
             <div class="text-[10px] text-[var(--aurora-text-dim)]">
-              WorkerW 壁纸层:本地视频/网页壁纸,重启后生效
+              WorkerW 壁纸层:本地视频/网页壁纸,关闭开关即撤下,保存后生效
             </div>
           </div>
           <button
@@ -953,7 +953,7 @@ async function uiaType() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">自动化</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">键鼠模拟 + 控件操作,重启后生效</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">键鼠模拟 + 控件操作,命令内实时校验,保存后生效</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"

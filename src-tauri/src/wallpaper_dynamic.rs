@@ -526,26 +526,33 @@ static BATTERY_WATCHER_ONCE: Once = Once::new();
 /// 最近一次检测到的电池状态(跨线程共享)
 static BATTERY_LATEST: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
 
-/// 启动电池检测线程(内部按配置开关自判,幂等;集成 agent 在 lib.rs setup 中调用):
-/// - enable_dynamic_wallpaper 或 wallpaper_battery_downshift 关闭 → 不启动(开关重启生效);
+/// 启动电池检测线程(常驻,幂等;集成 agent 在 lib.rs setup 中调用):
+/// - 线程每轮重读配置(热生效:enable_dynamic_wallpaper / wallpaper_battery_downshift /
+///   threshold / check_sec 运行时改配置即时生效,无需重启);
+/// - enable_dynamic_wallpaper 或 wallpaper_battery_downshift 关闭 → 本轮跳过检测
+///   (保留上次状态,不翻转不广播;开关再开自动恢复);
 /// - 每 wallpaper_battery_check_sec(默认 30)s 调 GetSystemPowerStatus(轻量轮询,无窗口/无 COM);
 /// - 仅状态翻转时 emit `wallpaper-power{on_battery}`(不变化不广播,防轮询风暴);
 /// - 线程随进程结束,无句柄/线程泄漏(托盘退出由集成收尾验证)。
 pub fn spawn_battery_watcher(app: AppHandle, cfg: &crate::commands::config::AppConfig) {
-    if !cfg.enable_dynamic_wallpaper || !cfg.wallpaper_battery_downshift {
-        return; // 开关未开:不启动电池检测(与"关闭时不启动电池检测"联动)
-    }
-    let threshold = cfg.wallpaper_battery_threshold_pct;
-    let interval = Duration::from_secs(cfg.wallpaper_battery_check_sec.max(1) as u64);
     BATTERY_WATCHER_ONCE.call_once(|| {
         // 首轮立即检测并 emit(不必等满一个周期,设置区徽标/壁纸窗口立即可见)
         let handle = app.clone();
-        check_battery(&handle, threshold);
+        check_battery(&handle, cfg.wallpaper_battery_threshold_pct);
         if let Err(e) = std::thread::Builder::new()
             .name("battery-watcher".to_string())
             .spawn(move || loop {
+                // 热生效:每轮重读配置(开关/阈值/周期改动即时生效,不重启)
+                let cfg = crate::commands::config::load_from(
+                    &crate::commands::config::config_path(&handle),
+                );
+                let interval =
+                    Duration::from_secs(cfg.wallpaper_battery_check_sec.max(1) as u64);
                 std::thread::sleep(interval);
-                check_battery(&handle, threshold);
+                if !cfg.enable_dynamic_wallpaper || !cfg.wallpaper_battery_downshift {
+                    continue; // 开关关:跳过检测(保留上次状态,不翻转不广播)
+                }
+                check_battery(&handle, cfg.wallpaper_battery_threshold_pct);
             })
         {
             eprintln!("[aurora] 启动 battery-watcher 线程失败: {e}");

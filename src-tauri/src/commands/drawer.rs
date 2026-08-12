@@ -13,6 +13,7 @@
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -170,12 +171,19 @@ pub fn drawer_refresh() -> Vec<DrawerGroup> {
     refresh_scan().unwrap_or_default()
 }
 
+/// watcher 是否已启动(managed state 持有;热生效时用标志判断是否需要重建)
+static WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 /// 启动桌面目录 watcher(事件驱动,非轮询)。
 /// 集成 agent 在 lib.rs setup 中调用一次即可;`enable_file_drawer` 关闭时自动跳过。
 /// 目录变化(Create/Modify/Remove)→ 200ms 防抖合并 → 重扫 → 更新缓存 →
 /// emit "drawer-updated"(payload 空,信号用途)→ 前端收到后调 drawer_list_files 拉取。
-/// watcher 放入 managed state 保活,应用退出时随 App 一起 drop;防抖线程随之结束。
+/// watcher 放入 managed state 保活;热生效时 [stop_watcher] 可停止并重建。
+/// 幂等:已启动时不重复创建。
 pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
+    if WATCHER_ACTIVE.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     // 设置开关关闭时不启动 watcher(不注册监听、不留句柄)
     let cfg_path = crate::commands::config::config_path(&app);
     let cfg = crate::commands::config::load_from(&cfg_path);
@@ -201,10 +209,12 @@ pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
         },
     )?;
     watcher.watch(&desktop, notify::RecursiveMode::NonRecursive)?;
-    // 保活 watcher(不 drop 即持续监听)
-    app.manage(Mutex::new(watcher));
+    // 保活 watcher(不 drop 即持续监听;热生效停止时替换回 None)
+    app.manage(Mutex::new(Some(watcher)));
+    WATCHER_ACTIVE.store(true, Ordering::SeqCst);
 
-    // 防抖线程:首个事件后 200ms 窗口内的后续事件合并为一次重扫
+    // 防抖线程:首个事件后 200ms 窗口内的后续事件合并为一次重扫;
+    // 停止后 rx 通道关闭(发送端随 watcher drop),recv 返回 Err 退出线程
     let app2 = app.clone();
     std::thread::spawn(move || {
         while rx.recv().is_ok() {
@@ -214,6 +224,32 @@ pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
         }
     });
     Ok(())
+}
+
+/// 停止桌面目录 watcher(热生效:开关关闭时调用)。
+/// 从 managed state 取出 watcher drop 掉(系统句柄随之释放),通道关闭后防抖线程退出。
+/// 幂等:未启动时无操作。
+pub fn stop_watcher(app: &tauri::AppHandle) {
+    if !WATCHER_ACTIVE.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(state) = app.try_state::<Mutex<Option<notify::RecommendedWatcher>>>() {
+        if let Ok(mut g) = state.lock() {
+            let _ = g.take();
+        }
+    }
+}
+
+/// 热生效入口(config_save 后调用):开关开 → 启动 watcher(幂等);关 → 停止。
+/// 失败仅告警,不阻断保存。
+pub fn apply_config(app: tauri::AppHandle) -> notify::Result<()> {
+    let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(&app));
+    if cfg.enable_file_drawer {
+        init_watcher(app)
+    } else {
+        stop_watcher(&app);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

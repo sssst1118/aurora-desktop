@@ -132,7 +132,13 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
     let prev = load_from(&path);
     // 密钥脱敏契约:前端传回掩码 "******" = 未修改,保留磁盘旧值;新值或 None/空串直接生效
     cfg.ai_api_key = resolve_key_save(&prev.ai_api_key, &cfg.ai_api_key);
-    save_to(&path, &cfg)
+    let ok = save_to(&path, &cfg);
+    // 热生效(2026-08-12 用户要求:所有功能不重启即生效):落盘成功后按新配置
+    // 同步运行中状态(热键/监听/watcher/采样线程/窗口显隐)。失败不阻断保存。
+    if ok {
+        crate::runtime::apply(&app, &cfg);
+    }
+    ok
 }
 
 /// 密钥脱敏(设计文档 §1.3,纯函数):已配置 → 掩码占位 "******";未配置/空 → None

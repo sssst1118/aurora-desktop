@@ -11,7 +11,7 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
@@ -175,45 +175,55 @@ struct SamplerState {
     last: Instant,
 }
 
-static STARTED: Once = Once::new();
+/// 采样线程运行门控(热生效:enable_island 关闭时 [stop] 置 false,线程自然退出)
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// 幂等启动常驻采样线程(懒启动):
 /// 1. 首轮同步采样一次(CPU 用 120ms 双采样差商,网络速率为 0),立即写快照并 emit,
 ///    保证首个快照非空且 CPU/内存立即可见;
 /// 2. 之后每 2s 采样 → 更新共享快照 → emit `sys-status`。
-/// 首次 sys_get_status invoke 时懒启动;集成 agent 亦可在 setup 中调用(Once 保证只启一次)。
+/// 首次 sys_get_status invoke 时懒启动;集成 agent 亦可在 setup 中调用。
+/// 热生效:enable_island 关闭 → [stop] 停止线程;再次开启 → ensure_started 重启(幂等)。
 pub fn ensure_started(app: &AppHandle) {
-    STARTED.call_once(|| {
-        // 首轮同步采样
-        let cpu_a = read_cpu_times();
-        std::thread::sleep(Duration::from_millis(120));
-        let cpu_b = read_cpu_times();
-        let (mem_used_mb, mem_total_mb) = read_memory_mb();
-        let net = sample_network();
-        let first = SysStatus {
-            cpu: cpu_percent(&cpu_a, &cpu_b),
-            mem_used_mb,
-            mem_total_mb,
-            net_rx_bps: 0,
-            net_tx_bps: 0,
-        };
-        set_snapshot(first.clone());
-        let _ = app.emit("sys-status", &first);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    // 首轮同步采样
+    let cpu_a = read_cpu_times();
+    std::thread::sleep(Duration::from_millis(120));
+    let cpu_b = read_cpu_times();
+    let (mem_used_mb, mem_total_mb) = read_memory_mb();
+    let net = sample_network();
+    let first = SysStatus {
+        cpu: cpu_percent(&cpu_a, &cpu_b),
+        mem_used_mb,
+        mem_total_mb,
+        net_rx_bps: 0,
+        net_tx_bps: 0,
+    };
+    set_snapshot(first.clone());
+    let _ = app.emit("sys-status", &first);
 
-        let handle = app.clone();
-        let state = SamplerState { cpu: cpu_b, net, last: Instant::now() };
-        if let Err(e) = std::thread::Builder::new()
-            .name("sys-sampler".to_string())
-            .spawn(move || sampler_loop(handle, state))
-        {
-            eprintln!("[aurora] 启动 sys-sampler 采样线程失败: {e}");
-        }
-    });
+    let handle = app.clone();
+    let state = SamplerState { cpu: cpu_b, net, last: Instant::now() };
+    if let Err(e) = std::thread::Builder::new()
+        .name("sys-sampler".to_string())
+        .spawn(move || sampler_loop(handle, state))
+    {
+        eprintln!("[aurora] 启动 sys-sampler 采样线程失败: {e}");
+        RUNNING.store(false, Ordering::SeqCst);
+    }
 }
 
-/// 常驻循环:每 2s 采样一次,差商计算 CPU/网络速率后写快照并广播事件
+/// 停止采样线程(热生效;幂等)。线程在下一轮采样前退出;最后快照保留(命令仍可读)。
+pub fn stop() {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+/// 常驻循环:每 2s 采样一次,差商计算 CPU/网络速率后写快照并广播事件;
+/// RUNNING 置 false 后线程在下一次醒来退出(最长多等一个采样周期)
 fn sampler_loop(app: AppHandle, mut state: SamplerState) {
-    loop {
+    while RUNNING.load(Ordering::SeqCst) {
         std::thread::sleep(SAMPLING_INTERVAL);
         let now = Instant::now();
         let cpu_cur = read_cpu_times();

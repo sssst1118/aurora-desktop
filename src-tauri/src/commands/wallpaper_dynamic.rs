@@ -207,6 +207,30 @@ pub fn wallpaper_dynamic_get_state(app: AppHandle) -> DynamicWallpaperState {
     }
 }
 
+/// 热生效入口(config_save 后调用,runtime::apply 接线):
+/// enable_dynamic_wallpaper 关闭 → 撤下已注入的动态壁纸,无需重启:
+/// - 多屏模式:清全部屏状态 + 重建(无素材屏自动撤下注入,与 clear 命令同款);
+/// - 单屏:video/html 撤 WorkerW 注入 + 清内存记录(图片走系统壁纸 API,无需撤)。
+/// 开启 → 无操作(素材由 set 命令显式设置,开关只做清理门控)。
+/// 幂等;任何单项失败只告警,不阻断保存。
+pub fn apply_config(app: &AppHandle, cfg: &crate::commands::config::AppConfig) {
+    if cfg.enable_dynamic_wallpaper {
+        return;
+    }
+    if cfg.wallpaper_multi_monitor {
+        wallpaper_dynamic::clear_monitor_states();
+        wallpaper_dynamic::set_state(None);
+        let _ = crate::wallpaper_dynamic::multi_apply(app);
+        return;
+    }
+    if let Some(st) = wallpaper_dynamic::current_state() {
+        if st.kind == "video" || st.kind == "html" {
+            let _ = detach(app);
+        }
+        wallpaper_dynamic::set_state(None);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Phase5 5.2 多屏(设计文档 §2.3):三命令 + set/clear 按模式分发
 // ---------------------------------------------------------------------------
