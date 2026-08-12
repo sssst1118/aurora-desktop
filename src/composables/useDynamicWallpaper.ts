@@ -2,6 +2,14 @@ import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/** 与 Rust 侧 PerMonitorState 对应(get_state.monitors 元素) */
+export interface PerMonitorState {
+  index: number;
+  kind: "none" | "video" | "html";
+  path: string | null;
+  url: string | null;
+}
+
 /** 与 Rust 侧 DynamicWallpaperState 对应(wallpaper_dynamic_get_state 返回) */
 export interface DynamicWallpaperState {
   enabled: boolean;
@@ -11,6 +19,8 @@ export interface DynamicWallpaperState {
   url: string | null;
   on_battery: boolean;
   downshift_active: boolean;
+  /** Phase5 多屏逐屏状态;多屏关 = 空数组 */
+  monitors: PerMonitorState[];
 }
 
 /** `wallpaper-power` 事件 payload(事件契约见 docs/Phase4-设计.md §0.3) */
@@ -31,6 +41,7 @@ export function useDynamicWallpaper() {
     url: null,
     on_battery: false,
     downshift_active: false,
+    monitors: [],
   });
   let unlisten: UnlistenFn | null = null;
 

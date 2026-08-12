@@ -29,8 +29,8 @@ const label = getCurrentWindow().label;
   <main v-else-if="label === 'ai_panel'" class="w-full h-full">
     <AIPanel />
   </main>
-  <!-- Phase4 4.1 动态壁纸:wallpaper 窗口渲染壁纸层(attach 到 WorkerW 后由系统桌面统一管理) -->
-  <main v-else-if="label === 'wallpaper'" class="w-full h-full">
+  <!-- Phase4 4.1 动态壁纸:wallpaper 主屏窗口 + Phase5 副屏窗口(wallpaper_<i> label)统一渲染壁纸层 -->
+  <main v-else-if="label === 'wallpaper' || label.startsWith('wallpaper_')" class="w-full h-full">
     <DynamicWallpaper />
   </main>
   <!-- 默认兜底壳:未知窗口 label 时挂载 -->

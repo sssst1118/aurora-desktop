@@ -9,6 +9,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 
 onMounted(() => {
   void store.load();
+  void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
 });
 
 async function toggleIsland() {
@@ -98,6 +99,122 @@ async function toggleUiaEnable() {
   if (!store.cfg) return;
   store.cfg.automation_uia_enable = !store.cfg.automation_uia_enable;
   await store.save();
+}
+
+// ---- Phase5 5.2 多屏壁纸(设计文档 §2.3;开关/模式即时生效 = 保存后调 multi_apply)----
+
+/** 与 Rust 侧 MonitorInfo 对应(wallpaper_multi_monitors 返回) */
+interface MonitorInfo {
+  index: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+
+/** 动态壁纸素材列表元素(与 Rust 侧 WallpaperEntry 对应) */
+interface WallpaperEntry {
+  name: string;
+  path: string;
+  size: number;
+}
+
+const monitors = ref<MonitorInfo[]>([]);
+const materials = ref<WallpaperEntry[]>([]);
+/** 独立模式:每屏下拉选中项(屏 index → 素材路径;空串 = 无素材) */
+const perMonitorSel = ref<Record<number, string>>({});
+const multiError = ref("");
+
+/** 枚举显示器 + 拉素材列表 + 按当前每屏素材初始化下拉(重复调用刷新) */
+async function loadMultiMonitorState() {
+  multiError.value = "";
+  try {
+    monitors.value = await invoke<MonitorInfo[]>("wallpaper_multi_monitors");
+    materials.value = await invoke<WallpaperEntry[]>("wallpaper_dynamic_list");
+    const st = await invoke<{
+      monitors: { index: number; path: string | null }[];
+    }>("wallpaper_dynamic_get_state");
+    const sel: Record<number, string> = {};
+    for (const m of st.monitors) sel[m.index] = m.path ?? "";
+    perMonitorSel.value = sel;
+  } catch (e) {
+    multiError.value = `读取显示器信息失败:${e}`;
+  }
+}
+
+/** 多屏开关(保存后重建各屏 attach,立即生效) */
+async function toggleMultiMonitor() {
+  if (!store.cfg) return;
+  store.cfg.wallpaper_multi_monitor = !store.cfg.wallpaper_multi_monitor;
+  await store.save();
+  try {
+    await invoke("wallpaper_multi_apply");
+    await loadMultiMonitorState();
+  } catch (e) {
+    multiError.value = `应用多屏壁纸失败:${e}`;
+  }
+}
+
+/** 拼接/独立模式单选(保存后重建,立即生效) */
+async function setSpanMode(span: boolean) {
+  if (!store.cfg) return;
+  store.cfg.wallpaper_span_mode = span;
+  await store.save();
+  try {
+    await invoke("wallpaper_multi_apply");
+    await loadMultiMonitorState();
+  } catch (e) {
+    multiError.value = `切换模式失败:${e}`;
+  }
+}
+
+/** 独立模式:给指定屏设素材(未选素材不提交;清除某屏素材 = 用"恢复系统壁纸"全屏清) */
+async function applyMonitorMaterial(index: number) {
+  multiError.value = "";
+  const path = perMonitorSel.value[index] ?? "";
+  if (path === "") return;
+  try {
+    await invoke("wallpaper_dynamic_set_monitor", { path, index });
+    await loadMultiMonitorState();
+  } catch (e) {
+    multiError.value = `设置屏 ${index + 1} 素材失败:${e}`;
+  }
+}
+
+// ---- 动态壁纸素材选择(单屏/拼接模式共用;Phase4 遗留未接线的素材入口,Phase5 补齐)----
+
+const materialSel = ref("");
+const materialError = ref("");
+const materialNotice = ref("");
+
+/** 应用选中的动态壁纸素材(video/html 走 WorkerW;图片走系统壁纸;拼接模式自动铺满全屏) */
+async function applyMaterial() {
+  materialError.value = "";
+  materialNotice.value = "";
+  const path = materialSel.value;
+  if (!path) return;
+  try {
+    await invoke("wallpaper_dynamic_set", { path });
+    materialNotice.value = "壁纸已应用";
+    await loadMultiMonitorState();
+  } catch (e) {
+    materialError.value = String(e);
+  }
+}
+
+/** 恢复系统壁纸(撤下全部动态壁纸注入;多屏开时一并清全部屏) */
+async function clearMaterial() {
+  materialError.value = "";
+  materialNotice.value = "";
+  try {
+    await invoke("wallpaper_dynamic_clear");
+    materialNotice.value = "已恢复系统壁纸";
+    materialSel.value = "";
+    await loadMultiMonitorState();
+  } catch (e) {
+    materialError.value = String(e);
+  }
 }
 
 /** Phase4 4.4 主题三态切换(system/dark/light;即时应用接线在 4.4 模块合入后接入 theme.ts) */
@@ -534,6 +651,53 @@ async function uiaType() {
             />
           </button>
         </div>
+
+        <!-- 动态壁纸素材选择(单屏/拼接模式共用;独立模式走下方逐屏选择) -->
+        <div
+          class="space-y-1.5"
+          :class="{ 'opacity-40 pointer-events-none': !on(store.cfg.enable_dynamic_wallpaper) }"
+        >
+          <div class="flex items-center gap-1.5">
+            <select
+              v-model="materialSel"
+              class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 outline-none focus:bg-[var(--aurora-field)]"
+            >
+              <option value="">(选择动态壁纸素材…)</option>
+              <option v-for="e in materials" :key="e.path" :value="e.path">
+                {{ e.name }}
+              </option>
+            </select>
+            <button
+              class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white shrink-0"
+              :disabled="!materialSel"
+              @click="applyMaterial"
+            >
+              应用
+            </button>
+            <button
+              class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="clearMaterial"
+            >
+              恢复系统壁纸
+            </button>
+          </div>
+          <div v-if="materialError" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+            {{ materialError }}
+          </div>
+          <div
+            v-else-if="materialNotice"
+            class="text-xs text-emerald-300 bg-emerald-500/10 rounded-lg px-3 py-1.5"
+          >
+            {{ materialNotice }}
+          </div>
+          <div
+            v-else-if="materials.length === 0"
+            class="text-[10px] text-[var(--aurora-text-dim)]"
+          >
+            素材目录为空(配置动态壁纸目录或放入 mp4/html 素材后点"刷新")
+          </div>
+        </div>
+
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">电池降载</div>
@@ -556,6 +720,123 @@ async function uiaType() {
               :class="on(store.cfg.wallpaper_battery_downshift) ? 'left-[22px]' : 'left-0.5'"
             />
           </button>
+        </div>
+
+        <!-- Phase5 5.2 多显示器小节(设计文档 §2.3:开关/模式即时生效,素材逐屏设置) -->
+        <div
+          class="border-t border-[var(--aurora-border)] pt-2.5 space-y-2.5"
+          :class="{ 'opacity-40 pointer-events-none': !on(store.cfg.enable_dynamic_wallpaper) }"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm">多显示器壁纸</div>
+              <div class="text-[10px] text-[var(--aurora-text-dim)]">
+                每屏独立壁纸窗口;拼接 = 一张素材铺满全部屏幕
+              </div>
+            </div>
+            <button
+              class="w-10 h-5 rounded-full relative transition-colors"
+              :class="on(store.cfg.wallpaper_multi_monitor) ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+              @click="toggleMultiMonitor"
+            >
+              <span
+                class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+                :class="on(store.cfg.wallpaper_multi_monitor) ? 'left-[22px]' : 'left-0.5'"
+              />
+            </button>
+          </div>
+
+          <!-- 多屏开启后:模式单选 + 显示器只读信息 + 独立模式逐屏素材 -->
+          <div v-if="on(store.cfg.wallpaper_multi_monitor)" class="space-y-2.5">
+            <!-- 模式单选(拼接/独立) -->
+            <div class="flex items-center gap-2">
+              <button
+                class="flex-1 text-[11px] px-2 py-1 rounded border"
+                :class="
+                  on(store.cfg.wallpaper_span_mode)
+                    ? 'border-[var(--aurora-accent)] text-[var(--aurora-accent)]'
+                    : 'border-[var(--aurora-border)] text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]'
+                "
+                @click="setSpanMode(true)"
+              >
+                拼接(一张铺满)
+              </button>
+              <button
+                class="flex-1 text-[11px] px-2 py-1 rounded border"
+                :class="
+                  !on(store.cfg.wallpaper_span_mode)
+                    ? 'border-[var(--aurora-accent)] text-[var(--aurora-accent)]'
+                    : 'border-[var(--aurora-border)] text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]'
+                "
+                @click="setSpanMode(false)"
+              >
+                独立(每屏单独)
+              </button>
+            </div>
+
+            <div v-if="multiError" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+              {{ multiError }}
+            </div>
+
+            <!-- 显示器信息(只读展示) -->
+            <div class="text-[10px] text-[var(--aurora-text-dim)] space-y-0.5">
+              <div v-for="m in monitors" :key="m.index">
+                屏 {{ m.index + 1 }}{{ m.primary ? "(主)" : "" }}:
+                {{ m.width }}×{{ m.height }}
+                <span class="text-[var(--aurora-text-dim)]/70">@({{ m.x }},{{ m.y }})</span>
+              </div>
+              <div v-if="monitors.length === 0" class="text-[var(--aurora-text-dim)]/70">
+                未获取到显示器信息(点击下方"刷新"重试)
+              </div>
+            </div>
+
+            <!-- 独立模式:每屏素材选择(拼接模式素材统一由"应用壁纸"设置) -->
+            <div v-if="!on(store.cfg.wallpaper_span_mode)" class="space-y-1.5">
+              <div v-for="m in monitors" :key="m.index" class="flex items-center gap-1.5">
+                <span class="text-[11px] w-12 shrink-0 text-[var(--aurora-text-dim)]">
+                  屏{{ m.index + 1 }}
+                </span>
+                <select
+                  v-model="perMonitorSel[m.index]"
+                  class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 outline-none focus:bg-[var(--aurora-field)]"
+                >
+                  <option value="">(未设置,显示系统壁纸)</option>
+                  <option v-for="e in materials" :key="e.path" :value="e.path">
+                    {{ e.name }}
+                  </option>
+                </select>
+                <button
+                  class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+                  :disabled="!perMonitorSel[m.index]"
+                  @click="applyMonitorMaterial(m.index)"
+                >
+                  应用
+                </button>
+              </div>
+              <div class="flex gap-2 items-center">
+                <button
+                  class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                  @click="loadMultiMonitorState"
+                >
+                  刷新
+                </button>
+                <span class="text-[10px] text-[var(--aurora-text-dim)]">
+                  清除某屏素材:用壁纸区"恢复系统壁纸"按钮整体恢复
+                </span>
+              </div>
+            </div>
+            <div v-else class="flex gap-2 items-center">
+              <button
+                class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                @click="loadMultiMonitorState"
+              >
+                刷新
+              </button>
+              <span class="text-[10px] text-[var(--aurora-text-dim)]">
+                拼接模式:素材用上方"动态壁纸素材"统一设置,自动铺满全部屏幕
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 

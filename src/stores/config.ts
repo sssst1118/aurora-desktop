@@ -47,6 +47,11 @@ export interface AppConfig {
   automation_click_delay_ms: number;
   theme_mode: string;
   theme_accent: string;
+  // ---- Phase5(与 src-tauri/src/commands/config.rs 同步)----
+  update_enabled: boolean;
+  update_feed_url: string;
+  wallpaper_multi_monitor: boolean;
+  wallpaper_span_mode: boolean;
 }
 
 export const useConfigStore = defineStore("config", {
