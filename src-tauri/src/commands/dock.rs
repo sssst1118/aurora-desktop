@@ -10,7 +10,7 @@
 //!   - dock_get_running EnumWindows + IsWindowVisible + GetWindowTextW + PID 去重 +
 //!                      QueryFullProcessImageNameW 取 exe 路径;与 Dock 条目匹配
 //!                      (lnk 用 COM IShellLinkW 解析目标)后返回被收录的运行条目路径
-//!   - dock_get_icon    转发 dock_icon(ExtractIconExW→GetDIBits→png→base64 双缓存)
+//!   - dock_get_icon    转发 dock_icon(SHGetFileInfoW→GetDIBits→png→base64 双缓存)
 //!
 //! 说明:Dock 已并入搜索窗口(2026-08-12 用户定调),本模块只提供数据命令
 //! (条目/运行态/图标),无窗口/定位/自动隐藏逻辑;旧 dock 窗口与其交互已删除。

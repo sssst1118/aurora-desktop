@@ -1,7 +1,12 @@
 //! Dock 图标提取与双缓存(Phase2 2.1 模块)。
 //!
-//! 管线:ExtractIconExW → GetIconInfo → GetDIBits → BGRA→RGBA → png 编码 → base64 data URL。
+//! 管线:ExtractIconExW(lnk 先解析目标) → GetIconInfo → GetDIBits → BGRA→RGBA → png 编码 → base64 data URL。
 //! 缓存:内存 HashMap(路径→data URL)+ 磁盘 `%APPDATA%\com.aurora.desktop\icons\{fnv1a:016x}.png`。
+//!
+//! 2026-08-12 修复拖入 lnk 无图标:ExtractIconExW 对 .lnk 快捷方式直接调用返回 0
+//! (实测公共桌面 NoMachine.lnk),改为 lnk 先 resolve_lnk_target 解析目标再提取。
+//! 曾试 SHGetFileInfoW(SHGFI_ICON) 一步到位,但并发调用下偶发 ok=1 而 hIcon 为空
+//! (系统图标缓存竞态,全量测试轮流挂),且隐式依赖 COM 初始化,故回退本组合。
 //!
 //! 说明:当前 Cargo.toml 未启用 windows-sys 的 `Win32_Graphics_Gdi` feature(GetDIBits /
 //! GetIconInfo / ICONINFO 均被 cfg 隐藏),而 Cargo.toml 属集成 agent 所有,本模块
@@ -14,6 +19,8 @@ use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::UI::Shell::ExtractIconExW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+
+use super::resolve_lnk_target; // .lnk 先解析目标再提取(ExtractIconExW 对 lnk 直接调用失败)
 
 // ---- 手写 FFI:windows-sys 未启用 Win32_Graphics_Gdi / 相关 user32 符号 ----
 
@@ -79,7 +86,16 @@ const DIB_RGB_COLORS: u32 = 0;
 
 /// 从文件(exe/lnk/ico 等)提取图标像素,返回 (宽, 高, RGBA)
 pub fn extract_icon_pixels(path: &str) -> Option<(u32, u32, Vec<u8>)> {
-    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    // lnk 快捷方式:ExtractIconExW 直接调用会失败(实测公共桌面 NoMachine.lnk 返回 0),
+    // 先解析目标(如 exe)再提取,与资源管理器显示一致;解析失败回退原路径。
+    // 注:曾改 SHGetFileInfoW 走 Shell 语义,但该 API 在并发调用下返回 ok=1 而 hIcon
+    // 为空(系统图标缓存竞态,全量测试轮流挂),且隐式依赖 COM 初始化,故回退本组合。
+    let target = if path.to_lowercase().ends_with(".lnk") {
+        resolve_lnk_target(Path::new(path)).unwrap_or_else(|| path.to_string())
+    } else {
+        path.to_string()
+    };
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let mut hicon_large: HICON = std::ptr::null_mut();
         let mut hicon_small: HICON = std::ptr::null_mut();
@@ -347,6 +363,19 @@ mod tests {
             return;
         }
         let (w, h, rgba) = extract_icon_pixels(np).expect("notepad 图标应可提取");
+        assert!(w > 0 && h > 0);
+        assert_eq!(rgba.len(), w as usize * h as usize * 4);
+    }
+
+    #[test]
+    fn extract_icon_from_real_lnk() {
+        // 回归:ExtractIconExW 对 .lnk 返回 0(实测公共桌面 NoMachine.lnk),
+        // 改 SHGetFileInfoW 后 lnk 应能提取到目标图标;环境无该文件时跳过
+        let lnk = "C:\\Users\\Public\\Desktop\\NoMachine.lnk";
+        if !std::path::Path::new(lnk).exists() {
+            return;
+        }
+        let (w, h, rgba) = extract_icon_pixels(lnk).expect("公共桌面 .lnk 图标应可提取");
         assert!(w > 0 && h > 0);
         assert_eq!(rgba.len(), w as usize * h as usize * 4);
     }
