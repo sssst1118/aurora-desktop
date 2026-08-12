@@ -140,6 +140,97 @@ async function simType() {
     simError.value = String(e);
   }
 }
+
+// ---- Phase4 4.3 UIA 测试区(窗口搜索/控件列表/读文本/点击/输入;错误红字展示)----
+interface UiaWindowItem {
+  hwnd: number;
+  title: string;
+  class: string;
+  pid: number;
+  visible: boolean;
+}
+interface UiaControlItem {
+  id: string;
+  name: string;
+  control_type: string;
+  bounds: [number, number, number, number];
+}
+const uiaWinTitle = ref("");
+const uiaWindows = ref<UiaWindowItem[]>([]);
+const uiaSelHwnd = ref<number | null>(null);
+const uiaControls = ref<UiaControlItem[]>([]);
+const uiaSelId = ref("");
+const uiaText = ref("");
+const uiaTypeText = ref("");
+const uiaError = ref("");
+
+async function uiaSearchWindows() {
+  uiaError.value = "";
+  try {
+    uiaWindows.value = await invoke<UiaWindowItem[]>("uia_find_window", {
+      title: uiaWinTitle.value,
+    });
+    uiaControls.value = [];
+    uiaSelHwnd.value = null;
+  } catch (e) {
+    uiaError.value = String(e);
+  }
+}
+
+async function uiaListControls(hwnd: number) {
+  uiaError.value = "";
+  try {
+    uiaSelHwnd.value = hwnd;
+    uiaControls.value = await invoke<UiaControlItem[]>("uia_find_controls", {
+      hwnd,
+      controlType: null,
+      name: null,
+    });
+    uiaSelId.value = "";
+  } catch (e) {
+    uiaError.value = String(e);
+  }
+}
+
+async function uiaReadText() {
+  uiaError.value = "";
+  if (uiaSelHwnd.value === null || !uiaSelId.value) return;
+  try {
+    uiaText.value = await invoke<string>("uia_get_control_text", {
+      hwnd: uiaSelHwnd.value,
+      controlId: uiaSelId.value,
+    });
+  } catch (e) {
+    uiaError.value = String(e);
+  }
+}
+
+async function uiaClick() {
+  uiaError.value = "";
+  if (uiaSelHwnd.value === null || !uiaSelId.value) return;
+  try {
+    await invoke("uia_click_control", {
+      hwnd: uiaSelHwnd.value,
+      controlId: uiaSelId.value,
+    });
+  } catch (e) {
+    uiaError.value = String(e);
+  }
+}
+
+async function uiaType() {
+  uiaError.value = "";
+  if (uiaSelHwnd.value === null || !uiaSelId.value) return;
+  try {
+    await invoke("uia_type_into", {
+      hwnd: uiaSelHwnd.value,
+      controlId: uiaSelId.value,
+      text: uiaTypeText.value,
+    });
+  } catch (e) {
+    uiaError.value = String(e);
+  }
+}
 </script>
 
 <template>
@@ -550,6 +641,87 @@ async function simType() {
             </button>
           </div>
           <p v-if="simError" class="text-[10px] text-red-400 break-all">{{ simError }}</p>
+        </div>
+
+        <!-- 4.3 UIA 控件操作测试区(UIA 子开关也开启后可用) -->
+        <div v-if="store.cfg.automation_uia_enable" class="space-y-2 border-t border-[var(--aurora-border)] pt-2">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">窗口搜索</span>
+            <input
+              v-model="uiaWinTitle"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              placeholder="按标题子串搜索(留空列出全部可见窗口)"
+              @keyup.enter="uiaSearchWindows"
+            />
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="uiaSearchWindows"
+            >
+              搜索
+            </button>
+          </div>
+          <div v-if="uiaWindows.length" class="space-y-0.5 max-h-24 overflow-y-auto">
+            <button
+              v-for="w in uiaWindows"
+              :key="w.hwnd"
+              class="w-full text-left text-[10px] px-2 py-0.5 rounded truncate"
+              :class="uiaSelHwnd === w.hwnd ? 'bg-[var(--aurora-accent)]/20' : 'bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]'"
+              :title="`hwnd=${w.hwnd} class=${w.class} pid=${w.pid}`"
+              @click="uiaListControls(w.hwnd)"
+            >
+              {{ w.title || "(无标题)" }} <span class="text-[var(--aurora-text-dim)]">#{{ w.hwnd }}</span>
+            </button>
+          </div>
+          <div v-if="uiaSelHwnd !== null" class="space-y-0.5 max-h-28 overflow-y-auto">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] text-[var(--aurora-text-dim)]">控件({{ uiaControls.length }} 个,点选后操作)</span>
+              <button
+                v-if="uiaControls.length"
+                class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                @click="uiaListControls(uiaSelHwnd)"
+              >
+                刷新
+              </button>
+            </div>
+            <button
+              v-for="c in uiaControls"
+              :key="c.id"
+              class="w-full text-left text-[10px] px-2 py-0.5 rounded truncate"
+              :class="uiaSelId === c.id ? 'bg-[var(--aurora-accent)]/20' : 'bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]'"
+              :title="`bounds=${c.bounds.join(',')}`"
+              @click="uiaSelId = c.id"
+            >
+              [{{ c.id }}] {{ c.control_type }} {{ c.name || "(无名称)" }}
+            </button>
+          </div>
+          <div v-if="uiaSelId" class="flex items-center gap-1.5 flex-wrap">
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="uiaReadText"
+            >
+              读文本
+            </button>
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="uiaClick"
+            >
+              点击
+            </button>
+            <input
+              v-model="uiaTypeText"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              placeholder="输入文本(中文安全)"
+              @keyup.enter="uiaType"
+            />
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="uiaType"
+            >
+              输入
+            </button>
+            <span v-if="uiaText" class="text-[10px] text-[var(--aurora-text-dim)] break-all w-full">{{ uiaText }}</span>
+          </div>
+          <p v-if="uiaError" class="text-[10px] text-red-400 break-all">{{ uiaError }}</p>
         </div>
       </div>
 

@@ -106,7 +106,13 @@ pub fn run() {
             commands::wallpaper_dynamic::wallpaper_dynamic_set,
             commands::wallpaper_dynamic::wallpaper_dynamic_clear,
             commands::wallpaper_dynamic::wallpaper_dynamic_get_state,
-            // ---- Phase4 占位:4.3 uia_* 随模块合入注册 ----
+            // ---- Phase4 4.3 UIA 控件自动化(Uia* 句柄式 API;入口校验在命令内)----
+            commands::uia_cmd::uia_find_window,
+            commands::uia_cmd::uia_get_window_info,
+            commands::uia_cmd::uia_find_controls,
+            commands::uia_cmd::uia_get_control_text,
+            commands::uia_cmd::uia_click_control,
+            commands::uia_cmd::uia_type_into,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

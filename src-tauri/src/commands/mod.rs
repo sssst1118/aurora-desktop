@@ -8,5 +8,6 @@ pub mod drawer;
 pub mod file_search;
 pub mod search;
 pub mod system;
+pub mod uia_cmd;
 pub mod wallpaper;
 pub mod wallpaper_dynamic;
