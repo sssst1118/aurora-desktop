@@ -116,6 +116,11 @@
   "bundle": {
     "active": true,
     "targets": ["msi"],
-    "icon": ["icons/icon.ico"]
+    "icon": ["icons/icon.ico"],
+    "publisher": "Aurora Desktop",
+    "copyright": "Copyright © 2026 sssst1118",
+    "category": "Utility",
+    "shortDescription": "Aurora - AI 增强模块化桌面效率中心",
+    "longDescription": "灵动岛 / Dock / 全局搜索 / 文件抽屉 / 剪贴板历史 / 壁纸引擎 / AI 助手"
   }
 }
