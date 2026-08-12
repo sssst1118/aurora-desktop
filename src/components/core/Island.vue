@@ -44,8 +44,8 @@ function applyStatus(s: SysStatus) {
   net.value = `↓${formatRate(s.net_rx_bps ?? 0)} ↑${formatRate(s.net_tx_bps ?? 0)}`;
 }
 
-function openSearch() {
-  invoke("open_search").catch((e) => console.error("open_search failed", e));
+function toggleSearch() {
+  invoke("toggle_search").catch((e) => console.error("toggle_search failed", e));
 }
 
 onMounted(async () => {
@@ -74,7 +74,7 @@ onUnmounted(() => {
 <template>
   <div
     class="h-full w-full flex items-center gap-4 px-4 text-[var(--aurora-text)] select-none bg-[var(--aurora-panel)] backdrop-blur-md rounded-none cursor-pointer"
-    @click="openSearch"
+    @click="toggleSearch"
     data-tauri-drag-region
   >
     <span class="text-sm">🔍</span>

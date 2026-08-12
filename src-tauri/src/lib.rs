@@ -121,6 +121,7 @@ pub fn run() {
             commands::search::search_apps,
             commands::search::open_item,
             commands::search::open_search,
+            commands::search::toggle_search,
             commands::config::config_load,
             commands::config::config_save,
             commands::system::sys_get_status,

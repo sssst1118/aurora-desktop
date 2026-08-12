@@ -17,11 +17,17 @@ pub fn open_item(path: String) -> bool {
     opener::open(&path).is_ok()
 }
 
-/// 显示 search 窗口并聚焦(island 点击唤起搜索)
+/// 显示 search 窗口并聚焦(island 点击唤起搜索;纯打开语义,AIPanel 设置入口在用)
 #[tauri::command]
 pub fn open_search(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("search") {
         let _ = win.show();
         let _ = win.set_focus();
     }
+}
+
+/// 显隐切换 search 窗口(island 点击/双击呼出;与热键同款 toggle 逻辑)
+#[tauri::command]
+pub fn toggle_search(app: tauri::AppHandle) {
+    crate::win_utils::toggle_search_window(&app);
 }
