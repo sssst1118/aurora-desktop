@@ -21,7 +21,7 @@
 #[path = "dock_icon.rs"]
 mod dock_icon;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -346,6 +346,15 @@ pub fn dock_set_items(app: tauri::AppHandle, items: Vec<DockItem>) -> bool {
     save_items(&config_path(&app), &items)
 }
 
+/// "启动中"集合:防连点排队重复启动。窗口出现前 running_windows 匹配不到该应用,
+/// 若不加防抖,每次点击都重新拉起(排队多实例)。解除时机 = 窗口已出现(轮询精确
+/// 解除)或超时兜底(10s),比前端固定防抖窗口准确——应用慢启动几秒防抖就保持几秒。
+static LAUNCHING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn launching() -> &'static Mutex<HashSet<String>> {
+    LAUNCHING.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 /// 启动或聚焦 Dock 项:运行中 → 恢复最小化并置前台;未运行 → opener 启动
 #[tauri::command]
 pub fn dock_launch(item: DockItem) -> bool {
@@ -360,6 +369,14 @@ pub fn dock_launch(item: DockItem) -> bool {
         }
         return true;
     }
+    // 上次点击的启动还在进行中(窗口未出现)→ 直接返回,防排队重复启动
+    if launching()
+        .lock()
+        .map(|g| g.contains(&item.path))
+        .unwrap_or(false)
+    {
+        return true;
+    }
     // 直接打开解析出的目标 exe:实测 lnk 经 Shell 启动要 ~1.3s,直开 exe 仅 ~17ms。
     // 注:lnk 附带启动参数/工作目录时语义有损(NoMachine 等本场景均无参数,可接受);
     // 解析失败(拿不到目标)则回退原 lnk 路径,保证一定能启动。
@@ -369,7 +386,33 @@ pub fn dock_launch(item: DockItem) -> bool {
     } else {
         &item.path
     };
-    opener::open(launch_path).is_ok()
+    if !opener::open(launch_path).is_ok() {
+        return false;
+    }
+    // 标记启动中,后台轮询到窗口出现(或超时)后解除
+    if let Ok(mut g) = launching().lock() {
+        g.insert(item.path.clone());
+    }
+    let (path, target) = (item.path.clone(), target);
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            if running_windows()
+                .iter()
+                .any(|w| window_matches_item(&w.exe, &target))
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        if let Ok(mut g) = launching().lock() {
+            g.remove(&path);
+        }
+    });
+    true
 }
 
 /// 运行中且被 Dock 收录的应用条目路径集合(前端小圆点渲染用)
@@ -606,6 +649,26 @@ mod tests {
         ));
         // stem 不同的 exe/bin 对不匹配
         assert!(!window_matches_item(r"C:\a\foo.bin", r"C:\b\bar.exe"));
+    }
+
+    // ---- 启动防抖(2026-08-12 连点排队重复启动修复) ----
+
+    #[test]
+    fn launch_ignores_repeat_click_while_launching() {
+        // 集合中有该条目(上次点击仍在启动中)→ 短路返回 true 不重走 opener。
+        // 用不存在的路径:若真走 opener 必然返回 false,返回 true 即证明短路生效。
+        // 注意:测试并行跑,此路径仅本用例使用,避免与 launch_failure 用例互踩集合
+        let item = DockItem { name: "x".into(), path: r"C:\definitely\not\exists_aurora_a.exe".into() };
+        launching().lock().unwrap().insert(item.path.clone());
+        assert!(dock_launch(item));
+    }
+
+    #[test]
+    fn launch_failure_does_not_mark_launching() {
+        // 启动失败(路径不存在)→ 不标记,下次点击仍可重试
+        let item = DockItem { name: "x".into(), path: r"C:\definitely\not\exists_aurora_b.exe".into() };
+        assert!(!dock_launch(item.clone()));
+        assert!(!launching().lock().unwrap().contains(&item.path));
     }
 
     #[test]

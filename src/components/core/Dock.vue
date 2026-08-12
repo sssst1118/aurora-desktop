@@ -89,8 +89,17 @@ async function refreshIcons() {
   }
 }
 
+/** "启动中"反馈集合(仅视觉;真正的防抖在后端 LAUNCHING 集合,以窗口出现为准) */
+const launching = ref<Set<string>>(new Set());
+const LAUNCHING_FEEDBACK_MS = 1500;
+
 /** 点击:运行中 → dock_launch 聚焦;未运行 → 启动 */
 async function launch(item: DockItem) {
+  if (launching.value.has(item.path)) return; // 启动中,忽略连点(后端亦有防抖)
+  launching.value.add(item.path);
+  setTimeout(() => {
+    launching.value.delete(item.path);
+  }, LAUNCHING_FEEDBACK_MS);
   try {
     await invoke<boolean>("dock_launch", { item });
     void pollRunning();
@@ -213,6 +222,7 @@ onUnmounted(() => {
       :class="[
         i === overIdx && dragIdx >= 0 ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]',
         dragIdx === i ? 'opacity-40' : '',
+        launching.has(it.path) ? 'dock-launching' : '',
       ]"
       :draggable="true"
       @dragstart="dragStart(i)"
@@ -258,3 +268,21 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 启动中反馈:呼吸脉冲(点击后 1.5s,告知"正在启动",防用户急着连点) */
+@keyframes aurora-launch-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.dock-launching {
+  animation: aurora-launch-pulse 0.8s ease-in-out infinite;
+}
+</style>
