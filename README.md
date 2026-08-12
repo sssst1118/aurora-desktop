@@ -18,6 +18,17 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 - **📊 System Monitor** — Real-time CPU / memory / network sampling, visible on the Island and in the tray
 - **🔒 Private & Light** — API keys stored locally only; idle memory under 120MB; zero background waste
 
+## 💻 System Requirements
+
+| Item | Requirement |
+|---|---|
+| OS | Windows 10 21H2 or later (64-bit) |
+| Architecture | x64 |
+| RAM | 4GB+ recommended (idle footprint <120MB) |
+| Disk | ~7MB installer |
+| GPU | No dedicated GPU required (glass blur & dynamic wallpapers run on iGPUs) |
+| AI features (optional) | A DeepSeek API key, or a local Ollama service |
+
 ## 🚀 Quick Start
 
 1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.1.0_x64.msi` or `setup.exe`)
