@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
 /// 切换 search 窗口显隐(热键触发)。
@@ -35,32 +36,42 @@ pub fn toggle_search_window(app: &AppHandle) {
     }
 }
 
-/// 恢复常驻窗口(island/dock/按配置的 drawer),不显示瞬态窗口
-/// (search/ai_panel/clipboard 靠热键/点击呼出,显示全部不应把它们带出来)
-pub fn show_all(app: &AppHandle) {
-    let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(app));
-    if cfg.enable_island {
-        if let Some(win) = app.get_webview_window("island") {
-            let _ = win.show();
-        }
+/// 托盘"隐藏全部"时记录可见窗口快照,"显示全部"按快照恢复(恢复后清空)
+static HIDDEN_SNAPSHOT: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// 隐藏全部交互窗口(wallpaper 壁纸渲染窗口不受托盘管理,不参与);
+/// 隐藏前记录当前可见窗口,供 show_all 恢复
+pub fn hide_all(app: &AppHandle) {
+    const LABELS: [&str; 6] = ["island", "search", "dock", "drawer", "clipboard", "ai_panel"];
+    let visible: Vec<String> = LABELS
+        .iter()
+        .filter(|l| {
+            app.get_webview_window(l)
+                .map(|w| w.is_visible().unwrap_or(false))
+                .unwrap_or(false)
+        })
+        .map(|s| s.to_string())
+        .collect();
+    if let Ok(mut g) = HIDDEN_SNAPSHOT.lock() {
+        *g = Some(visible);
     }
-    if cfg.enable_dock {
-        if let Some(win) = app.get_webview_window("dock") {
-            let _ = win.show();
-        }
-    }
-    if cfg.enable_file_drawer && cfg.drawer_open_on_launch {
-        if let Some(win) = app.get_webview_window("drawer") {
-            let _ = win.show();
+    for label in LABELS {
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.hide();
         }
     }
 }
 
-/// 隐藏全部交互窗口(wallpaper 壁纸渲染窗口不受托盘管理,不参与)
-pub fn hide_all(app: &AppHandle) {
-    for label in ["island", "search", "dock", "drawer", "clipboard", "ai_panel"] {
-        if let Some(win) = app.get_webview_window(label) {
-            let _ = win.hide();
+/// 恢复"隐藏全部"那一刻的可见窗口布局(快照),恢复后清空;
+/// 未经过隐藏全部(无快照)时不做任何事;期间手动呼出的窗口不受影响
+pub fn show_all(app: &AppHandle) {
+    let snapshot = HIDDEN_SNAPSHOT.lock().ok().and_then(|mut g| g.take());
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+    for label in snapshot {
+        if let Some(win) = app.get_webview_window(&label) {
+            let _ = win.show();
         }
     }
 }
