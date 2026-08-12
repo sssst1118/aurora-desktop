@@ -289,6 +289,88 @@ pub fn detach_from_workerw(hwnd: HWND) {
 }
 
 // ---------------------------------------------------------------------------
+// 多屏(设计 §2):显示器枚举 + 坐标化注入。
+// WorkerW 覆盖整个虚拟桌面:多屏无需每屏找独立 WorkerW,每屏窗口 SetParent
+// 到同一 Progman 子 WorkerW 后,SetWindowPos 定位到该屏虚拟桌面坐标即可。
+// ---------------------------------------------------------------------------
+
+/// 显示器信息(虚拟桌面物理坐标;index = enum_monitors 排序后的序号,主屏恒为 0)
+#[derive(Clone, Debug, PartialEq)]
+pub struct MonitorInfo {
+    pub index: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub primary: bool,
+}
+
+/// 枚举全部显示器:tauri available_monitors(物理像素,免手写 FFI)。
+/// 排序 = 主屏优先 + (x, y) 升序稳定排,index 即排序序号。
+/// 枚举失败(无桌面/异常)→ 返回仅主屏的兜底 1920x1080(与 attach 现状一致,不 panic)
+pub fn enum_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
+    use tauri::Manager;
+    let Ok(mons) = app.available_monitors() else {
+        return vec![MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true }];
+    };
+    // 主屏判定:tauri Monitor 无 is_primary,用 primary_monitor() 的 position 比对
+    // (grep 本机 tauri-2.11.5 src/window/mod.rs 确认 API,勿凭记忆)
+    let primary_pos = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| (m.position().x, m.position().y));
+    let mut out: Vec<MonitorInfo> = mons
+        .iter()
+        .map(|m| {
+            MonitorInfo {
+                index: 0,
+                x: m.position().x, // 虚拟桌面坐标(引用字段,自动解引用)
+                y: m.position().y,
+                width: m.size().width as i32, // 物理像素
+                height: m.size().height as i32,
+                primary: Some((m.position().x, m.position().y)) == primary_pos,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.primary.cmp(&a.primary).then(a.x.cmp(&b.x)).then(a.y.cmp(&b.y)));
+    for (i, m) in out.iter_mut().enumerate() {
+        m.index = i as u32;
+    }
+    out
+}
+
+/// 虚拟桌面整体 rect(所有屏并集;纯函数):返回 (x, y, w, h);
+/// 空列表 → (0, 0, 1920, 1080) 兜底(与 attach 现状一致)
+pub fn span_viewport(monitors: &[MonitorInfo]) -> (i32, i32, i32, i32) {
+    if monitors.is_empty() {
+        return (0, 0, 1920, 1080);
+    }
+    let min_x = monitors.iter().map(|m| m.x).min().unwrap_or(0);
+    let min_y = monitors.iter().map(|m| m.y).min().unwrap_or(0);
+    let max_x = monitors.iter().map(|m| m.x + m.width).max().unwrap_or(1920);
+    let max_y = monitors.iter().map(|m| m.y + m.height).max().unwrap_or(1080);
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// 把 webview 窗口注入 WorkerW 并定位到虚拟桌面指定 rect(x/y 为虚拟桌面坐标)。
+/// 与 attach_to_workerw 同三步,仅 SetWindowPos 坐标化(多屏场景每屏窗口各自定位)。
+/// 注入失败返回错误,窗口保持原样
+pub fn attach_to_workerw_at(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+    let progman = unsafe { FindWindowW(windows_sys::core::w!("Progman"), std::ptr::null()) };
+    if progman.is_null() {
+        return Err("未找到桌面窗口(Progman),请确认资源管理器运行中".to_string());
+    }
+    let workerw = find_workerw(progman)
+        .ok_or_else(|| "WorkerW 壁纸层查找失败(桌面结构异常,建议重启资源管理器)".to_string())?;
+    unsafe {
+        SetParent(hwnd, workerw);
+        SetWindowPos(hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // 电池降载(设计 §1.4,Win32_System_Power)
 // ---------------------------------------------------------------------------
 
@@ -763,5 +845,24 @@ mod tests {
         let workerw = find_workerw(progman);
         assert!(workerw.is_some(), "本机桌面结构异常:WorkerW 应可找到");
         assert!(!workerw.unwrap().is_null());
+    }
+
+    // ---- Phase5 5.2 多屏(设计文档 §2):纯函数可单测,枚举/注入动作手动验收 ----
+
+    #[test]
+    fn span_viewport_computes_virtual_desktop_rect() {
+        let mons = vec![
+            MonitorInfo { index: 0, x: 0, y: 0, width: 1920, height: 1080, primary: true },
+            MonitorInfo { index: 1, x: 1920, y: 0, width: 1280, height: 720, primary: false },
+            MonitorInfo { index: 2, x: -1280, y: 200, width: 1280, height: 1024, primary: false },
+        ];
+        let (x, y, w, h) = span_viewport(&mons);
+        // min_x=-1280, min_y=0, max_x=1920+1280=3200, max_y=max(1080, 720, 200+1024=1224)=1224
+        assert_eq!((x, y, w, h), (-1280, 0, 4480, 1224));
+    }
+
+    #[test]
+    fn span_viewport_empty_returns_default() {
+        assert_eq!(span_viewport(&[]), (0, 0, 1920, 1080));
     }
 }
