@@ -2,7 +2,9 @@
 // 2.4 静态壁纸:目录输入 + 缩略图网格 + 点击应用 + 当前壁纸高亮。
 // 挂载点:Settings.vue 壁纸区块(由集成 agent 接线),毛玻璃风格与 Island/Settings 一致。
 // 预览走 Tauri asset 协议(tauri.conf.json security.assetProtocol.scope 限定
-// $USERPROFILE/Pictures/**);自定义目录在 scope 外时缩略图显示占位,设置仍可用。
+// $HOME/Pictures/**——注意必须是 Tauri 变量集内的名字,如 $HOME/$PICTURE,
+// 不能用 Windows 环境变量 $USERPROFILE(不识别会被当字面路径,预览全挂);
+// 自定义目录在 scope 外时缩略图显示占位,设置仍可用。
 import { ref, onMounted } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useConfigStore } from "../../stores/config";

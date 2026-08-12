@@ -96,7 +96,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$USERPROFILE/Pictures/**"]
+        "scope": ["$HOME/Pictures/**"]
       }
     }
   },
