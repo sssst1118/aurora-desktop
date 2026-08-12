@@ -73,14 +73,14 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="h-full w-full flex items-center gap-4 px-4 text-white/90 select-none bg-black/40 backdrop-blur-md rounded-none cursor-pointer"
+    class="h-full w-full flex items-center gap-4 px-4 text-[var(--aurora-text)] select-none bg-[var(--aurora-panel)] backdrop-blur-md rounded-none cursor-pointer"
     @click="openSearch"
     data-tauri-drag-region
   >
     <span class="text-sm">🔍</span>
     <span class="font-mono text-sm">{{ timeStr }}</span>
-    <span class="ml-auto text-xs text-white/70">CPU {{ cpu }}</span>
-    <span class="text-xs text-white/70">内存 {{ mem }}</span>
-    <span class="text-xs text-white/70 font-mono">{{ net }}</span>
+    <span class="ml-auto text-xs text-[var(--aurora-text)]">CPU {{ cpu }}</span>
+    <span class="text-xs text-[var(--aurora-text)]">内存 {{ mem }}</span>
+    <span class="text-xs text-[var(--aurora-text)] font-mono">{{ net }}</span>
   </div>
 </template>

@@ -1,0 +1,24 @@
+/* Phase4 4.4 主题令牌(设计文档 §4.2)。
+ * html.dark class 由 theme.ts 按 theme_mode 控制;深色值 = 迁移前硬编码值,浅色值 = 新增。
+ * 组件内不写 dark: 变体,深浅色全部由 CSS 变量驱动。 */
+:root {
+  /* 浅色主题(Light) */
+  --aurora-panel: rgba(255, 255, 255, 0.72); /* 面板毛玻璃底色 */
+  --aurora-panel-solid: #f8fafc; /* 不透明面板(AI 面板等) */
+  --aurora-text: #0f172a;
+  --aurora-text-dim: rgba(15, 23, 42, 0.55);
+  --aurora-border: rgba(15, 23, 42, 0.12);
+  --aurora-accent: #3b82f6; /* 默认蓝,theme_accent 换 token 名映射 */
+  --aurora-field: rgba(15, 23, 42, 0.05); /* 输入框底色 */
+}
+
+:root.dark {
+  /* 深色主题(当前视觉,原样迁入) */
+  --aurora-panel: rgba(0, 0, 0, 0.7);
+  --aurora-panel-solid: #020617;
+  --aurora-text: #ffffff;
+  --aurora-text-dim: rgba(255, 255, 255, 0.3);
+  --aurora-border: rgba(255, 255, 255, 0.1);
+  --aurora-accent: #3b82f6;
+  --aurora-field: rgba(255, 255, 255, 0.05);
+}

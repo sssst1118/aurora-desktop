@@ -103,21 +103,21 @@ function splitBlocks(text: string): Block[] {
 
 <template>
   <div
-    class="h-full w-full flex flex-col bg-gray-950/95 border border-white/10 rounded-xl overflow-hidden text-white select-none"
+    class="h-full w-full flex flex-col bg-[var(--aurora-panel-solid)] border border-[var(--aurora-border)] rounded-xl overflow-hidden text-[var(--aurora-text)] select-none"
   >
     <!-- 顶部栏 -->
-    <div class="flex items-center gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+    <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)] shrink-0">
       <span class="text-sm">✨ AI 助手</span>
       <div class="flex-1" />
       <button
-        class="text-white/40 hover:text-white/80 text-sm shrink-0"
+        class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm shrink-0"
         title="设置(AI 服务商/密钥/模型)"
         @click="openSettings"
       >
         ⚙
       </button>
       <button
-        class="text-xs text-white/40 hover:text-white/80 shrink-0"
+        class="text-xs text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] shrink-0"
         title="清空对话"
         @click="clear"
       >
@@ -140,7 +140,7 @@ function splitBlocks(text: string): Block[] {
     <div ref="listEl" class="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
       <div
         v-if="messages.length === 0"
-        class="h-full flex items-center justify-center text-xs text-white/30 leading-relaxed text-center px-6"
+        class="h-full flex items-center justify-center text-xs text-[var(--aurora-text-dim)] leading-relaxed text-center px-6"
       >
         输入消息开始与 AI 对话<br />可调用工具:打开应用 / 搜文件 / 设壁纸 / 查系统状态…
       </div>
@@ -168,13 +168,13 @@ function splitBlocks(text: string): Block[] {
         <!-- 助手消息(左,纯文本 + 代码块) -->
         <div v-else-if="m.role === 'assistant'" class="flex justify-start">
           <div
-            class="max-w-[85%] px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm leading-relaxed min-w-0"
+            class="max-w-[85%] px-3 py-2 rounded-lg bg-[var(--aurora-field)] border border-[var(--aurora-border)] text-sm leading-relaxed min-w-0"
           >
             <template v-if="m.content">
               <template v-for="(b, j) in splitBlocks(m.content)" :key="j">
                 <pre
                   v-if="b.code"
-                  class="mt-1 mb-1 p-2 rounded bg-black/50 border border-white/10 text-xs overflow-x-auto font-mono text-emerald-200/90"
+                  class="mt-1 mb-1 p-2 rounded bg-black/50 border border-[var(--aurora-border)] text-xs overflow-x-auto font-mono text-emerald-200/90"
                   >{{ b.text }}</pre
                 >
                 <p v-else class="whitespace-pre-wrap break-words">{{ b.text }}</p>
@@ -182,7 +182,7 @@ function splitBlocks(text: string): Block[] {
             </template>
             <span
               v-if="streaming && m.role === 'assistant' && i === messages.length - 1"
-              class="inline-block w-[6px] h-[14px] bg-blue-400/80 align-text-bottom ml-0.5 animate-pulse"
+              class="inline-block w-[6px] h-[14px] bg-[var(--aurora-accent)] align-text-bottom ml-0.5 animate-pulse"
             ></span>
           </div>
         </div>
@@ -190,22 +190,22 @@ function splitBlocks(text: string): Block[] {
     </div>
 
     <!-- 输入区 -->
-    <div class="shrink-0 border-t border-white/10 p-3">
+    <div class="shrink-0 border-t border-[var(--aurora-border)] p-3">
       <textarea
         ref="inputEl"
         v-model="input"
         rows="2"
-        class="w-full bg-white/5 rounded-lg px-3 py-2 text-sm outline-none focus:bg-white/10 resize-none placeholder-white/30 leading-relaxed"
+        class="w-full bg-[var(--aurora-field)] rounded-lg px-3 py-2 text-sm outline-none focus:bg-[var(--aurora-field)] resize-none placeholder:text-[var(--aurora-text-dim)] leading-relaxed"
         placeholder="输入消息…"
         @keydown="onKeydown"
       />
       <div class="flex items-center justify-between mt-1.5">
-        <span class="text-[10px] text-white/30">
+        <span class="text-[10px] text-[var(--aurora-text-dim)]">
           {{ streaming ? "回车停止 · 已接收内容保留" : "Enter 发送 · Shift+Enter 换行" }}
         </span>
         <button
           class="text-xs px-3 py-1 rounded transition-colors"
-          :class="streaming ? 'bg-red-500/60 hover:bg-red-500/80' : 'bg-blue-500/70 hover:bg-blue-500/90'"
+          :class="streaming ? 'bg-red-500/60 hover:bg-red-500/80' : 'bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)]'"
           @click="onClickSend"
         >
           {{ streaming ? "停止" : "发送" }}
