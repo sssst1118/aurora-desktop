@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useClipboardStore, type ClipboardItem } from "../../stores/clipboard";
 import { useClipboardHistory } from "../../composables/useClipboardHistory";
 
@@ -62,23 +63,25 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   void store.refresh().catch((e) => console.error("load history failed", e));
   void start();
   void nextTick().then(() => inputEl.value?.focus());
+  // 窗口显示(呼出)时拉最新历史并聚焦(不绑焦点事件,见上方说明)
+  unlistenShow = await listen("tauri://show", () => {
+    void store.refresh().catch((e) => console.error("load history failed", e));
+    void nextTick().then(() => inputEl.value?.focus());
+  });
 });
 
 onUnmounted(() => {
   stop();
+  unlistenShow?.();
 });
 
-// 窗口每次显示时拉最新历史并聚焦搜索框
-win.onFocusChanged(({ payload: focused }) => {
-  if (focused) {
-    void store.refresh().catch((e) => console.error("load history failed", e));
-    void nextTick().then(() => inputEl.value?.focus());
-  }
-});
+// 窗口真正显示时(tauri://show)拉最新历史并聚焦搜索框;不绑焦点事件——
+// 焦点在窗口激活抖动(拖拽/缩放/点击回窗)时也会触发,会打断面板内正在进行的搜索
+let unlistenShow: UnlistenFn | undefined;
 </script>
 
 <template>

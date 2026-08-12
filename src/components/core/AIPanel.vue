@@ -9,9 +9,9 @@
  * - 样式:深色卡片风(bg-gray-950/95 + 边框),不透明窗口,与 Phase2 面板视觉一致。
  * 挂载:App.vue 的 ai_panel 分支(集成 agent 接线),本文件只写组件。
  */
-import { ref, watch, nextTick, onMounted } from "vue";
+import { ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAiChat } from "../../composables/useAiChat";
 
 const { messages, streaming, error, send, stop, clear } = useAiChat();
@@ -19,7 +19,6 @@ const { messages, streaming, error, send, stop, clear } = useAiChat();
 const input = ref("");
 const inputEl = ref<HTMLTextAreaElement | null>(null);
 const listEl = ref<HTMLDivElement | null>(null);
-const win = getCurrentWindow();
 
 /** 打开设置:Settings 内嵌在 search 窗口的 SearchBar(Phase2 模式),走 open_search 命令呼出 */
 function openSettings() {
@@ -69,12 +68,19 @@ watch(streaming, (v) => {
   if (!v) scrollToBottom();
 });
 
-onMounted(() => {
+let unlistenShow: UnlistenFn | undefined;
+
+onMounted(async () => {
   void nextTick().then(() => inputEl.value?.focus());
-  // 窗口每次显示时聚焦输入框
-  win.onFocusChanged(({ payload: focused }) => {
-    if (focused) void nextTick().then(() => inputEl.value?.focus());
+  // 窗口真正显示时(tauri://show)聚焦输入框;不绑焦点事件——
+  // 焦点在窗口激活抖动(拖拽/缩放/点击回窗)时也会触发,会打断面板内正在进行的操作
+  unlistenShow = await listen("tauri://show", () => {
+    void nextTick().then(() => inputEl.value?.focus());
   });
+});
+
+onUnmounted(() => {
+  unlistenShow?.();
 });
 
 interface Block {

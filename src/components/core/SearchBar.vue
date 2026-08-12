@@ -2,7 +2,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import Settings from "./Settings.vue";
 import Dock from "./Dock.vue";
 
@@ -124,9 +124,11 @@ function onShown() {
   void nextTick().then(() => inputEl.value?.focus());
 }
 
-win.onFocusChanged(({ payload: focused }) => {
-  if (focused) onShown();
-});
+// 状态重置只绑"窗口真正显示"事件(tauri://show):聚焦不重置。
+// 根因(2026-08-12 用户实测):拖缩放手柄时窗口被反复 setSize,透明置顶窗口
+// 激活状态抖动触发 focused=true → 设置被强制关闭跳回搜索框;
+// show 事件仅在 hide→show 时触发,点击回窗口/拖拽缩放均不再影响面板状态
+let unlistenShow: UnlistenFn | undefined;
 
 function toggleSettings() {
   showSettings.value = !showSettings.value;
@@ -222,11 +224,14 @@ onMounted(async () => {
   // 移动/缩放事件 → 防抖保存几何(用户拖动/缩放后重启不丢位置)
   unMoved = await win.onMoved(() => scheduleSaveGeometry());
   unResized = await win.onResized(() => scheduleSaveGeometry());
+  // 窗口显示(呼出)时重置面板状态(见上方 onShown 说明,不绑焦点事件)
+  unlistenShow = await listen("tauri://show", () => onShown());
 });
 
 onUnmounted(() => {
   unMoved?.();
   unResized?.();
+  unlistenShow?.();
   if (geometryTimer) window.clearTimeout(geometryTimer);
 });
 </script>
