@@ -89,7 +89,14 @@ pub fn run() {
             commands::ai::ai_execute_tool,
             // ---- Phase3 3.3 自然语言文件搜索(前端/AI 工具双入口) ----
             commands::file_search::ai_search_files,
-            // ---- Phase4 占位:命令注册随模块合入逐个添加(4.1 wallpaper_dynamic_* / 4.2 automation_sim_* / 4.3 uia_*)----
+            // ---- Phase4 4.2 键鼠模拟自动化(SendInput;入口校验在命令内)----
+            commands::automation::automation_sim_click,
+            commands::automation::automation_sim_move,
+            commands::automation::automation_sim_scroll,
+            commands::automation::automation_sim_key,
+            commands::automation::automation_sim_type,
+            commands::automation::automation_sim_input,
+            // ---- Phase4 占位:4.1 wallpaper_dynamic_* / 4.3 uia_* 随模块合入注册 ----
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

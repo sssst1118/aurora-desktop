@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore } from "../../stores/config";
 import WallpaperPanel from "./WallpaperPanel.vue";
 
@@ -115,35 +116,59 @@ async function setAccent(name: string) {
 
 /** 开关组件标记(纯展示辅助,避免模板重复) */
 const on = (v: boolean | undefined) => v === true;
+
+// ---- Phase4 4.2 自动化测试区(坐标点击/文本输入;错误红字展示,后端不崩)----
+const simX = ref("");
+const simY = ref("");
+const simText = ref("");
+const simError = ref("");
+
+async function simClick() {
+  simError.value = "";
+  try {
+    await invoke("automation_sim_click", { x: Number(simX.value), y: Number(simY.value) });
+  } catch (e) {
+    simError.value = String(e);
+  }
+}
+
+async function simType() {
+  simError.value = "";
+  try {
+    await invoke("automation_sim_type", { text: simText.value });
+  } catch (e) {
+    simError.value = String(e);
+  }
+}
 </script>
 
 <template>
   <div
-    class="h-full w-full flex flex-col bg-black/70 backdrop-blur-xl rounded-xl overflow-hidden text-white"
+    class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)]"
   >
-    <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--aurora-border)]">
       <span class="text-sm">设置</span>
-      <button class="text-white/40 hover:text-white/80 text-sm" title="关闭" @click="emit('close')">
+      <button class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm" title="关闭" @click="emit('close')">
         ✕
       </button>
     </div>
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
       <div>
-        <div class="text-xs text-white/50 mb-1">全局热键</div>
-        <div class="text-sm font-mono bg-white/5 rounded px-2 py-1 inline-block">
+        <div class="text-xs text-[var(--aurora-text-dim)] mb-1">全局热键</div>
+        <div class="text-sm font-mono bg-[var(--aurora-field)] rounded px-2 py-1 inline-block">
           {{ store.cfg?.hotkey_search ?? "Ctrl+Shift+Space" }}
         </div>
-        <p class="text-[10px] text-white/30 mt-1">呼出/隐藏搜索框(固定快捷键,暂不可改)</p>
+        <p class="text-[10px] text-[var(--aurora-text-dim)] mt-1">呼出/隐藏搜索框(固定快捷键,暂不可改)</p>
       </div>
 
       <div class="flex items-center justify-between">
         <div>
           <div class="text-sm">灵动岛</div>
-          <div class="text-[10px] text-white/30">顶部常驻:时间 + CPU/内存/网络,重启后生效</div>
+          <div class="text-[10px] text-[var(--aurora-text-dim)]">顶部常驻:时间 + CPU/内存/网络,重启后生效</div>
         </div>
         <button
           class="w-10 h-5 rounded-full relative transition-colors"
-          :class="store.cfg?.enable_island ? 'bg-blue-500/80' : 'bg-white/10'"
+          :class="store.cfg?.enable_island ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
           @click="toggleIsland"
         >
           <span
@@ -157,11 +182,11 @@ const on = (v: boolean | undefined) => v === true;
       <div class="flex items-center justify-between">
         <div>
           <div class="text-sm">Dock 栏</div>
-          <div class="text-[10px] text-white/30">Phase2 开放,悬停呼出,重启后生效</div>
+          <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,悬停呼出,重启后生效</div>
         </div>
         <button
           class="w-10 h-5 rounded-full relative transition-colors"
-          :class="store.cfg?.enable_dock ? 'bg-blue-500/80' : 'bg-white/10'"
+          :class="store.cfg?.enable_dock ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
           @click="toggleModule('enable_dock')"
         >
           <span
@@ -176,11 +201,11 @@ const on = (v: boolean | undefined) => v === true;
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">文件抽屉</div>
-            <div class="text-[10px] text-white/30">Phase2 开放,重启后生效</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,重启后生效</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
-            :class="store.cfg?.enable_file_drawer ? 'bg-blue-500/80' : 'bg-white/10'"
+            :class="store.cfg?.enable_file_drawer ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="toggleModule('enable_file_drawer')"
           >
             <span
@@ -190,15 +215,15 @@ const on = (v: boolean | undefined) => v === true;
           </button>
         </div>
         <div v-if="store.cfg" class="flex items-center gap-1.5">
-          <span class="text-xs text-white/50 w-16 shrink-0">抽屉热键</span>
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">抽屉热键</span>
           <input
             v-model="store.cfg.drawer_hotkey"
-            class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono"
+            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
             @change="saveText"
           />
-          <span class="text-[10px] text-white/30 shrink-0">重启后生效</span>
+          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">重启后生效</span>
         </div>
-        <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[10px] text-white/30 ml-[70px]">
+        <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
         </p>
       </div>
@@ -208,11 +233,11 @@ const on = (v: boolean | undefined) => v === true;
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">剪贴板历史</div>
-            <div class="text-[10px] text-white/30">Phase2 开放,重启后生效</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,重启后生效</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
-            :class="store.cfg?.enable_clipboard_history ? 'bg-blue-500/80' : 'bg-white/10'"
+            :class="store.cfg?.enable_clipboard_history ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="toggleModule('enable_clipboard_history')"
           >
             <span
@@ -222,15 +247,15 @@ const on = (v: boolean | undefined) => v === true;
           </button>
         </div>
         <div v-if="store.cfg" class="flex items-center gap-1.5">
-          <span class="text-xs text-white/50 w-16 shrink-0">剪贴板热键</span>
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">剪贴板热键</span>
           <input
             v-model="store.cfg.hotkey_clipboard"
-            class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono"
+            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
             @change="saveText"
           />
-          <span class="text-[10px] text-white/30 shrink-0">重启后生效</span>
+          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">重启后生效</span>
         </div>
-        <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[10px] text-white/30 ml-[70px]">
+        <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
         </p>
       </div>
@@ -242,17 +267,17 @@ const on = (v: boolean | undefined) => v === true;
       </div>
 
       <!-- Phase3 AI 设置区块(密钥脱敏契约:config_load 返回掩码,前端永不见明文) -->
-      <div v-if="store.cfg" class="border-t border-white/10 pt-3 space-y-3">
+      <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-3">
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">AI 助手</div>
-            <div class="text-[10px] text-white/30">
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">
               总开关,关闭时不注册热键、不显示托盘入口,重启后生效
             </div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
-            :class="store.cfg.enable_ai ? 'bg-blue-500/80' : 'bg-white/10'"
+            :class="store.cfg.enable_ai ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="toggleAiEnable"
           >
             <span
@@ -265,17 +290,17 @@ const on = (v: boolean | undefined) => v === true;
         <div v-if="store.cfg.enable_ai" class="space-y-2.5">
           <!-- 服务商切换 -->
           <div class="flex items-center gap-1.5">
-            <span class="text-xs text-white/50 w-16 shrink-0">服务商</span>
+            <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">服务商</span>
             <button
               class="text-xs px-2 py-0.5 rounded transition-colors"
-              :class="store.cfg.ai_provider === 'deepseek' ? 'bg-blue-500/70' : 'bg-white/10'"
+              :class="store.cfg.ai_provider === 'deepseek' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
               @click="setProvider('deepseek')"
             >
               DeepSeek
             </button>
             <button
               class="text-xs px-2 py-0.5 rounded transition-colors"
-              :class="store.cfg.ai_provider === 'ollama' ? 'bg-blue-500/70' : 'bg-white/10'"
+              :class="store.cfg.ai_provider === 'ollama' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
               @click="setProvider('ollama')"
             >
               Ollama
@@ -285,16 +310,16 @@ const on = (v: boolean | undefined) => v === true;
           <!-- DeepSeek:密钥(password 型,已配置显示掩码)+ 模型 + 接口地址 -->
           <template v-if="store.cfg.ai_provider === 'deepseek'">
             <div class="flex items-center gap-1.5">
-              <span class="text-xs text-white/50 w-16 shrink-0">API Key</span>
+              <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">API Key</span>
               <input
                 v-model="store.cfg.ai_api_key"
                 type="password"
-                class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
                 placeholder="未配置"
                 @change="saveText"
               />
               <button
-                class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 shrink-0"
+                class="text-[10px] px-1.5 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
                 title="清空密钥"
                 @click="clearApiKey"
               >
@@ -302,18 +327,18 @@ const on = (v: boolean | undefined) => v === true;
               </button>
             </div>
             <div class="flex items-center gap-1.5">
-              <span class="text-xs text-white/50 w-16 shrink-0">模型</span>
+              <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">模型</span>
               <input
                 v-model="store.cfg.ai_model"
-                class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
                 @change="saveText"
               />
             </div>
             <div class="flex items-center gap-1.5">
-              <span class="text-xs text-white/50 w-16 shrink-0">接口地址</span>
+              <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">接口地址</span>
               <input
                 v-model="store.cfg.ai_base_url"
-                class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
                 @change="saveText"
               />
             </div>
@@ -322,22 +347,22 @@ const on = (v: boolean | undefined) => v === true;
           <!-- Ollama:本地地址 + 模型 -->
           <template v-else>
             <div class="flex items-center gap-1.5">
-              <span class="text-xs text-white/50 w-16 shrink-0">Ollama 地址</span>
+              <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">Ollama 地址</span>
               <input
                 v-model="store.cfg.ai_ollama_url"
-                class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
                 @change="saveText"
               />
             </div>
             <div class="flex items-center gap-1.5">
-              <span class="text-xs text-white/50 w-16 shrink-0">Ollama 模型</span>
+              <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">Ollama 模型</span>
               <input
                 v-model="store.cfg.ai_ollama_model"
-                class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
                 @change="saveText"
               />
             </div>
-            <p class="text-[10px] text-white/30 ml-[70px]">
+            <p class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
               按本机已装模型修改,如 qwen2.5:7b
             </p>
           </template>
@@ -346,13 +371,13 @@ const on = (v: boolean | undefined) => v === true;
           <div class="flex items-center justify-between">
             <div>
               <div class="text-sm">工具调用</div>
-              <div class="text-[10px] text-white/30">
+              <div class="text-[10px] text-[var(--aurora-text-dim)]">
                 让 AI 打开应用/搜文件/设壁纸等,关闭后纯对话
               </div>
             </div>
             <button
               class="w-10 h-5 rounded-full relative transition-colors"
-              :class="store.cfg.ai_tools_enabled ? 'bg-blue-500/80' : 'bg-white/10'"
+              :class="store.cfg.ai_tools_enabled ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
               @click="toggleAiTools"
             >
               <span
@@ -364,9 +389,9 @@ const on = (v: boolean | undefined) => v === true;
 
           <!-- 搜索目录集合(每行一个,默认空 = 仅桌面) -->
           <div>
-            <div class="text-xs text-white/50 mb-1">文件搜索目录</div>
+            <div class="text-xs text-[var(--aurora-text-dim)] mb-1">文件搜索目录</div>
             <textarea
-              class="w-full text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono resize-y leading-relaxed"
+              class="w-full text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono resize-y leading-relaxed"
               rows="2"
               placeholder="每行一个目录(留空 = 仅桌面,禁止全盘扫描)"
               :value="store.cfg.ai_search_roots.join('\n')"
@@ -376,40 +401,40 @@ const on = (v: boolean | undefined) => v === true;
 
           <!-- 工具循环上限 + AI 热键 -->
           <div class="flex items-center gap-1.5">
-            <span class="text-xs text-white/50 w-16 shrink-0">工具轮数上限</span>
+            <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">工具轮数上限</span>
             <input
               v-model.number="store.cfg.ai_max_tool_rounds"
               type="number"
               min="1"
               max="10"
-              class="w-16 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10"
+              class="w-16 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
               @change="saveText"
             />
           </div>
           <div class="flex items-center gap-1.5">
-            <span class="text-xs text-white/50 w-16 shrink-0">AI 热键</span>
+            <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">AI 热键</span>
             <input
               v-model="store.cfg.ai_hotkey"
-              class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
               @change="saveText"
             />
-            <span class="text-[10px] text-white/30 shrink-0">重启后生效</span>
+            <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">重启后生效</span>
           </div>
         </div>
       </div>
 
       <!-- Phase4 4.1 动态壁纸区块(素材选择/预览待 4.1 模块合入后启用) -->
-      <div v-if="store.cfg" class="border-t border-white/10 pt-3 space-y-2.5">
+      <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">动态壁纸</div>
-            <div class="text-[10px] text-white/30">
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">
               WorkerW 壁纸层:本地视频/网页壁纸,重启后生效
             </div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
-            :class="on(store.cfg.enable_dynamic_wallpaper) ? 'bg-blue-500/80' : 'bg-white/10'"
+            :class="on(store.cfg.enable_dynamic_wallpaper) ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="toggleDynamicWallpaper"
           >
             <span
@@ -421,16 +446,16 @@ const on = (v: boolean | undefined) => v === true;
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">电池降载</div>
-            <div class="text-[10px] text-white/30">电池模式下自动暂停动态渲染,减少耗电</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">电池模式下自动暂停动态渲染,减少耗电</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
             :class="
               on(store.cfg.enable_dynamic_wallpaper)
                 ? on(store.cfg.wallpaper_battery_downshift)
-                  ? 'bg-blue-500/80'
-                  : 'bg-white/10'
-                : 'bg-white/10 opacity-40'
+                  ? 'bg-[var(--aurora-accent)]'
+                  : 'bg-[var(--aurora-field)]'
+                : 'bg-[var(--aurora-field)] opacity-40'
             "
             :disabled="!on(store.cfg.enable_dynamic_wallpaper)"
             @click="toggleBatteryDownshift"
@@ -444,15 +469,15 @@ const on = (v: boolean | undefined) => v === true;
       </div>
 
       <!-- Phase4 4.2/4.3 自动化区块(测试区待 4.2/4.3 模块合入后追加) -->
-      <div v-if="store.cfg" class="border-t border-white/10 pt-3 space-y-2.5">
+      <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">自动化</div>
-            <div class="text-[10px] text-white/30">键鼠模拟 + 控件操作,重启后生效</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">键鼠模拟 + 控件操作,重启后生效</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
-            :class="on(store.cfg.enable_automation) ? 'bg-blue-500/80' : 'bg-white/10'"
+            :class="on(store.cfg.enable_automation) ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="toggleAutomation"
           >
             <span
@@ -464,16 +489,16 @@ const on = (v: boolean | undefined) => v === true;
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">控件操作(UIA)</div>
-            <div class="text-[10px] text-white/30">读取/点击窗口内控件,比键鼠模拟风险更高</div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">读取/点击窗口内控件,比键鼠模拟风险更高</div>
           </div>
           <button
             class="w-10 h-5 rounded-full relative transition-colors"
             :class="
               on(store.cfg.enable_automation)
                 ? on(store.cfg.automation_uia_enable)
-                  ? 'bg-blue-500/80'
-                  : 'bg-white/10'
-                : 'bg-white/10 opacity-40'
+                  ? 'bg-[var(--aurora-accent)]'
+                  : 'bg-[var(--aurora-field)]'
+                : 'bg-[var(--aurora-field)] opacity-40'
             "
             :disabled="!on(store.cfg.enable_automation)"
             @click="toggleUiaEnable"
@@ -484,40 +509,79 @@ const on = (v: boolean | undefined) => v === true;
             />
           </button>
         </div>
-        <p class="text-[10px] text-white/30 leading-relaxed">
+        <p class="text-[10px] text-[var(--aurora-text-dim)] leading-relaxed">
           自动化为高风险模块:普通用户权限下无法操作管理员窗口/UWP 应用;坐标点击依赖前台窗口位置,请确认目标可见
         </p>
+
+        <!-- 4.2 键鼠模拟测试区(总开关开启后可用;错误红字展示) -->
+        <div v-if="store.cfg.enable_automation" class="space-y-2">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">坐标点击</span>
+            <input
+              v-model="simX"
+              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+              placeholder="x"
+            />
+            <input
+              v-model="simY"
+              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+              placeholder="y"
+            />
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="simClick"
+            >
+              点击
+            </button>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">输入文本</span>
+            <input
+              v-model="simText"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              placeholder="写入前台焦点窗口(中文安全)"
+              @keyup.enter="simType"
+            />
+            <button
+              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              @click="simType"
+            >
+              输入
+            </button>
+          </div>
+          <p v-if="simError" class="text-[10px] text-red-400 break-all">{{ simError }}</p>
+        </div>
       </div>
 
       <!-- Phase4 4.4 主题区块(即时应用接线在 4.4 模块合入后接入 theme.ts) -->
-      <div v-if="store.cfg" class="border-t border-white/10 pt-3 space-y-2.5">
+      <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
         <div class="text-sm mb-1">主题</div>
         <div class="flex items-center gap-1.5">
-          <span class="text-xs text-white/50 w-16 shrink-0">外观</span>
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">外观</span>
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.theme_mode === 'light' ? 'bg-blue-500/70' : 'bg-white/10'"
+            :class="store.cfg.theme_mode === 'light' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="setThemeMode('light')"
           >
             浅色
           </button>
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.theme_mode === 'dark' ? 'bg-blue-500/70' : 'bg-white/10'"
+            :class="store.cfg.theme_mode === 'dark' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="setThemeMode('dark')"
           >
             深色
           </button>
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.theme_mode === 'system' ? 'bg-blue-500/70' : 'bg-white/10'"
+            :class="store.cfg.theme_mode === 'system' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
             @click="setThemeMode('system')"
           >
             跟随系统
           </button>
         </div>
         <div class="flex items-center gap-1.5">
-          <span class="text-xs text-white/50 w-16 shrink-0">强调色</span>
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">强调色</span>
           <button
             v-for="c in ['blue', 'green', 'purple', 'orange']"
             :key="c"
@@ -527,7 +591,7 @@ const on = (v: boolean | undefined) => v === true;
               c === 'green' && 'bg-green-500',
               c === 'purple' && 'bg-purple-500',
               c === 'orange' && 'bg-orange-500',
-              store.cfg.theme_accent === c ? 'scale-110 ring-1 ring-white/60' : '',
+              store.cfg.theme_accent === c ? 'scale-110 ring-1 ring-[var(--aurora-border)]' : '',
             ]"
             :title="c"
             @click="setAccent(c)"
