@@ -9,3 +9,4 @@ pub mod file_search;
 pub mod search;
 pub mod system;
 pub mod wallpaper;
+pub mod wallpaper_dynamic;

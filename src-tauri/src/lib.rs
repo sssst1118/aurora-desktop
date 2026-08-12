@@ -4,6 +4,7 @@ mod commands;
 mod hotkey;
 mod indexer;
 mod tray;
+mod wallpaper_dynamic;
 mod win_utils;
 
 use std::sync::Mutex;
@@ -53,6 +54,10 @@ pub fn run() {
             crate::commands::clipboard::setup(&handle)?;
             // 2.2 FileDrawer:启动桌面目录 watcher(事件驱动;内部按 enable_file_drawer 开关自判)
             crate::commands::drawer::init_watcher(handle.clone())?;
+            // Phase4 4.1 电池降载:总开关+降载开关都开才启动 30s 检测线程(状态变化才 emit wallpaper-power)
+            if cfg.enable_dynamic_wallpaper && cfg.wallpaper_battery_downshift {
+                crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
+            }
             // 2.5 采样线程无需接线:首个 sys_get_status invoke(灵动岛挂载)时幂等懒启动;
             // 托盘 tooltip 的更新订阅在 tray::setup_tray 内完成
             Ok(())
@@ -96,7 +101,12 @@ pub fn run() {
             commands::automation::automation_sim_key,
             commands::automation::automation_sim_type,
             commands::automation::automation_sim_input,
-            // ---- Phase4 占位:4.1 wallpaper_dynamic_* / 4.3 uia_* 随模块合入注册 ----
+            // ---- Phase4 4.1 动态壁纸(WorkerW 注入 + 电池降载;static 命令在 wallpaper 模块)----
+            commands::wallpaper_dynamic::wallpaper_dynamic_list,
+            commands::wallpaper_dynamic::wallpaper_dynamic_set,
+            commands::wallpaper_dynamic::wallpaper_dynamic_clear,
+            commands::wallpaper_dynamic::wallpaper_dynamic_get_state,
+            // ---- Phase4 占位:4.3 uia_* 随模块合入注册 ----
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

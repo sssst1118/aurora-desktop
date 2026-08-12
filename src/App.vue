@@ -7,6 +7,7 @@ import Dock from "./components/core/Dock.vue";
 import DrawerPanel from "./components/FileDrawer/DrawerPanel.vue";
 import ClipboardPanel from "./components/core/ClipboardPanel.vue";
 import AIPanel from "./components/core/AIPanel.vue";
+import DynamicWallpaper from "./components/core/DynamicWallpaper.vue";
 
 const label = getCurrentWindow().label;
 </script>
@@ -27,6 +28,10 @@ const label = getCurrentWindow().label;
   <!-- 3.1 AI 对话面板 -->
   <main v-else-if="label === 'ai_panel'" class="w-full h-full">
     <AIPanel />
+  </main>
+  <!-- Phase4 4.1 动态壁纸:wallpaper 窗口渲染壁纸层(attach 到 WorkerW 后由系统桌面统一管理) -->
+  <main v-else-if="label === 'wallpaper'" class="w-full h-full">
+    <DynamicWallpaper />
   </main>
   <!-- 默认兜底壳:未知窗口 label 时挂载 -->
   <main
