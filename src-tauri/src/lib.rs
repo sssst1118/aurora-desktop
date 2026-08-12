@@ -4,6 +4,7 @@ mod commands;
 mod hotkey;
 mod indexer;
 mod tray;
+mod updater;
 mod wallpaper_dynamic;
 mod win_utils;
 

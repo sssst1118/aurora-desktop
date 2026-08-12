@@ -35,5 +35,7 @@ tauri-plugin-clipboard = "2"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 # SSE 逐行解析用 StreamExt(3.1 实现时可选手写缓冲读取,二选一)
 futures-util = "0.3"
+# 5.1 自动更新:下载产物 SHA-256 校验(自研 updater,不引需签名的官方插件)
+sha2 = "0.10"
 # SSE idle 超时(30s 无增量视为断线)用 tokio::time::timeout;tauri 依赖树已含 tokio,这里显式声明以免 3.1 模块编译报未声明依赖
 tokio = { version = "1", features = ["time"] }
