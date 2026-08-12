@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, nextTick } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import Settings from "./Settings.vue";
 import Dock from "./Dock.vue";
 
@@ -18,6 +19,8 @@ const showSettings = ref(false);
 // 2.1 Dock(并入搜索窗口形态):启动立即 + 每次窗口显示时重读开关,
 // 设置页保存后经 aurora:config-saved 事件即时刷新(热生效)
 const enableDock = ref(false);
+// 显示方式:"glass" 毛玻璃(默认) | "solid" 不透明(2026-08-12 用户要求可选)
+const searchStyle = ref("glass");
 let debounceTimer: number | undefined;
 
 const win = getCurrentWindow();
@@ -26,9 +29,13 @@ const win = getCurrentWindow();
 // 用户呼出搜索栏时图标已就绪(否则首次呼出才挂载,COM 初始化的 ~1.9s 成本
 // 会压在"打开搜索栏之后"——实测首 lnk 图标提取独占 1.85s)
 void loadDockFlag();
+void loadStyleFlag();
 
-// 热生效:设置页保存成功 → 立即重读 Dock 开关(无需重启/下次呼出)
-window.addEventListener("aurora:config-saved", () => void loadDockFlag());
+// 热生效:设置页保存成功 → 立即重读 Dock 开关与显示方式(无需重启/下次呼出)
+window.addEventListener("aurora:config-saved", () => {
+  void loadDockFlag();
+  void loadStyleFlag();
+});
 
 async function loadDockFlag() {
   try {
@@ -38,6 +45,22 @@ async function loadDockFlag() {
     enableDock.value = false;
   }
 }
+
+async function loadStyleFlag() {
+  try {
+    const cfg = await invoke<{ search_style?: string }>("config_load");
+    searchStyle.value = cfg.search_style === "solid" ? "solid" : "glass";
+  } catch {
+    searchStyle.value = "glass";
+  }
+}
+
+/** 容器背景样式:毛玻璃(半透明+模糊) / 不透明 */
+const panelClass = computed(() =>
+  searchStyle.value === "solid"
+    ? "bg-[var(--aurora-panel-solid)]"
+    : "bg-[var(--aurora-panel)] backdrop-blur-xl",
+);
 
 async function doSearch() {
   const q = query.value.trim();
@@ -108,14 +131,120 @@ win.onFocusChanged(({ payload: focused }) => {
 function toggleSettings() {
   showSettings.value = !showSettings.value;
 }
+
+// ---- 拖动移动(header 左端手柄,data-tauri-drag-region 原生拖动) ----
+
+// ---- 右下角缩放手柄(无边框窗口无系统 resize 边框,自绘手柄 + setSize) ----
+
+/** 缩放进行中:起始鼠标位置 + 起始窗口逻辑尺寸 */
+let resizeState: { sx: number; sy: number; w: number; h: number } | null = null;
+let lastDx = 0;
+let lastDy = 0;
+let resizeRaf = 0;
+
+async function resizeStart(e: PointerEvent) {
+  e.preventDefault();
+  try {
+    const size = await win.innerSize(); // PhysicalSize
+    const sf = await win.scaleFactor();
+    resizeState = {
+      sx: e.screenX,
+      sy: e.screenY,
+      w: size.width / sf,
+      h: size.height / sf,
+    };
+    window.addEventListener("pointermove", resizeMove);
+    window.addEventListener("pointerup", resizeEnd);
+  } catch (err) {
+    console.error("resize start failed", err);
+  }
+}
+
+function resizeMove(e: PointerEvent) {
+  if (!resizeState) return;
+  lastDx = e.screenX - resizeState.sx;
+  lastDy = e.screenY - resizeState.sy;
+  if (resizeRaf) return; // rAF 节流,避免高频 setSize IPC
+  resizeRaf = requestAnimationFrame(applyResize);
+}
+
+function applyResize() {
+  resizeRaf = 0;
+  if (!resizeState) return;
+  // 最小尺寸下限:内容(输入框/列表/Dock)不至于挤崩布局
+  const w = Math.max(360, Math.round(resizeState.w + lastDx));
+  const h = Math.max(260, Math.round(resizeState.h + lastDy));
+  win
+    .setSize(new LogicalSize(w, h))
+    .catch((err) => console.error("setSize failed", err));
+}
+
+function resizeEnd() {
+  resizeState = null;
+  window.removeEventListener("pointermove", resizeMove);
+  window.removeEventListener("pointerup", resizeEnd);
+  // 缩放结束落一次几何(移动/缩放事件的防抖保存兜底)
+  scheduleSaveGeometry();
+}
+
+// ---- 几何记忆:拖动/缩放后防抖写回配置文件(下次启动恢复) ----
+
+let geometryTimer: number | undefined;
+
+async function saveGeometry() {
+  try {
+    const pos = await win.innerPosition(); // PhysicalPosition
+    const size = await win.innerSize(); // PhysicalSize
+    const sf = await win.scaleFactor();
+    await invoke("search_save_geometry", {
+      x: Math.round(pos.x / sf),
+      y: Math.round(pos.y / sf),
+      w: size.width / sf,
+      h: size.height / sf,
+    });
+  } catch (e) {
+    console.error("search_save_geometry failed", e);
+  }
+}
+
+function scheduleSaveGeometry() {
+  if (geometryTimer) window.clearTimeout(geometryTimer);
+  geometryTimer = window.setTimeout(() => {
+    geometryTimer = undefined;
+    void saveGeometry();
+  }, 600);
+}
+
+let unMoved: UnlistenFn | undefined;
+let unResized: UnlistenFn | undefined;
+
+onMounted(async () => {
+  // 移动/缩放事件 → 防抖保存几何(用户拖动/缩放后重启不丢位置)
+  unMoved = await win.onMoved(() => scheduleSaveGeometry());
+  unResized = await win.onResized(() => scheduleSaveGeometry());
+});
+
+onUnmounted(() => {
+  unMoved?.();
+  unResized?.();
+  if (geometryTimer) window.clearTimeout(geometryTimer);
+});
 </script>
 
 <template>
   <div
-    class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)]"
+    class="h-full w-full flex flex-col rounded-xl overflow-hidden text-[var(--aurora-text)] relative"
+    :class="panelClass"
   >
+    <!-- 左上角拖动手柄(两个视图通用;数据原生拖动,不影响输入框点击) -->
+    <span
+      class="absolute top-0 left-0 z-20 h-9 w-8 flex items-center justify-center cursor-move text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]"
+      data-tauri-drag-region
+      title="按住拖动移动"
+      >⋮⋮</span
+    >
     <template v-if="!showSettings">
-      <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)]">
+      <div class="flex items-center gap-2 pl-10 pr-4 py-3 border-b border-[var(--aurora-border)]">
         <span>🔍</span>
         <input
           ref="inputEl"
@@ -156,5 +285,15 @@ function toggleSettings() {
     <Settings v-else @close="toggleSettings" />
     <!-- 2.1 Dock 并入搜索窗口:底部图标排(开关在设置页,下次呼出生效) -->
     <Dock v-if="enableDock" />
+    <!-- 右下角缩放手柄(自绘;无边框窗口无系统 resize 边框) -->
+    <div
+      class="absolute bottom-0 right-0 z-20 w-4 h-4 cursor-nwse-resize"
+      @pointerdown="resizeStart"
+      title="拖动调整大小"
+    >
+      <span
+        class="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 border-r-2 border-b-2 border-[var(--aurora-text-dim)] opacity-50 pointer-events-none"
+      ></span>
+    </div>
   </div>
 </template>

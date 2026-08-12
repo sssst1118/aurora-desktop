@@ -43,6 +43,41 @@ pub fn run() {
             crate::commands::clipboard::setup(&handle)?;
             // 2.2 FileDrawer:启动桌面目录 watcher(事件驱动;内部按 enable_file_drawer 开关自判)
             crate::commands::drawer::init_watcher(handle.clone())?;
+            // 搜索框几何记忆:恢复记住的位置/大小(2026-08-12 用户要求可移动/可缩放);
+            // 位置完全在屏幕外(显示器拔掉/分辨率变化)则回退居中
+            if let Some(win) = app.get_webview_window("search") {
+                let w = cfg.search_width.unwrap_or(620.0);
+                let h = cfg.search_height.unwrap_or(420.0);
+                let _ = win.set_size(tauri::LogicalSize::new(w, h));
+                if let (Some(x), Some(y)) = (cfg.search_x, cfg.search_y) {
+                    // 显示器工作区(物理像素 → 逻辑像素;scale_factor 为 dpi 缩放)
+                    let monitors: Vec<(i32, i32, i32, i32)> = app
+                        .available_monitors()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|m| {
+                            let s = m.scale_factor();
+                            let p = m.position();
+                            let sz = m.size();
+                            (
+                                (p.x as f64 / s).round() as i32,
+                                (p.y as f64 / s).round() as i32,
+                                (sz.width as f64 / s).round() as i32,
+                                (sz.height as f64 / s).round() as i32,
+                            )
+                        })
+                        .collect();
+                    if let Some((cx, cy)) = crate::win_utils::clamp_to_visible(
+                        x,
+                        y,
+                        w as i32,
+                        h as i32,
+                        &monitors,
+                    ) {
+                        let _ = win.set_position(tauri::LogicalPosition::new(cx, cy));
+                    }
+                }
+            }
             // Phase4 4.1 电池降载:常驻检测线程,内部每轮重读配置
             // (热生效:总开关/降载开关/阈值/周期运行时改配置即时生效,不重启)
             crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
@@ -116,6 +151,7 @@ pub fn run() {
             commands::search::toggle_search,
             commands::config::config_load,
             commands::config::config_save,
+            commands::config::search_save_geometry,
             commands::system::sys_get_status,
             // ---- Phase2 2.1 Dock ----
             commands::dock::dock_get_items,

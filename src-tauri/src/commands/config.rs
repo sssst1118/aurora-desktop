@@ -63,6 +63,12 @@ pub struct AppConfig {
     // ---- Phase5 5.2 多屏壁纸(设计文档 §2)----
     pub wallpaper_multi_monitor: bool,     // 多屏开关,默认 false(= 现状只铺主屏)
     pub wallpaper_span_mode: bool,         // true=拼接(一张素材铺满虚拟桌面);false=每屏独立素材
+    // ---- 搜索框外观与几何记忆(2026-08-12)----
+    pub search_style: String,              // "glass" 毛玻璃(默认) | "solid" 不透明
+    pub search_x: Option<i32>,             // 记住的窗口位置(逻辑像素);None=启动居中
+    pub search_y: Option<i32>,
+    pub search_width: Option<f64>,         // 记住的窗口大小;None=配置默认 620x420
+    pub search_height: Option<f64>,
 }
 
 impl Default for AppConfig {
@@ -106,6 +112,11 @@ impl Default for AppConfig {
                 .to_string(),
             wallpaper_multi_monitor: false,
             wallpaper_span_mode: true,
+            search_style: "glass".to_string(),
+            search_x: None,
+            search_y: None,
+            search_width: None,
+            search_height: None,
         }
     }
 }
@@ -139,6 +150,20 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
         crate::runtime::apply(&app, &cfg);
     }
     ok
+}
+
+/// 搜索框拖动/缩放后记忆几何(前端 onMoved/onResized 防抖后调用)。
+/// 只写配置文件、不触发热生效:几何是纯展示状态,无运行时逻辑需要同步;
+/// 下次启动由 setup 恢复。
+#[tauri::command]
+pub fn search_save_geometry(app: tauri::AppHandle, x: i32, y: i32, w: f64, h: f64) -> bool {
+    let path = config_path(&app);
+    let mut cfg = load_from(&path);
+    cfg.search_x = Some(x);
+    cfg.search_y = Some(y);
+    cfg.search_width = Some(w);
+    cfg.search_height = Some(h);
+    save_to(&path, &cfg)
 }
 
 /// 密钥脱敏(设计文档 §1.3,纯函数):已配置 → 掩码占位 "******";未配置/空 → None

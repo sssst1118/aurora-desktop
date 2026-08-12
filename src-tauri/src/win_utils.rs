@@ -88,8 +88,58 @@ pub fn toggle_all_windows(app: &AppHandle) {
     }
 }
 
+/// 记忆窗口位置恢复时的越界保护(纯函数,便于单测):
+/// 窗口矩形与任一显示器工作区相交 → 保留原位置;完全在屏幕外
+/// (显示器拔掉/分辨率变化)或没有显示器信息 → None,调用方应回退居中。
+/// 入参 monitors 为 (x, y, width, height) 逻辑像素四元组。
+pub fn clamp_to_visible(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    monitors: &[(i32, i32, i32, i32)],
+) -> Option<(i32, i32)> {
+    let (x2, y2) = (x.saturating_add(w), y.saturating_add(h));
+    let visible = monitors.iter().any(|&(mx, my, mw, mh)| {
+        let (mx2, my2) = (mx.saturating_add(mw), my.saturating_add(mh));
+        // 交集非空 = 窗口至少有一角还在屏内
+        x.max(mx) < x2.min(mx2) && y.max(my) < y2.min(my2)
+    });
+    visible.then_some((x, y))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::clamp_to_visible;
+
+    /// 单显示器工作区 1920x1080
+    fn mono() -> Vec<(i32, i32, i32, i32)> {
+        vec![(0, 0, 1920, 1080)]
+    }
+
+    #[test]
+    fn position_inside_screen_kept() {
+        assert_eq!(clamp_to_visible(100, 50, 620, 420, &mono()), Some((100, 50)));
+    }
+
+    #[test]
+    fn partially_visible_kept() {
+        // 窗口一半在屏外,仍保留(用户拖到边缘很正常)
+        assert_eq!(clamp_to_visible(1800, 800, 620, 420, &mono()), Some((1800, 800)));
+    }
+
+    #[test]
+    fn fully_off_screen_returns_none() {
+        // 整体在屏幕外(如显示器已拔掉):回退居中
+        assert_eq!(clamp_to_visible(3000, 3000, 620, 420, &mono()), None);
+        assert_eq!(clamp_to_visible(-800, 0, 620, 420, &mono()), None);
+    }
+
+    #[test]
+    fn no_monitors_returns_none() {
+        assert_eq!(clamp_to_visible(10, 10, 620, 420, &[]), None);
+    }
+
     #[test]
     fn placeholder_compiles() {
         assert!(true);

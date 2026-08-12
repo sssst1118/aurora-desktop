@@ -75,6 +75,13 @@ async function toggleModule(
   await store.save();
 }
 
+/** 搜索框显示方式(热生效:保存后 SearchBar 经 aurora:config-saved 即时刷新,无需重启) */
+async function setSearchStyle(style: "glass" | "solid") {
+  if (!store.cfg) return;
+  store.cfg.search_style = style;
+  await store.save();
+}
+
 /** Phase3 AI 总开关(热生效:热键注册走 apply_hotkeys diff,关闭即注销) */
 async function toggleAiEnable() {
   if (!store.cfg) return;
@@ -460,7 +467,8 @@ async function uiaType() {
 
 <template>
   <div
-    class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)]"
+    class="h-full w-full flex flex-col rounded-xl overflow-hidden text-[var(--aurora-text)]"
+    :class="store.cfg?.search_style === 'solid' ? 'bg-[var(--aurora-panel-solid)]' : 'bg-[var(--aurora-panel)] backdrop-blur-xl'"
   >
     <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--aurora-border)]">
       <span class="text-sm">设置</span>
@@ -538,6 +546,33 @@ async function uiaType() {
             :class="store.cfg?.enable_dock ? 'left-[22px]' : 'left-0.5'"
           />
         </button>
+      </div>
+
+      <!-- 搜索框:显示方式可选(毛玻璃/不透明);几何(位置/大小)自动记忆,无需设置项 -->
+      <div v-if="store.cfg" class="flex flex-col gap-1.5">
+        <div>
+          <div class="text-sm">搜索框</div>
+          <div class="text-[10px] text-[var(--aurora-text-dim)]">
+            拖左上角手柄移动、拖右下角调整大小,位置与大小自动记忆;显示方式保存后即时生效
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">显示方式</span>
+          <button
+            class="text-xs px-2 py-0.5 rounded transition-colors"
+            :class="store.cfg.search_style !== 'solid' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            @click="setSearchStyle('glass')"
+          >
+            毛玻璃
+          </button>
+          <button
+            class="text-xs px-2 py-0.5 rounded transition-colors"
+            :class="store.cfg.search_style === 'solid' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            @click="setSearchStyle('solid')"
+          >
+            经典不透明
+          </button>
+        </div>
       </div>
 
       <!-- 文件抽屉:热键受模块开关门控,关闭时仅展示不生效 -->

@@ -51,6 +51,12 @@ export interface AppConfig {
   update_feed_url: string;
   wallpaper_multi_monitor: boolean;
   wallpaper_span_mode: boolean;
+  // ---- 搜索框外观与几何记忆(2026-08-12;search_x/y/w/h 由后端记忆,前端不直接改)----
+  search_style: string; // "glass" 毛玻璃(默认) | "solid" 不透明
+  search_x: number | null;
+  search_y: number | null;
+  search_width: number | null;
+  search_height: number | null;
 }
 
 export const useConfigStore = defineStore("config", {
