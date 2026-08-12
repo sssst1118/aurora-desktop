@@ -25,12 +25,6 @@ async function toggleModule(
   await store.save();
 }
 
-const phase2Modules = [
-  { key: "enable_dock", label: "Dock 栏" },
-  { key: "enable_file_drawer", label: "文件抽屉" },
-  { key: "enable_clipboard_history", label: "剪贴板历史" },
-] as const;
-
 /** Phase3 AI 总开关(重启生效:热键/托盘入口在启动时按配置初始化) */
 async function toggleAiEnable() {
   if (!store.cfg) return;
@@ -92,7 +86,7 @@ async function clearApiKey() {
         <div class="text-sm font-mono bg-white/5 rounded px-2 py-1 inline-block">
           {{ store.cfg?.hotkey_search ?? "Ctrl+Shift+Space" }}
         </div>
-        <p class="text-[10px] text-white/30 mt-1">呼出/隐藏搜索框(Phase1 固定,Phase2 支持自定义)</p>
+        <p class="text-[10px] text-white/30 mt-1">呼出/隐藏搜索框(固定快捷键,暂不可改)</p>
       </div>
 
       <div class="flex items-center justify-between">
@@ -112,21 +106,86 @@ async function clearApiKey() {
         </button>
       </div>
 
-      <div v-for="item in phase2Modules" :key="item.key" class="flex items-center justify-between">
+      <!-- Dock 栏:悬停呼出,无全局热键 -->
+      <div class="flex items-center justify-between">
         <div>
-          <div class="text-sm">{{ item.label }}</div>
-          <div class="text-[10px] text-white/30">Phase2 开放,重启后生效</div>
+          <div class="text-sm">Dock 栏</div>
+          <div class="text-[10px] text-white/30">Phase2 开放,悬停呼出,重启后生效</div>
         </div>
         <button
           class="w-10 h-5 rounded-full relative transition-colors"
-          :class="store.cfg?.[item.key] ? 'bg-blue-500/80' : 'bg-white/10'"
-          @click="toggleModule(item.key)"
+          :class="store.cfg?.enable_dock ? 'bg-blue-500/80' : 'bg-white/10'"
+          @click="toggleModule('enable_dock')"
         >
           <span
             class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-            :class="store.cfg?.[item.key] ? 'left-[22px]' : 'left-0.5'"
+            :class="store.cfg?.enable_dock ? 'left-[22px]' : 'left-0.5'"
           />
         </button>
+      </div>
+
+      <!-- 文件抽屉:热键受模块开关门控,关闭时仅展示不生效 -->
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm">文件抽屉</div>
+            <div class="text-[10px] text-white/30">Phase2 开放,重启后生效</div>
+          </div>
+          <button
+            class="w-10 h-5 rounded-full relative transition-colors"
+            :class="store.cfg?.enable_file_drawer ? 'bg-blue-500/80' : 'bg-white/10'"
+            @click="toggleModule('enable_file_drawer')"
+          >
+            <span
+              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+              :class="store.cfg?.enable_file_drawer ? 'left-[22px]' : 'left-0.5'"
+            />
+          </button>
+        </div>
+        <div v-if="store.cfg" class="flex items-center gap-1.5">
+          <span class="text-xs text-white/50 w-16 shrink-0">抽屉热键</span>
+          <input
+            v-model="store.cfg.drawer_hotkey"
+            class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono"
+            @change="saveText"
+          />
+          <span class="text-[10px] text-white/30 shrink-0">重启后生效</span>
+        </div>
+        <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[10px] text-white/30 ml-[70px]">
+          模块关闭时不生效
+        </p>
+      </div>
+
+      <!-- 剪贴板历史:热键受模块开关门控,关闭时仅展示不生效 -->
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm">剪贴板历史</div>
+            <div class="text-[10px] text-white/30">Phase2 开放,重启后生效</div>
+          </div>
+          <button
+            class="w-10 h-5 rounded-full relative transition-colors"
+            :class="store.cfg?.enable_clipboard_history ? 'bg-blue-500/80' : 'bg-white/10'"
+            @click="toggleModule('enable_clipboard_history')"
+          >
+            <span
+              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+              :class="store.cfg?.enable_clipboard_history ? 'left-[22px]' : 'left-0.5'"
+            />
+          </button>
+        </div>
+        <div v-if="store.cfg" class="flex items-center gap-1.5">
+          <span class="text-xs text-white/50 w-16 shrink-0">剪贴板热键</span>
+          <input
+            v-model="store.cfg.hotkey_clipboard"
+            class="flex-1 min-w-0 text-xs bg-white/5 rounded px-2 py-1 outline-none focus:bg-white/10 font-mono"
+            @change="saveText"
+          />
+          <span class="text-[10px] text-white/30 shrink-0">重启后生效</span>
+        </div>
+        <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[10px] text-white/30 ml-[70px]">
+          模块关闭时不生效
+        </p>
       </div>
 
       <!-- 2.4 静态壁纸区块 -->
