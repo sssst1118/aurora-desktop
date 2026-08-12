@@ -469,12 +469,31 @@ async function uiaType() {
       </button>
     </div>
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-      <div>
-        <div class="text-xs text-[var(--aurora-text-dim)] mb-1">全局热键</div>
-        <div class="text-sm font-mono bg-[var(--aurora-field)] rounded px-2 py-1 inline-block">
-          {{ store.cfg?.hotkey_search ?? "Ctrl+Shift+Space" }}
+      <!-- 快捷键速查:搜索/抽屉/剪贴板三个快捷键一屏可见(抽屉/剪贴板键位可在各自区块修改) -->
+      <div class="bg-[var(--aurora-field)] rounded p-2.5 space-y-1.5">
+        <div class="text-xs text-[var(--aurora-text-dim)]">快捷键速查</div>
+        <div class="flex items-center justify-between text-xs">
+          <span>呼出搜索框</span>
+          <span
+            class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
+            >{{ store.cfg?.hotkey_search ?? "Ctrl+Shift+Space" }}</span
+          >
         </div>
-        <p class="text-[10px] text-[var(--aurora-text-dim)] mt-1">呼出/隐藏搜索框(固定快捷键,暂不可改)</p>
+        <div class="flex items-center justify-between text-xs">
+          <span>文件抽屉</span>
+          <span
+            class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
+            >{{ store.cfg?.drawer_hotkey ?? "Ctrl+Alt+D" }}</span
+          >
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span>剪贴板历史</span>
+          <span
+            class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
+            >{{ store.cfg?.hotkey_clipboard ?? "Ctrl+Alt+V" }}</span
+          >
+        </div>
+        <p class="text-[10px] text-[var(--aurora-text-dim)]">搜索框快捷键为固定值;抽屉/剪贴板可在各自区块修改</p>
       </div>
 
       <div class="flex items-center justify-between">

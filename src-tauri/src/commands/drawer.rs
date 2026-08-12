@@ -18,7 +18,14 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 use super::classify::{self, CATEGORY_ORDER};
+
+/// FILE_ATTRIBUTE_HIDDEN(0x2;文件管理器"隐藏"属性)
+#[cfg(windows)]
+const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
 
 /// 单次展示的文件/文件夹条目上限(防 WebView 渲染卡顿)
 pub const MAX_FILES: usize = 1500;
@@ -52,7 +59,25 @@ pub fn desktop_dir() -> Option<PathBuf> {
     known_folders::get_known_folder_path(known_folders::KnownFolder::Desktop)
 }
 
-/// 扫描指定目录**顶层**条目(非递归),按名称排序分组,超 [MAX_FILES] 截断。
+/// 隐藏判定:文件名以 . 开头(Unix 约定,如 .gitignore)或带 Windows 隐藏属性。
+/// 两种都滤,防"手动隐藏"与"点开头文件"漏网。
+fn is_hidden(meta: &std::fs::Metadata, name: &str) -> bool {
+    if name.starts_with('.') {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// 扫描指定目录**顶层**条目(非递归),按名称排序分组,超 [MAX_FILES] 截断;
+/// 隐藏文件/文件夹(属性隐藏或 . 开头)不显示。
 /// 目录不存在/不可读返回 Err;个别条目元数据读取失败时跳过。
 pub fn scan_dir(dir: &Path) -> Result<ScanResult, String> {
     let rd = std::fs::read_dir(dir).map_err(|e| format!("读取目录失败: {e}"))?;
@@ -81,6 +106,10 @@ pub fn scan_dir(dir: &Path) -> Result<ScanResult, String> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // 隐藏文件/文件夹不显示:Windows 隐藏属性 或 文件名以 . 开头(如 .gitignore)
+        if is_hidden(&meta, &name) {
+            continue;
+        }
         let category = classify::classify_file(&name, is_dir);
         let ext = p
             .extension()
@@ -356,21 +385,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // 手写 kernel32 声明(避免为单测加 windows-sys feature;与 system_sampler 手写 FFI 同款)
+    #[cfg(windows)]
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetFileAttributesW(lp_file_name: *const u16, dw_file_attributes: u32) -> i32;
+    }
+
+    /// 把文件设为 Windows 隐藏属性(用户手动"隐藏"场景)
+    #[cfg(windows)]
+    fn set_hidden_attr(p: &Path) {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = p.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            SetFileAttributesW(wide.as_ptr(), 0x2); // FILE_ATTRIBUTE_HIDDEN
+        }
+    }
+
+    /// 隐藏文件(. 开头或 Windows 隐藏属性)不显示;其余正常分类
     #[test]
-    fn hidden_file_lands_in_other_with_empty_ext() {
+    fn hidden_files_are_filtered_out() {
         let dir = tmp_dir("scan_hidden");
         write(&dir.join(".gitignore"), "node_modules");
         write(&dir.join("README"), "x");
+        #[cfg(windows)]
+        {
+            let secret = dir.join("secret.txt");
+            write(&secret, "x");
+            set_hidden_attr(&secret);
+        }
         let r = scan_dir(&dir).unwrap();
         let shown: usize = r.groups.iter().map(|g| g.files.len()).sum();
-        assert_eq!(shown, 2);
+        #[cfg(windows)]
+        assert_eq!(shown, 1, ".gitignore 与隐藏属性文件都应被过滤");
+        #[cfg(not(windows))]
+        assert_eq!(shown, 1, ".gitignore 应被过滤");
+        // 只剩 README,落在 other(无扩展名)
         let other = r
             .groups
             .iter()
             .find(|g| g.category == classify::CATEGORY_OTHER)
             .unwrap();
-        assert_eq!(other.files.len(), 2);
-        assert!(other.files.iter().any(|f| f.name == ".gitignore" && f.ext.is_empty()));
+        assert_eq!(other.files.len(), 1);
+        assert_eq!(other.files[0].name, "README");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
