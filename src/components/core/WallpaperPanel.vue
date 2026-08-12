@@ -91,22 +91,22 @@ onMounted(async () => {
 <template>
   <div class="space-y-3">
     <div>
-      <div class="text-xs text-white/50 mb-1">壁纸目录(留空 = 默认图片目录)</div>
+      <div class="text-xs text-[var(--aurora-text-dim)] mb-1">壁纸目录(留空 = 默认图片目录)</div>
       <div class="flex gap-2">
         <input
           v-model="dirInput"
-          class="flex-1 min-w-0 text-sm bg-white/5 rounded-lg px-3 py-1.5 outline-none focus:bg-white/10 placeholder:text-white/25"
+          class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-3 py-1.5 outline-none focus:bg-[var(--aurora-field)] placeholder:text-[var(--aurora-text-dim)]"
           placeholder="如 D:\Wallpapers"
           spellcheck="false"
         />
         <button
-          class="text-xs px-3 py-1.5 rounded-lg bg-blue-500/80 hover:bg-blue-500 text-white shrink-0"
+          class="text-xs px-3 py-1.5 rounded-lg bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white shrink-0"
           @click="saveDir"
         >
           应用目录
         </button>
         <button
-          class="text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 shrink-0"
+          class="text-xs px-3 py-1.5 rounded-lg bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] text-[var(--aurora-text)] shrink-0"
           :disabled="loading"
           @click="refresh"
         >
@@ -126,9 +126,9 @@ onMounted(async () => {
       <button
         v-for="entry in entries"
         :key="entry.path"
-        class="relative rounded-lg overflow-hidden bg-white/5 hover:bg-white/10 focus:outline-none focus:ring-1 focus:ring-blue-400/60 group text-left"
+        class="relative rounded-lg overflow-hidden bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] group text-left"
         :class="[
-          isCurrent(entry.path) ? 'ring-2 ring-blue-400/90' : '',
+          isCurrent(entry.path) ? 'ring-2 ring-[var(--aurora-accent)]' : '',
           applying === entry.path ? 'opacity-60' : '',
         ]"
         :title="entry.path"
@@ -145,14 +145,14 @@ onMounted(async () => {
           />
           <div
             v-else
-            class="w-full h-full flex items-center justify-center text-white/30 text-[10px] px-1 text-center"
+            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[10px] px-1 text-center"
           >
             预览不可用
           </div>
         </div>
         <span
           v-if="isCurrent(entry.path)"
-          class="absolute top-1 right-1 text-[9px] px-1.5 py-0.5 rounded bg-blue-500/90 text-white"
+          class="absolute top-1 right-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--aurora-accent)] text-white"
         >
           当前
         </span>
@@ -161,12 +161,12 @@ onMounted(async () => {
         >
           {{ entry.name }}
         </div>
-        <div class="px-1.5 pt-0.5 pb-1 text-[9px] text-white/35">
+        <div class="px-1.5 pt-0.5 pb-1 text-[9px] text-[var(--aurora-text-dim)]">
           {{ fmtSize(entry.size) }}
         </div>
       </button>
     </div>
-    <div v-else-if="!loading && !error" class="text-xs text-white/30 py-2 text-center">
+    <div v-else-if="!loading && !error" class="text-xs text-[var(--aurora-text-dim)] py-2 text-center">
       暂无壁纸图片
     </div>
   </div>

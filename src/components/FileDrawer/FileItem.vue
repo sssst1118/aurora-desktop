@@ -14,7 +14,7 @@ function open() {
 
 <template>
   <button
-    class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-white/80 hover:bg-white/10 hover:text-white transition-colors group"
+    class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[var(--aurora-text)] hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors group"
     :title="file.path"
     @click="open"
   >
@@ -22,7 +22,7 @@ function open() {
     <span class="flex-1 min-w-0 truncate text-left text-[13px]">{{ file.name }}</span>
     <span
       v-if="!file.is_dir && file.ext"
-      class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 group-hover:text-white/70"
+      class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-[var(--aurora-field)] text-[var(--aurora-text-dim)] group-hover:text-[var(--aurora-text)]"
     >
       {{ file.ext.toUpperCase() }}
     </span>

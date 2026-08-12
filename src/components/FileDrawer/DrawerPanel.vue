@@ -97,18 +97,18 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="w-full h-full flex flex-col bg-black/45 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden text-white/90 shadow-2xl"
+    class="w-full h-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-2xl border border-[var(--aurora-border)] overflow-hidden text-[var(--aurora-text)] shadow-2xl"
   >
     <!-- 头部(可拖动区域) -->
     <header
-      class="flex items-center gap-2.5 px-4 py-3 border-b border-white/10 shrink-0 cursor-move"
+      class="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--aurora-border)] shrink-0 cursor-move"
       data-tauri-drag-region
     >
       <span class="text-lg leading-none" data-tauri-drag-region>🗂️</span>
       <h1 class="text-sm font-medium tracking-wide" data-tauri-drag-region>
         桌面文件抽屉
       </h1>
-      <span class="text-xs text-white/50" data-tauri-drag-region>
+      <span class="text-xs text-[var(--aurora-text-dim)]" data-tauri-drag-region>
         共 {{ total }} 项
       </span>
       <span v-if="truncated" class="text-[10px] text-amber-300/80">
@@ -116,14 +116,14 @@ onUnmounted(() => {
       </span>
       <div class="ml-auto flex items-center gap-1">
         <button
-          class="w-7 h-7 rounded-lg text-sm text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+          class="w-7 h-7 rounded-lg text-sm text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors"
           title="刷新"
           @click="refresh"
         >
           🔄
         </button>
         <button
-          class="w-7 h-7 rounded-lg text-sm text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+          class="w-7 h-7 rounded-lg text-sm text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors"
           title="隐藏"
           @click="closeWindow"
         >
@@ -135,7 +135,7 @@ onUnmounted(() => {
     <div class="flex flex-1 min-h-0">
       <!-- 左侧分类 tab(带计数) -->
       <aside
-        class="w-32 shrink-0 border-r border-white/10 p-2 space-y-1 overflow-y-auto"
+        class="w-32 shrink-0 border-r border-[var(--aurora-border)] p-2 space-y-1 overflow-y-auto"
       >
         <button
           v-for="t in tabs"
@@ -143,15 +143,15 @@ onUnmounted(() => {
           class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors"
           :class="
             selected === t.category
-              ? 'bg-white/15 text-white'
-              : 'text-white/60 hover:bg-white/5'
+              ? 'bg-[var(--aurora-field)] text-[var(--aurora-text)]'
+              : 'text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)]'
           "
           @click="selected = t.category"
         >
           <span class="text-sm leading-none">{{ iconOf(t.category, false) }}</span>
           <span class="flex-1 min-w-0 text-left truncate">{{ t.category }}</span>
           <span
-            class="shrink-0 text-[10px] px-1.5 rounded-full bg-white/10 text-white/50"
+            class="shrink-0 text-[10px] px-1.5 rounded-full bg-[var(--aurora-field)] text-[var(--aurora-text-dim)]"
           >
             {{ t.count }}
           </span>
@@ -163,18 +163,18 @@ onUnmounted(() => {
         <!-- 加载中 -->
         <div
           v-if="loading"
-          class="flex-1 flex items-center justify-center text-xs text-white/40"
+          class="flex-1 flex items-center justify-center text-xs text-[var(--aurora-text-dim)]"
         >
           正在扫描桌面…
         </div>
         <!-- 空桌面空态 -->
         <div
           v-else-if="total === 0"
-          class="flex-1 flex flex-col items-center justify-center gap-1 text-white/50"
+          class="flex-1 flex flex-col items-center justify-center gap-1 text-[var(--aurora-text-dim)]"
         >
           <div class="text-3xl mb-1">✨</div>
           <div class="text-sm">桌面空空如也</div>
-          <div class="text-xs text-white/35">
+          <div class="text-xs text-[var(--aurora-text-dim)]">
             把文件放到桌面,它们会自动出现在这里
           </div>
         </div>
@@ -182,19 +182,19 @@ onUnmounted(() => {
         <template v-else>
           <section v-for="g in visibleGroups" :key="g.category" class="shrink-0">
             <button
-              class="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-white/5 transition-colors"
+              class="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-[var(--aurora-field)] transition-colors"
               @click="toggleCollapse(g.category)"
             >
               <span
-                class="text-[9px] text-white/40 transition-transform"
+                class="text-[9px] text-[var(--aurora-text-dim)] transition-transform"
                 :class="{ 'rotate-90': !collapsed.has(g.category) }"
               >
                 ▶
               </span>
               <span class="text-sm leading-none">{{ iconOf(g.category, false) }}</span>
-              <span class="text-xs font-medium text-white/80">{{ g.category }}</span>
+              <span class="text-xs font-medium text-[var(--aurora-text)]">{{ g.category }}</span>
               <span
-                class="text-[10px] px-1.5 rounded-full bg-white/10 text-white/50"
+                class="text-[10px] px-1.5 rounded-full bg-[var(--aurora-field)] text-[var(--aurora-text-dim)]"
               >
                 {{ g.files.length }}
               </span>

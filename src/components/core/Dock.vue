@@ -298,7 +298,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="relative h-full w-full select-none bg-black/40 backdrop-blur-md"
+    class="relative h-full w-full select-none bg-[var(--aurora-panel)] backdrop-blur-md"
     @click="closeMenu"
     @contextmenu.prevent="openMenu($event, null)"
   >
@@ -312,7 +312,7 @@ onUnmounted(() => {
         :key="it.path"
         class="group relative flex h-12 w-12 items-center justify-center rounded-xl transition-colors"
         :class="[
-          i === overIdx && dragIdx >= 0 ? 'bg-white/20' : 'hover:bg-white/10',
+          i === overIdx && dragIdx >= 0 ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]',
           dragIdx === i ? 'opacity-40' : '',
         ]"
         :draggable="true"
@@ -333,7 +333,7 @@ onUnmounted(() => {
         />
         <span
           v-else
-          class="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-sm font-medium text-white/70"
+          class="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--aurora-field)] text-sm font-medium text-[var(--aurora-text)]"
           >{{ pad(it.name.slice(0, 1)) }}</span
         >
         <!-- 运行中指示点 -->
@@ -343,7 +343,7 @@ onUnmounted(() => {
         ></span>
       </div>
 
-      <div v-if="items.length === 0" class="text-xs text-white/40 select-none">
+      <div v-if="items.length === 0" class="text-xs text-[var(--aurora-text-dim)] select-none">
         右键添加应用
       </div>
     </div>
@@ -351,26 +351,26 @@ onUnmounted(() => {
     <!-- 右键菜单(窗口扩展态下位于条目区内侧,不再 top-full/bottom-full 弹出窗外) -->
     <div
       v-if="menu"
-      class="absolute z-10 w-40 overflow-hidden rounded-lg border border-white/10 bg-black/70 backdrop-blur-md text-xs text-white/90 shadow-xl"
+      class="absolute z-10 w-40 overflow-hidden rounded-lg border border-[var(--aurora-border)] bg-[var(--aurora-panel)] backdrop-blur-md text-xs text-[var(--aurora-text)] shadow-xl"
       :class="position === 'bottom' ? 'bottom-20' : 'top-20'"
       :style="{ left: `${menu.x}px` }"
       @click.stop
     >
-      <button class="block w-full px-3 py-2 text-left hover:bg-white/10" @click="openAdd">
+      <button class="block w-full px-3 py-2 text-left hover:bg-[var(--aurora-field)]" @click="openAdd">
         ＋ 添加应用
       </button>
       <button
         v-if="menu.item"
-        class="block w-full px-3 py-2 text-left text-red-300 hover:bg-white/10"
+        class="block w-full px-3 py-2 text-left text-red-300 hover:bg-[var(--aurora-field)]"
         @click="removeItem(menu.item!)"
       >
         移除
       </button>
-      <div class="my-1 border-t border-white/10"></div>
-      <button class="block w-full px-3 py-2 text-left hover:bg-white/10" @click="togglePosition">
+      <div class="my-1 border-t border-[var(--aurora-border)]"></div>
+      <button class="block w-full px-3 py-2 text-left hover:bg-[var(--aurora-field)]" @click="togglePosition">
         {{ position === "top" ? "移到底部" : "移到顶部" }}
       </button>
-      <button class="block w-full px-3 py-2 text-left hover:bg-white/10" @click="toggleAutoHide">
+      <button class="block w-full px-3 py-2 text-left hover:bg-[var(--aurora-field)]" @click="toggleAutoHide">
         {{ autoHide ? "自动隐藏:开" : "自动隐藏:关" }}
       </button>
     </div>
@@ -378,13 +378,13 @@ onUnmounted(() => {
     <!-- 添加应用 mini 列表(扩展态下位于条目区内侧) -->
     <div
       v-if="addOpen"
-      class="absolute left-1/2 z-10 w-72 -translate-x-1/2 overflow-hidden rounded-lg border border-white/10 bg-black/70 backdrop-blur-md text-xs text-white/90 shadow-xl"
+      class="absolute left-1/2 z-10 w-72 -translate-x-1/2 overflow-hidden rounded-lg border border-[var(--aurora-border)] bg-[var(--aurora-panel)] backdrop-blur-md text-xs text-[var(--aurora-text)] shadow-xl"
       :class="position === 'bottom' ? 'bottom-20' : 'top-20'"
       @click.stop
     >
       <input
         v-model="addQuery"
-        class="w-full border-b border-white/10 bg-transparent px-3 py-2 outline-none placeholder:text-white/30"
+        class="w-full border-b border-[var(--aurora-border)] bg-transparent px-3 py-2 outline-none placeholder:text-[var(--aurora-text-dim)]"
         placeholder="搜索应用…"
         @input="searchApps(addQuery)"
       />
@@ -392,13 +392,13 @@ onUnmounted(() => {
         <button
           v-for="a in addResults"
           :key="a.path"
-          class="block w-full truncate px-3 py-1.5 text-left hover:bg-white/10"
+          class="block w-full truncate px-3 py-1.5 text-left hover:bg-[var(--aurora-field)]"
           :title="a.path"
           @click="addApp(a)"
         >
           {{ a.name }}
         </button>
-        <div v-if="addResults.length === 0" class="px-3 py-2 text-white/40">无匹配</div>
+        <div v-if="addResults.length === 0" class="px-3 py-2 text-[var(--aurora-text-dim)]">无匹配</div>
       </div>
     </div>
   </div>

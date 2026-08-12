@@ -90,21 +90,21 @@ function toggleSettings() {
 
 <template>
   <div
-    class="h-full w-full flex flex-col bg-black/70 backdrop-blur-xl rounded-xl overflow-hidden text-white"
+    class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)]"
   >
     <template v-if="!showSettings">
-      <div class="flex items-center gap-2 px-4 py-3 border-b border-white/10">
+      <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)]">
         <span>🔍</span>
         <input
           ref="inputEl"
           v-model="query"
-          class="flex-1 bg-transparent outline-none text-sm placeholder-white/40"
+          class="flex-1 bg-transparent outline-none text-sm placeholder:text-[var(--aurora-text-dim)]"
           placeholder="搜索应用…"
           @input="onInput"
           @keydown="onKeydown"
         />
         <button
-          class="text-white/40 hover:text-white/80 text-sm"
+          class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm"
           title="设置"
           @click="toggleSettings"
         >
@@ -112,14 +112,14 @@ function toggleSettings() {
         </button>
       </div>
       <div class="flex-1 overflow-y-auto py-1">
-        <div v-if="query.trim() && results.length === 0" class="px-4 py-3 text-xs text-white/40">
+        <div v-if="query.trim() && results.length === 0" class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]">
           无匹配结果
         </div>
         <div
           v-for="(item, i) in results"
           :key="item.path"
           class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
-          :class="i === selected ? 'bg-white/10' : ''"
+          :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
           @mouseenter="selected = i"
           @click="openSelected"
         >
@@ -127,7 +127,7 @@ function toggleSettings() {
           <span>{{ item.name }}</span>
         </div>
       </div>
-      <div class="px-4 py-2 text-[10px] text-white/30 border-t border-white/10">
+      <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">
         ↑↓ 选择 · Enter 打开 · Esc 关闭
       </div>
     </template>

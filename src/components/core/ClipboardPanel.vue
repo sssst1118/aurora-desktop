@@ -83,20 +83,20 @@ win.onFocusChanged(({ payload: focused }) => {
 
 <template>
   <div
-    class="h-full w-full flex flex-col bg-black/70 backdrop-blur-xl rounded-xl overflow-hidden text-white select-none"
+    class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)] select-none"
   >
     <!-- 标题栏:图标 + 搜索框 + 清空 -->
-    <div class="flex items-center gap-2 px-4 py-3 border-b border-white/10">
+    <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)]">
       <span class="text-sm">📋</span>
       <input
         ref="inputEl"
         v-model="store.keyword"
-        class="flex-1 bg-transparent outline-none text-sm placeholder-white/40"
+        class="flex-1 bg-transparent outline-none text-sm placeholder:text-[var(--aurora-text-dim)]"
         placeholder="搜索剪贴板历史…"
         @keydown="onKeydown"
       />
       <button
-        class="text-xs text-white/40 hover:text-white/80 shrink-0"
+        class="text-xs text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] shrink-0"
         title="清空历史(本地文件一并删除)"
         @click="clearAll"
       >
@@ -105,17 +105,17 @@ win.onFocusChanged(({ payload: focused }) => {
     </div>
     <!-- 历史列表 -->
     <div class="flex-1 overflow-y-auto py-1">
-      <div v-if="store.items.length === 0" class="px-4 py-6 text-center text-xs text-white/40">
+      <div v-if="store.items.length === 0" class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]">
         暂无历史,复制文本后自动记录
       </div>
-      <div v-else-if="list.length === 0" class="px-4 py-6 text-center text-xs text-white/40">
+      <div v-else-if="list.length === 0" class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]">
         无匹配结果
       </div>
       <div
         v-for="(entry, i) in list"
         :key="`${entry.item.ts}-${i}`"
         class="px-4 py-2 flex items-center gap-3 cursor-pointer"
-        :class="i === store.selected ? 'bg-white/10' : ''"
+        :class="i === store.selected ? 'bg-[var(--aurora-field)]' : ''"
         @mouseenter="store.selected = i"
         @click="copyBack(entry.index)"
       >
@@ -123,10 +123,10 @@ win.onFocusChanged(({ payload: focused }) => {
         <span class="flex-1 min-w-0 block text-sm truncate">
           {{ entry.item.tp === "image" ? entry.item.payload : summary(entry.item) }}
         </span>
-        <span class="text-[10px] text-white/40 shrink-0">{{ fmtTime(entry.item.ts) }}</span>
+        <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">{{ fmtTime(entry.item.ts) }}</span>
       </div>
     </div>
-    <div class="px-4 py-2 text-[10px] text-white/30 border-t border-white/10">
+    <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">
       ↑↓ 选择 · Enter 回贴 · Esc 关闭
     </div>
   </div>
