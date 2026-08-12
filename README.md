@@ -95,7 +95,7 @@ aurora-desktop/
 
 | Phase | Scope | Status |
 |---|---|---|
-| **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | 🚧 Code complete; manual acceptance pending |
+| **Phase 1** MVP | Project scaffolding, multi-window + tray, global-hotkey search, Start-menu indexing, basic settings, Island prototype — *usable as an advanced launcher* | ✅ Done (verified 2026-08-12) |
 | **Phase 2** Productivity | Dock, file drawer, clipboard history, static wallpapers, full system status | ✅ Done (manual GUI verification pending) |
 | **Phase 3** AI Integration | AI chat panel, DeepSeek / Ollama dual mode, function-call tool use | 🚧 Code complete; manual acceptance pending |
 | **Phase 4** Advanced | Dynamic wallpapers + battery downshift, keyboard/mouse simulation, UI Automation, theming, MSI packaging | ✅ Done (manual GUI verification pending) |
