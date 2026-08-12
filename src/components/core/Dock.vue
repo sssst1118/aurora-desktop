@@ -203,9 +203,11 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <!-- 整窗可拖后显式禁拖:图标点击/文件投放/排序拖拽放行(tauri 2.11 drag-region false 阻断祖先判定) -->
   <div
     class="relative flex items-center gap-1 border-t border-[var(--aurora-border)] px-2 py-1.5 min-h-14 select-none transition-colors"
     :class="fileDragOver ? 'bg-[var(--aurora-accent)]/20' : ''"
+    data-tauri-drag-region="false"
   >
     <!-- 文件拖入投放提示(悬停时浮在图标排上方) -->
     <div

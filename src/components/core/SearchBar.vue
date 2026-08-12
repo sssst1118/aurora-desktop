@@ -237,19 +237,17 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <!-- 整窗拖动(2026-08-12 用户需求:左上角小手柄反常识):根容器 data-tauri-drag-region="true"
+        = 点任意空白处直接拖动;Tauri 2.11 判定沿事件路径上溯,INPUT/BUTTON/TEXTAREA 等
+        可点击元素自动豁免(点输入框输入、点按钮点击不受影响);
+        滚动列表/Dock/Settings 内容区显式 "false" 禁拖(保护滚动条与交互控件) -->
   <div
     class="h-full w-full flex flex-col rounded-xl overflow-hidden text-[var(--aurora-text)] relative"
     :class="panelClass"
+    data-tauri-drag-region="true"
   >
-    <!-- 左上角拖动手柄(两个视图通用;数据原生拖动,不影响输入框点击) -->
-    <span
-      class="absolute top-0 left-0 z-20 h-9 w-8 flex items-center justify-center cursor-move text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]"
-      data-tauri-drag-region
-      title="按住拖动移动"
-      >⋮⋮</span
-    >
     <template v-if="!showSettings">
-      <div class="flex items-center gap-2 pl-10 pr-4 py-3 border-b border-[var(--aurora-border)]">
+      <div class="flex items-center gap-2 pl-4 pr-4 py-3 border-b border-[var(--aurora-border)]">
         <span>🔍</span>
         <input
           ref="inputEl"
@@ -267,7 +265,8 @@ onUnmounted(() => {
           ⚙
         </button>
       </div>
-      <div class="flex-1 overflow-y-auto py-1">
+      <!-- 结果列表禁拖:滚动条拖动/列表项点击放行 -->
+      <div class="flex-1 overflow-y-auto py-1" data-tauri-drag-region="false">
         <div v-if="query.trim() && results.length === 0" class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]">
           无匹配结果
         </div>

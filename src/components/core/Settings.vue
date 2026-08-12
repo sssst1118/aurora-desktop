@@ -476,7 +476,8 @@ async function uiaType() {
         ✕
       </button>
     </div>
-    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+    <!-- 内容区禁拖(设置项滚动/开关点击放行;标题栏留可拖,设置页也能拖窗口) -->
+    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4" data-tauri-drag-region="false">
       <!-- 快捷键速查:搜索/抽屉/剪贴板三个快捷键一屏可见(抽屉/剪贴板键位可在各自区块修改) -->
       <div class="bg-[var(--aurora-field)] rounded p-2.5 space-y-1.5">
         <div class="text-xs text-[var(--aurora-text-dim)]">快捷键速查</div>
