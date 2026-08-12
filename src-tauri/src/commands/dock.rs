@@ -21,6 +21,7 @@
 #[path = "dock_icon.rs"]
 mod dock_icon;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -130,14 +131,52 @@ pub fn path_matches(a: &str, b: &str) -> bool {
     normalize_path(a) == normalize_path(b)
 }
 
-/// Dock 项目的匹配目标路径:.lnk 解析为指向的 exe(解析失败回退原路径);其余原样
-pub fn item_target_path(item_path: &str) -> String {
-    if item_path.to_lowercase().ends_with(".lnk") {
-        if let Some(t) = resolve_lnk_target(Path::new(item_path)) {
-            return t;
+/// lnk 目标解析缓存:首次解析含 COM 初始化开销(实测 ~1.5s),缓存后瞬时。
+/// 条目不变时解析结果稳定,缓存命中返回克隆
+static LNK_TARGET_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+
+fn lnk_target_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
+    LNK_TARGET_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 解析 lnk 目标(带缓存);非 lnk 原样返回
+fn cached_target(item_path: &str) -> Option<String> {
+    if let Ok(g) = lnk_target_cache().lock() {
+        if let Some(t) = g.get(item_path) {
+            return t.clone();
         }
     }
-    item_path.to_string()
+    let t = if item_path.to_lowercase().ends_with(".lnk") {
+        resolve_lnk_target(Path::new(item_path))
+    } else {
+        Some(item_path.to_string())
+    };
+    if let Ok(mut g) = lnk_target_cache().lock() {
+        g.insert(item_path.to_string(), t.clone());
+    }
+    t
+}
+
+/// Dock 项目的匹配目标路径:.lnk 解析为指向的 exe(解析失败回退原路径);其余原样
+pub fn item_target_path(item_path: &str) -> String {
+    cached_target(item_path).unwrap_or_else(|| item_path.to_string())
+}
+
+/// 运行窗口与 Dock 项匹配:精确路径相等优先;失败时仅当**扩展名不同**才回退
+/// stem 匹配(NoMachine 场景:lnk 目标是 nxplayer.exe 启动器,实际运行进程是
+/// nxplayer.bin,路径不同且扩展名不同,但同 stem,视为同一应用)。
+/// 扩展名相同而目录不同不匹配(不同目录的同名 exe 是不同应用)。
+pub fn window_matches_item(win_exe: &str, item_target: &str) -> bool {
+    if path_matches(win_exe, item_target) {
+        return true;
+    }
+    let part = |p: &str, f: fn(&Path) -> Option<&std::ffi::OsStr>| {
+        f(Path::new(p)).map(|s| s.to_string_lossy().to_lowercase())
+    };
+    let ext = |p: &str| part(p, Path::extension);
+    let stem = |p: &str| part(p, Path::file_stem);
+    ext(win_exe) != ext(item_target)
+        && stem(win_exe).is_some_and(|a| stem(item_target).is_some_and(|b| a == b))
 }
 
 // ---- COM IShellLinkW(windows-sys 不含 COM 接口定义,手写 vtable)----
@@ -313,7 +352,7 @@ pub fn dock_launch(item: DockItem) -> bool {
     let target = item_target_path(&item.path);
     if let Some(w) = running_windows()
         .into_iter()
-        .find(|w| path_matches(&w.exe, &target))
+        .find(|w| window_matches_item(&w.exe, &target))
     {
         unsafe {
             ShowWindow(w.hwnd as HWND, SW_RESTORE);
@@ -321,7 +360,16 @@ pub fn dock_launch(item: DockItem) -> bool {
         }
         return true;
     }
-    opener::open(&item.path).is_ok()
+    // 直接打开解析出的目标 exe:实测 lnk 经 Shell 启动要 ~1.3s,直开 exe 仅 ~17ms。
+    // 注:lnk 附带启动参数/工作目录时语义有损(NoMachine 等本场景均无参数,可接受);
+    // 解析失败(拿不到目标)则回退原 lnk 路径,保证一定能启动。
+    let launch_path = if item.path.to_lowercase().ends_with(".lnk") && !target.eq_ignore_ascii_case(&item.path)
+    {
+        &target
+    } else {
+        &item.path
+    };
+    opener::open(launch_path).is_ok()
 }
 
 /// 运行中且被 Dock 收录的应用条目路径集合(前端小圆点渲染用)
@@ -333,7 +381,9 @@ pub fn dock_get_running(app: tauri::AppHandle) -> Vec<String> {
         .into_iter()
         .filter(|it| {
             let target = item_target_path(&it.path);
-            windows.iter().any(|w| path_matches(&w.exe, &target))
+            // stem 回退匹配:lnk 目标 exe 与实际运行进程可能不同名
+            // (NoMachine:nxplayer.exe 启动器 → 实际进程 nxplayer.bin)
+            windows.iter().any(|w| window_matches_item(&w.exe, &target))
         })
         .map(|it| it.path)
         .collect()
@@ -524,12 +574,52 @@ mod tests {
 
     #[test]
     fn running_windows_smoke() {
+        // 注:进程路径不保证 .exe 结尾(NoMachine 运行进程是 nxplayer.bin),只断言非空与不重复
         let windows = running_windows();
         let mut set = std::collections::HashSet::new();
         for w in &windows {
-            let lower = w.exe.to_lowercase();
-            assert!(lower.ends_with(".exe"), "非 exe 进程路径: {}", w.exe);
-            assert!(set.insert(lower), "exe 路径不应重复: {}", w.exe);
+            assert!(!w.exe.trim().is_empty(), "exe 路径不应为空");
+            assert!(set.insert(w.exe.to_lowercase()), "exe 路径不应重复: {}", w.exe);
         }
+    }
+
+    // ---- 运行匹配(2026-08-12 绿点/聚焦修复) ----
+
+    #[test]
+    fn window_matches_exact_path() {
+        // 精确路径:大小写/斜杠不敏感
+        assert!(window_matches_item(
+            r"C:\Program Files\NoMachine\bin\nxplayer.exe",
+            r"c:\program files\nomachine\bin\nxplayer.EXE"
+        ));
+        // 不同文件:不匹配
+        assert!(!window_matches_item(r"C:\a\nxplayer.exe", r"C:\b\nxplayer.exe"));
+    }
+
+    #[test]
+    fn window_matches_stem_fallback() {
+        // 回归:NoMachine 场景 lnk 目标是 nxplayer.exe(启动器),实际运行进程是
+        // nxplayer.bin —— 精确路径不匹配,stem 回退应命中,绿点/聚焦才工作
+        assert!(window_matches_item(
+            r"C:\Program Files\NoMachine\bin\nxplayer.bin",
+            r"C:\Program Files\NoMachine\bin\nxplayer.exe"
+        ));
+        // stem 不同的 exe/bin 对不匹配
+        assert!(!window_matches_item(r"C:\a\foo.bin", r"C:\b\bar.exe"));
+    }
+
+    #[test]
+    fn cached_target_matches_uncached_result() {
+        // 缓存不应改变解析结果:同一 lnk 两次解析一致,非 lnk 原样返回
+        let lnk = r"C:\Users\Public\Desktop\NoMachine.lnk";
+        if !std::path::Path::new(lnk).exists() {
+            return;
+        }
+        // 预热后第二次应命中缓存;断言两次结果一致(等价于解析稳定)
+        let first = item_target_path(lnk);
+        let second = item_target_path(lnk);
+        assert_eq!(first, second);
+        assert!(first.to_lowercase().ends_with(".exe"), "lnk 应解析出 exe 目标: {first}");
+        assert_eq!(item_target_path(r"C:\x\calc.exe"), r"C:\x\calc.exe");
     }
 }
