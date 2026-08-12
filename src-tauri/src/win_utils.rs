@@ -35,16 +35,30 @@ pub fn toggle_search_window(app: &AppHandle) {
     }
 }
 
+/// 恢复常驻窗口(island/dock/按配置的 drawer),不显示瞬态窗口
+/// (search/ai_panel/clipboard 靠热键/点击呼出,显示全部不应把它们带出来)
 pub fn show_all(app: &AppHandle) {
-    for label in ["island", "search"] {
-        if let Some(win) = app.get_webview_window(label) {
+    let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(app));
+    if cfg.enable_island {
+        if let Some(win) = app.get_webview_window("island") {
+            let _ = win.show();
+        }
+    }
+    if cfg.enable_dock {
+        if let Some(win) = app.get_webview_window("dock") {
+            let _ = win.show();
+        }
+    }
+    if cfg.enable_file_drawer && cfg.drawer_open_on_launch {
+        if let Some(win) = app.get_webview_window("drawer") {
             let _ = win.show();
         }
     }
 }
 
+/// 隐藏全部交互窗口(wallpaper 壁纸渲染窗口不受托盘管理,不参与)
 pub fn hide_all(app: &AppHandle) {
-    for label in ["island", "search"] {
+    for label in ["island", "search", "dock", "drawer", "clipboard", "ai_panel"] {
         if let Some(win) = app.get_webview_window(label) {
             let _ = win.hide();
         }
