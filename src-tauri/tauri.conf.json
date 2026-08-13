@@ -93,7 +93,8 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; media-src asset: http://asset.localhost data: blob:; connect-src ipc: http://ipc.localhost; font-src 'self' data:",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; media-src asset: http://asset.localhost data: blob:; connect-src ipc: http://ipc.localhost ws://localhost:1420; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
         "scope": ["$HOME/Pictures/**"]

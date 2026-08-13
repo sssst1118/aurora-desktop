@@ -2,10 +2,11 @@
 //!
 //! - 更新源:远端 latest.json(GitHub Releases 或自建静态服务,地址可配置);
 //! - 版本比较:自实现语义化(x.y.z 逐段,不可解析段按 0,忽略预发布后缀);
-//! - 下载:SHA-256 校验(sha2 crate,防中间人;签名证书未采购前的替代防线);
+//! - 下载:分块流式落盘 + SHA-256 校验(sha2 crate,防中间人;签名证书未采购前的替代防线);
 //! - 安装:退出 app 前 spawn cmd 包装脚本(等安装器静默完成 → 启动新版本)。
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpdateInfo {
@@ -58,8 +59,27 @@ pub fn sha256_hex(path: &std::path::Path) -> Result<String, String> {
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// 下载到 dest(5 分钟总超时;请求失败/写失败 → Err;调用方负责 sha256 校验与清理)
-pub fn download_update(url: &str, dest: &std::path::Path) -> Result<(), String> {
+/// 下载进度回调契约(update-progress 事件 payload;由 download_update 逐块回调):
+/// downloaded_bytes = 已落盘字节数;total_bytes = 响应 Content-Length(缺失为 None);
+/// percent = 已下载占比 0.0-1.0(total 未知为 None)
+#[derive(Clone, Debug, Serialize)]
+pub struct UpdateProgress {
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<f64>,
+}
+
+/// 分块流式下载到 dest(5 分钟总超时;请求失败/写失败 → Err;调用方负责 sha256 校验与清理)。
+///
+/// 2026-08-13 审计整改:原实现 resp.bytes() 把安装包全量载入内存再落盘(几十 MB 常驻),
+/// 改为 chunk 流式逐块写文件,内存占用 O(单块)。每写完一块同步回调一次
+/// on_progress(downloaded, total)(内部 block_on,回调在调用线程执行),total 取
+/// Content-Length(缺失传 0,调用方按未知处理)。失败可能留下半成品文件,由调用方清理。
+pub fn download_update<F: FnMut(u64, u64)>(
+    url: &str,
+    dest: &std::path::Path,
+    mut on_progress: F,
+) -> Result<(), String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -69,12 +89,25 @@ pub fn download_update(url: &str, dest: &std::path::Path) -> Result<(), String> 
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| format!("创建请求客户端失败: {e}"))?;
-        let resp = client.get(url).send().await.map_err(|e| format!("下载失败: {e}"))?;
+        let mut resp = client.get(url).send().await.map_err(|e| format!("下载失败: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("下载失败: HTTP {}", resp.status()));
         }
-        let bytes = resp.bytes().await.map_err(|e| format!("读取响应失败: {e}"))?;
-        std::fs::write(dest, &bytes).map_err(|e| format!("写入文件失败: {e}"))
+        let total = resp.content_length().unwrap_or(0);
+        let mut file = std::fs::File::create(dest).map_err(|e| format!("创建文件失败: {e}"))?;
+        let mut downloaded: u64 = 0;
+        loop {
+            // resp.chunk():reqwest 逐块读取响应体(每块几 KB~64KB),不整体缓冲
+            let Some(chunk) =
+                resp.chunk().await.map_err(|e| format!("读取响应失败: {e}"))?
+            else {
+                break; // 响应体结束
+            };
+            file.write_all(&chunk).map_err(|e| format!("写入文件失败: {e}"))?;
+            downloaded += chunk.len() as u64;
+            on_progress(downloaded, total);
+        }
+        Ok(())
     })
 }
 
@@ -131,5 +164,49 @@ mod tests {
     fn sha256_hex_missing_file_err() {
         let p = std::env::temp_dir().join("aurora_sha_none.bin");
         assert!(sha256_hex(&p).is_err());
+    }
+
+    #[test]
+    fn download_update_streams_chunks_with_progress() {
+        // 本地极简 HTTP 服务器(线程):返回固定字节流 + Content-Length,验证流式
+        // 落盘与进度回调契约(downloaded 单调递增、末次 == total;127.0.0.1 回环,
+        // reqwest 未开 proxy feature 不走代理,测试无外网依赖)
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let body_for_server = body.clone();
+        let server = std::thread::spawn(move || {
+            use std::io::Read;
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf); // 读请求头即可,不校验内容
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body_for_server.len()
+            );
+            sock.write_all(head.as_bytes()).unwrap();
+            sock.write_all(&body_for_server).unwrap();
+        });
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dest = std::env::temp_dir().join(format!("aurora_upd_dl_{nanos}.bin"));
+        let mut events: Vec<(u64, u64)> = Vec::new();
+        download_update(&format!("http://{addr}/Aurora_setup.exe"), &dest, |d, t| {
+            events.push((d, t));
+        })
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), body, "落盘内容必须与响应体一致");
+        assert!(!events.is_empty(), "分块回调至少一次");
+        let last = events.last().unwrap();
+        assert_eq!(last.0, body.len() as u64, "末次 downloaded == 总字节数");
+        assert_eq!(last.1, body.len() as u64, "total 取自 Content-Length");
+        // 进度单调递增(流式无回退)
+        for w in events.windows(2) {
+            assert!(w[1].0 >= w[0].0, "downloaded 必须单调递增");
+        }
+        let _ = std::fs::remove_file(&dest);
     }
 }

@@ -1,8 +1,10 @@
 //! 5.1 自动更新命令层(四命令 + 事件;实现层在 updater.rs)
 //!
 //! - update_check:拉 latest.json 对比当前版本,latest/available/error 三态;
-//! - update_download:下载安装包到 %LOCALAPPDATA%\Aurora\updates,SHA-256 校验,
-//!   已下载且校验通过幂等直接完成;进度/结果经 update-progress / update-downloaded 事件;
+//! - update_download:流式下载安装包到 %LOCALAPPDATA%\Aurora\updates,SHA-256 校验,
+//!   已下载且校验通过幂等直接完成;进度经 update-progress 事件、结果经
+//!   update-downloaded 事件(前端 Settings.vue 暂只订阅 update-downloaded,
+//!   update-progress 已由后端节流发出,前端接上即可显示下载进度);
 //! - update_install:spawn cmd 包装脚本(等静默安装完成 → 启动新版本),然后退出 app;
 //! - update_open_folder:打开下载目录(手动安装兜底)。
 //! 自研(不引 tauri-plugin-updater——其要求安装包证书签名;签名证书未采购前以
@@ -13,7 +15,7 @@ use tauri::{AppHandle, Emitter};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::updater::{self, UpdateInfo};
+use crate::updater::{self, UpdateInfo, UpdateProgress};
 
 /// 当前应用版本(与 tauri.conf.json version 一致;编译期注入)
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -162,7 +164,8 @@ pub async fn update_check(app: AppHandle) -> UpdateCheckResult {
     }
 }
 
-/// 下载新版安装包(需先 check 到 available);进度经 update-progress 事件;完成 emit update-downloaded
+/// 下载新版安装包(需先 check 到 available);流式下载,进度经 update-progress 事件
+/// (节流上报;前端暂未订阅,契约已就位);完成 emit update-downloaded
 #[tauri::command(rename = "update_download")]
 pub async fn update_download(app: AppHandle) -> Result<(), String> {
     let cfg = load_cfg(&app);
@@ -202,7 +205,32 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
         );
         return Ok(());
     }
-    updater::download_update(&info.url, &dest).map_err(|e| {
+    // 流式下载 + 进度上报(节流:每 ≥1% 或 ≥512KB 报一次,防小块高频事件风暴;
+    // total 未知(无 Content-Length)时按 512KB 固定步长上报,percent 为 None)
+    let app_for_progress = app.clone();
+    let mut last_reported: u64 = 0;
+    updater::download_update(&info.url, &dest, move |downloaded, total| {
+        let step = (total / 100).max(512 * 1024);
+        if downloaded == total || downloaded - last_reported >= step {
+            last_reported = downloaded;
+            let _ = app_for_progress.emit(
+                "update-progress",
+                &UpdateProgress {
+                    downloaded_bytes: downloaded,
+                    total_bytes: if total > 0 { Some(total) } else { None },
+                    percent: if total > 0 {
+                        Some(downloaded as f64 / total as f64)
+                    } else {
+                        None
+                    },
+                },
+            );
+        }
+    })
+    .map_err(|e| {
+        // 流式失败可能留下半成品文件:删除(哈希本就不符会被拒,这里提前清理保持
+        // updates 目录干净;下次重试会重新下载覆盖)
+        let _ = std::fs::remove_file(&dest);
         let _ = app.emit("update-error", &serde_json::json!({ "message": e }));
         e
     })?;

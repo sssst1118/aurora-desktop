@@ -12,9 +12,11 @@
 //!   ⚠️ 安全加固:html 已移出白名单——Pictures 内 html 经 asset 协议加载会与前端同源,
 //!   可调用全部后端命令(读剪贴板/写配置/执行程序),属高危注入面,一律拒绝;
 //! - URL 两段式(设计 §1.5):默认 Pictures 内素材走 asset 协议(前端 convertFileSrc,
-//!   url=None);目录外素材由 set 命令后端读文件转 base64 data URL(≤50MB,超出报错提示
-//!   放 Pictures 下)。base64 无依赖手写(Cargo.toml 属集成 agent 不可加依赖,
-//!   与 2.5 手写等价 FFI 同风格)。
+//!   url=None);目录外素材由 set 命令后端读文件转 base64 data URL(≤20MB,超出报错提示
+//!   放 Pictures 下;上限取舍:20MB 已覆盖常见单视频壁纸,data URL 经 IPC 传前端且
+//!   base64 膨胀 4/3,原 50MB 会产生约 67MB 的 IPC 载荷压内存拖慢链路,超限一律
+//!   建议挪进 Pictures 走 asset 协议)。base64 无依赖手写(Cargo.toml 属集成 agent
+//!   不可加依赖,与 2.5 手写等价 FFI 同风格)。
 //!
 //! windows-sys 0.59 feature 门控(集成 agent 已在 Cargo.toml 启用):
 //! - Win32_System_Power:GetSystemPowerStatus / SYSTEM_POWER_STATUS;
@@ -50,8 +52,10 @@ pub const DYNAMIC_EXT_WHITELIST: [&str; 10] = [
 ];
 /// 列表展示上限(有节制,不扫全盘)
 const MAX_DYNAMIC_LIST: usize = 100;
-/// 目录外素材走 data URL 的体积上限(50MB,与视频壁纸素材量级匹配)
-const MAX_DATA_URL_BYTES: u64 = 50 * 1024 * 1024;
+/// 目录外素材走 data URL 的体积上限(20MB;2026-08-13 审计收紧:原 50MB 经 base64
+/// 膨胀后约 67MB 走 IPC 到前端,载荷过大;单视频壁纸 20MB 以内已覆盖常见素材,
+/// 超过提示用户挪进 Pictures 走 asset 协议,无 IPC 载荷)
+const MAX_DATA_URL_BYTES: u64 = 20 * 1024 * 1024;
 
 /// 注入互斥锁(并发修复 2026-08-13,M10)。
 ///
@@ -678,7 +682,7 @@ fn path_in_dir(path: &Path, dir: &Path) -> bool {
 
 /// 素材 URL 两段式(纯函数,可单测):
 /// 素材在默认图片目录(Pictures)内 → Ok(None)(前端用 convertFileSrc 走 asset 协议);
-/// 目录外 → 后端读文件转 base64 data URL(≤50MB,超出报错提示放 Pictures 下)。
+/// 目录外 → 后端读文件转 base64 data URL(≤20MB,超出报错提示放 Pictures 下)。
 /// 安全加固:html/htm 一律拒绝——asset 协议加载 html 与前端同源可注入 IPC,
 /// 即使绕过 validate_set_args 也不能生成 data:text/html URL
 pub fn resolve_material_url(path: &str, default_pictures: &Path) -> Result<Option<String>, String> {
@@ -695,7 +699,7 @@ pub fn resolve_material_url(path: &str, default_pictures: &Path) -> Result<Optio
     }
     let meta = std::fs::metadata(path).map_err(|e| format!("读取素材失败: {e}"))?;
     if meta.len() > MAX_DATA_URL_BYTES {
-        return Err("素材超过 50MB,请放到默认图片目录(Pictures)下使用".to_string());
+        return Err("素材超过 20MB,请放到默认图片目录(Pictures)下使用".to_string());
     }
     let bytes = std::fs::read(path).map_err(|e| format!("读取素材失败: {e}"))?;
     Ok(Some(format!(
@@ -996,7 +1000,7 @@ mod tests {
         std::fs::write(&big, vec![0u8; (MAX_DATA_URL_BYTES + 1) as usize]).unwrap();
         let r = resolve_material_url(&big.to_string_lossy(), &pictures);
         assert!(r.is_err());
-        assert!(r.unwrap_err().contains("50MB"));
+        assert!(r.unwrap_err().contains("20MB"));
         let _ = std::fs::remove_dir_all(&pictures);
         let _ = std::fs::remove_dir_all(&outside);
     }
