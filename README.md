@@ -9,7 +9,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 
 ## ✨ Highlights
 
-- **⚡ Global Search** — Summon with `Ctrl+Shift+Space` and launch any Start-menu app in seconds, Enter to go
+- **⚡ Global Search** — Summon with `Ctrl+Shift+Space` and launch any Start-menu app in seconds, Enter to go; pinyin-aware matching for Chinese apps (`jsq` → 计算器); files searchable right in the box
 - **🌌 Island** — A persistent panel at the top of your screen: time, CPU, memory, network speed at a glance; always on top without stealing focus
 - **📁 File Drawer** — Desktop files auto-sorted by type, refreshed on change — a tidy desktop, always
 - **📋 Clipboard History** — Every copy auto-recorded, searchable, one-click re-paste, persisted across reboots
@@ -20,6 +20,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 - **🎨 Themes** — Light / dark / follow-system with 4 accent colors, applied to every window instantly
 - **🔄 Auto Update** — In-app check, download, one-click upgrade with SHA-256 verification
 - **🔒 Private & Light** — API keys stored locally only; idle memory under 120MB; zero background waste
+- **🚀 Daily Driver Ready** — Start with Windows, first-run onboarding, one-click config export/import, crash logs for support, atomic config writes
 
 ## 💻 System Requirements
 
