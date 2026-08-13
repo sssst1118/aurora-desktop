@@ -122,7 +122,7 @@ onUnmounted(() => {
       <span class="text-xs text-[var(--aurora-text-dim)]" data-tauri-drag-region>
         共 {{ total }} 项
       </span>
-      <span v-if="truncated" class="text-[10px] text-amber-300/80">
+      <span v-if="truncated" class="text-[10px] text-[var(--aurora-warn)]">
         仅显示前 {{ MAX_FILES }} 项
       </span>
       <div class="ml-auto flex items-center gap-1">

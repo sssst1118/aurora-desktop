@@ -5,7 +5,7 @@
 // $USERPROFILE 不识别会当字面路径)且无运行时扩展授权 API,自定义壁纸目录(如
 // C:\ProgramData\Lenovo\Themes)一律 403 预览全挂;改为后端缩略图命令
 // wallpaper_thumbnail:任意目录均可读,缩到 480px JPEG base64 data URI 传回。
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useConfigStore } from "../../stores/config";
 
@@ -50,6 +50,23 @@ async function loadThumb(path: string) {
   }
 }
 
+/** 缩略图拉取并发上限:数百张全量并发会拥堵 IPC,信号量限流分批 */
+const THUMB_CONCURRENCY = 4;
+
+/** 固定并发拉取缩略图:N 个 worker 各自取下一个路径直到取完(失败不阻塞后续) */
+async function loadThumbs(paths: string[]) {
+  const total = paths.length;
+  if (total === 0) return;
+  let next = 0;
+  const worker = async () => {
+    while (next < total) {
+      await loadThumb(paths[next++]);
+    }
+  };
+  const n = Math.min(THUMB_CONCURRENCY, total);
+  await Promise.all(Array.from({ length: n }, () => worker()));
+}
+
 async function refresh() {
   loading.value = true;
   error.value = "";
@@ -58,7 +75,8 @@ async function refresh() {
     currentPath.value = await invoke<string | null>("wallpaper_get_current");
     thumbs.value = {};
     thumbErrors.value = {};
-    for (const e of entries.value) void loadThumb(e.path);
+    // 缩略图后台 4 路并发拉取,不阻塞列表展示(loading 只管列表本身)
+    void loadThumbs(entries.value.map((e) => e.path));
     if (entries.value.length === 0) {
       error.value = `目录中没有可用图片:${store.cfg?.wallpaper_dir ?? "默认目录"}`;
     }
@@ -99,9 +117,18 @@ async function apply(path: string) {
   }
 }
 
-onMounted(async () => {
-  await store.load();
-  dirInput.value = store.cfg?.wallpaper_dir ?? "";
+onMounted(() => {
+  // 配置由 Settings 统一加载(本组件不再重复 store.load());
+  // 子组件 mounted 先于 Settings,cfg 可能尚未就绪,watch 等它回填目录输入框一次
+  const stopSync = watch(
+    () => store.cfg?.wallpaper_dir,
+    (v) => {
+      if (v === undefined) return; // cfg 未加载完成,继续等
+      dirInput.value = v ?? "";
+      stopSync();
+    },
+    { immediate: true },
+  );
   void refresh();
 });
 
@@ -137,10 +164,10 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="error" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+    <div v-if="error" class="wp-msg wp-msg-danger text-xs rounded-lg px-3 py-1.5">
       {{ error }}
     </div>
-    <div v-else-if="notice" class="text-xs text-emerald-300 bg-emerald-500/10 rounded-lg px-3 py-1.5">
+    <div v-else-if="notice" class="wp-msg wp-msg-success text-xs rounded-lg px-3 py-1.5">
       {{ notice }}
     </div>
 
@@ -197,3 +224,16 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 语义色令牌透明底变体:令牌值由 global.css 提供(hex/rgba 均兼容);
+ * Tailwind 的 /opacity 修饰对 var() 任意值不生成样式,用 color-mix 兜底 */
+.wp-msg-danger {
+  background: color-mix(in srgb, var(--aurora-danger) 10%, transparent);
+  color: var(--aurora-danger);
+}
+.wp-msg-success {
+  background: color-mix(in srgb, var(--aurora-success) 10%, transparent);
+  color: var(--aurora-success);
+}
+</style>

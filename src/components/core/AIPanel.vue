@@ -12,6 +12,7 @@
 import { ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { writeText } from "tauri-plugin-clipboard-api";
 import { useAiChat } from "../../composables/useAiChat";
 
 const { messages, streaming, error, send, stop, clear } = useAiChat();
@@ -19,6 +20,9 @@ const { messages, streaming, error, send, stop, clear } = useAiChat();
 const input = ref("");
 const inputEl = ref<HTMLTextAreaElement | null>(null);
 const listEl = ref<HTMLDivElement | null>(null);
+// 刚复制完的消息下标(按钮短暂显示 ✓)
+const copiedIdx = ref<number | null>(null);
+let copiedTimer: number | undefined;
 
 /** 打开设置:Settings 内嵌在 search 窗口的 SearchBar(Phase2 模式),走 open_search 命令呼出 */
 function openSettings() {
@@ -36,15 +40,36 @@ function submit() {
   void send(t);
 }
 
+/** 停止流式输出:先停再推一条 tool 角色"已停止"chip(复用 §2.4 工具动作展示) */
+function stopWithFeedback() {
+  if (!streaming.value) return;
+  stop();
+  messages.value.push({ role: "tool", content: "已停止" });
+}
+
+/** 复制消息文本到系统剪贴板(插件 writeText,权限已授权);按钮短暂显示 ✓ */
+async function copyMessage(i: number, content: string) {
+  try {
+    await writeText(content);
+    copiedIdx.value = i;
+    if (copiedTimer) window.clearTimeout(copiedTimer);
+    copiedTimer = window.setTimeout(() => {
+      copiedIdx.value = null;
+    }, 1200);
+  } catch (e) {
+    console.error("clipboard writeText failed", e);
+  }
+}
+
 function onClickSend() {
-  if (streaming.value) stop();
+  if (streaming.value) stopWithFeedback();
   else submit();
 }
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    if (streaming.value) stop();
+    if (streaming.value) stopWithFeedback();
     else submit();
   }
 }
@@ -81,6 +106,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unlistenShow?.();
+  if (copiedTimer) window.clearTimeout(copiedTimer);
 });
 
 interface Block {
@@ -131,13 +157,17 @@ function splitBlocks(text: string): Block[] {
       </button>
     </div>
 
-    <!-- 错误条(可关闭) -->
+    <!-- 错误条(可关闭;语义色令牌 ai-error 见下方 style) -->
     <div
       v-if="error"
-      class="mx-3 mt-2 px-3 py-2 rounded-lg bg-red-500/15 border border-red-500/30 text-red-300 text-xs flex items-center gap-2 shrink-0"
+      class="mx-3 mt-2 px-3 py-2 rounded-lg ai-error text-xs flex items-center gap-2 shrink-0"
     >
       <span class="flex-1 break-all">{{ error }}</span>
-      <button class="text-red-300/70 hover:text-red-300 shrink-0" title="关闭" @click="dismissError">
+      <button
+        class="text-[var(--aurora-danger)] opacity-70 hover:opacity-100 shrink-0"
+        title="关闭"
+        @click="dismissError"
+      >
         ✕
       </button>
     </div>
@@ -152,27 +182,40 @@ function splitBlocks(text: string): Block[] {
       </div>
 
       <template v-for="(m, i) in messages" :key="i">
-        <!-- 工具动作 chip(§2.4) -->
+        <!-- 工具动作 chip(§2.4;含"已停止"反馈,同样式) -->
         <div v-if="m.role === 'tool'" class="flex justify-center">
           <div
-            class="max-w-[90%] px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-200/90 text-[11px] truncate"
+            class="max-w-[90%] px-2.5 py-1 rounded-full ai-tool-chip text-[11px] truncate"
             :title="m.content"
           >
             {{ m.content }}
           </div>
         </div>
 
-        <!-- 用户消息(右) -->
-        <div v-else-if="m.role === 'user'" class="flex justify-end">
+        <!-- 用户消息(右,气泡 + 复制按钮) -->
+        <div v-else-if="m.role === 'user'" class="flex justify-end items-start group gap-1.5">
+          <button
+            v-if="m.content"
+            class="hidden group-hover:flex items-center justify-center w-6 h-6 shrink-0 rounded-md text-[11px] transition-colors"
+            :class="
+              copiedIdx === i
+                ? 'text-[var(--aurora-success)]'
+                : 'text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] hover:bg-[var(--aurora-field)]'
+            "
+            :title="copiedIdx === i ? '已复制' : '复制内容'"
+            @click="copyMessage(i, m.content)"
+          >
+            {{ copiedIdx === i ? "✓" : "📋" }}
+          </button>
           <div
-            class="max-w-[85%] px-3 py-2 rounded-lg bg-blue-500/20 border border-blue-500/25 text-sm whitespace-pre-wrap break-words"
+            class="ai-user-bubble max-w-[85%] px-3 py-2 rounded-lg text-sm whitespace-pre-wrap break-words"
           >
             {{ m.content }}
           </div>
         </div>
 
-        <!-- 助手消息(左,纯文本 + 代码块) -->
-        <div v-else-if="m.role === 'assistant'" class="flex justify-start">
+        <!-- 助手消息(左,纯文本 + 代码块 + 复制按钮) -->
+        <div v-else-if="m.role === 'assistant'" class="flex justify-start items-start group gap-1.5">
           <div
             class="max-w-[85%] px-3 py-2 rounded-lg bg-[var(--aurora-field)] border border-[var(--aurora-border)] text-sm leading-relaxed min-w-0"
           >
@@ -180,7 +223,7 @@ function splitBlocks(text: string): Block[] {
               <template v-for="(b, j) in splitBlocks(m.content)" :key="j">
                 <pre
                   v-if="b.code"
-                  class="mt-1 mb-1 p-2 rounded bg-black/50 border border-[var(--aurora-border)] text-xs overflow-x-auto font-mono text-emerald-200/90"
+                  class="mt-1 mb-1 p-2 rounded bg-black/50 border border-[var(--aurora-border)] text-xs overflow-x-auto font-mono text-[var(--aurora-success)]"
                   >{{ b.text }}</pre
                 >
                 <p v-else class="whitespace-pre-wrap break-words">{{ b.text }}</p>
@@ -191,6 +234,19 @@ function splitBlocks(text: string): Block[] {
               class="inline-block w-[6px] h-[14px] bg-[var(--aurora-accent)] align-text-bottom ml-0.5 animate-pulse"
             ></span>
           </div>
+          <button
+            v-if="m.content"
+            class="hidden group-hover:flex items-center justify-center w-6 h-6 shrink-0 rounded-md text-[11px] transition-colors"
+            :class="
+              copiedIdx === i
+                ? 'text-[var(--aurora-success)]'
+                : 'text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] hover:bg-[var(--aurora-field)]'
+            "
+            :title="copiedIdx === i ? '已复制' : '复制内容'"
+            @click="copyMessage(i, m.content)"
+          >
+            {{ copiedIdx === i ? "✓" : "📋" }}
+          </button>
         </div>
       </template>
     </div>
@@ -211,7 +267,7 @@ function splitBlocks(text: string): Block[] {
         </span>
         <button
           class="text-xs px-3 py-1 rounded transition-colors"
-          :class="streaming ? 'bg-red-500/60 hover:bg-red-500/80' : 'bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)]'"
+          :class="streaming ? 'ai-btn-stop' : 'bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)]'"
           @click="onClickSend"
         >
           {{ streaming ? "停止" : "发送" }}
@@ -220,3 +276,30 @@ function splitBlocks(text: string): Block[] {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 语义色令牌的透明底/边框变体:令牌值由 global.css 提供(hex/rgba 均兼容)。
+ * Tailwind 的 /opacity 修饰对 var() 任意值不生成样式(实测 bg-[var(--x)]/15 被丢弃),
+ * 统一用 color-mix 合成透明色,不依赖令牌的书写格式。 */
+.ai-error {
+  background: color-mix(in srgb, var(--aurora-danger) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aurora-danger) 30%, transparent);
+  color: var(--aurora-danger);
+}
+.ai-tool-chip {
+  background: color-mix(in srgb, var(--aurora-warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aurora-warn) 30%, transparent);
+  color: var(--aurora-warn);
+}
+/* 用户气泡:跟随所选强调色,与发送按钮/选中态同源 */
+.ai-user-bubble {
+  background: color-mix(in srgb, var(--aurora-accent) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aurora-accent) 25%, transparent);
+}
+.ai-btn-stop {
+  background: color-mix(in srgb, var(--aurora-danger) 60%, transparent);
+}
+.ai-btn-stop:hover {
+  background: color-mix(in srgb, var(--aurora-danger) 80%, transparent);
+}
+</style>

@@ -37,12 +37,38 @@ async function copyBack(index: number) {
   }
 }
 
+// 清空确认:两层点击(第一击进入确认态,3s 未确认自动复原),成功后短暂显示"已清空"
+const confirming = ref(false);
+const cleared = ref(false);
+let confirmTimer: number | undefined;
+let clearedTimer: number | undefined;
+
 async function clearAll() {
   try {
     await store.clear();
+    cleared.value = true;
+    if (clearedTimer) window.clearTimeout(clearedTimer);
+    clearedTimer = window.setTimeout(() => {
+      cleared.value = false;
+    }, 1500);
   } catch (e) {
     console.error("clear history failed", e);
   }
+}
+
+function onClickClear() {
+  if (!confirming.value) {
+    confirming.value = true;
+    if (confirmTimer) window.clearTimeout(confirmTimer);
+    confirmTimer = window.setTimeout(() => {
+      confirming.value = false;
+    }, 3000);
+    return;
+  }
+  if (confirmTimer) window.clearTimeout(confirmTimer);
+  confirmTimer = undefined;
+  confirming.value = false;
+  void clearAll();
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -77,6 +103,8 @@ onMounted(async () => {
 onUnmounted(() => {
   stop();
   unlistenShow?.();
+  if (confirmTimer) window.clearTimeout(confirmTimer);
+  if (clearedTimer) window.clearTimeout(clearedTimer);
 });
 
 // 窗口真正显示时(tauri://show)拉最新历史并聚焦搜索框;不绑焦点事件——
@@ -99,11 +127,18 @@ let unlistenShow: UnlistenFn | undefined;
         @keydown="onKeydown"
       />
       <button
-        class="text-xs text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] shrink-0"
-        title="清空历史(本地文件一并删除)"
-        @click="clearAll"
+        class="text-xs shrink-0 transition-colors"
+        :class="
+          cleared
+            ? 'text-[var(--aurora-success)]'
+            : confirming
+              ? 'text-[var(--aurora-danger)]'
+              : 'text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]'
+        "
+        :title="confirming ? '再次点击确认清空(本地文件一并删除)' : '清空历史(本地文件一并删除)'"
+        @click="onClickClear"
       >
-        清空
+        {{ cleared ? "已清空" : confirming ? "确认清空?" : "清空" }}
       </button>
     </div>
     <!-- 历史列表 -->

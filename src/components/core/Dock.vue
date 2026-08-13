@@ -6,6 +6,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 interface DockItem {
   name: string;
@@ -23,6 +24,8 @@ const overIdx = ref(-1);
 
 let runningTimer: number | undefined;
 let dragLeaveTimer: number | undefined;
+let unlistenHide: UnlistenFn | undefined;
+let unlistenShow: UnlistenFn | undefined;
 
 const win = getCurrentWindow();
 
@@ -190,15 +193,36 @@ function pad(s: string) {
   return s.length > 1 ? s : s + " ";
 }
 
+/** 暂停运行态轮询(窗口隐藏时;后台不轮询,前台无感知) */
+function pausePolling() {
+  if (runningTimer) {
+    window.clearInterval(runningTimer);
+    runningTimer = undefined;
+  }
+}
+
+/** 恢复运行态轮询:立即刷一次再起定时器(窗口重新显示时数据即时跟上) */
+function resumePolling() {
+  void pollRunning();
+  if (runningTimer === undefined) {
+    runningTimer = window.setInterval(pollRunning, 2000);
+  }
+}
+
 onMounted(async () => {
   await loadItems();
   await pollRunning();
+  // 窗口隐藏时暂停轮询、显示时立即刷新并恢复(避免后台空转 IPC)
+  unlistenHide = await listen("tauri://hide", pausePolling);
+  unlistenShow = await listen("tauri://show", resumePolling);
   runningTimer = window.setInterval(pollRunning, 2000);
 });
 
 onUnmounted(() => {
   if (runningTimer) window.clearInterval(runningTimer);
   if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
+  unlistenHide?.();
+  unlistenShow?.();
 });
 </script>
 
@@ -248,7 +272,7 @@ onUnmounted(() => {
       >
       <!-- 悬停 ✕ 删除(不触发启动:stop 掉点击) -->
       <button
-        class="absolute -top-1.5 -right-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] leading-none text-white shadow group-hover:flex"
+        class="absolute -top-1.5 -right-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-[var(--aurora-danger)] text-[10px] leading-none text-white shadow group-hover:flex"
         :title="`移除 ${it.name}`"
         @click.stop="removeItem(it)"
       >
@@ -257,7 +281,7 @@ onUnmounted(() => {
       <!-- 运行中指示点 -->
       <span
         v-if="running.has(it.path)"
-        class="absolute bottom-0.5 h-1.5 w-1.5 rounded-full bg-green-400"
+        class="absolute bottom-0.5 h-1.5 w-1.5 rounded-full bg-[var(--aurora-success)]"
       ></span>
     </div>
 
