@@ -13,9 +13,12 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 - **🌌 Island** — A persistent panel at the top of your screen: time, CPU, memory, network speed at a glance; always on top without stealing focus
 - **📁 File Drawer** — Desktop files auto-sorted by type, refreshed on change — a tidy desktop, always
 - **📋 Clipboard History** — Every copy auto-recorded, searchable, one-click re-paste, persisted across reboots
+- **🧲 Dock** — Drag any exe / shortcut into the dock row inside the search bar: one-click launch, running-dot indicator, drag to reorder
 - **🤖 AI Assistant** — Dual mode: cloud DeepSeek + local Ollama; drive your system with natural language — open apps, find files, switch wallpapers
-- **🖼️ Dynamic Wallpapers** — Video / HTML / WebGL injected beneath the desktop; auto-downshift on battery; hot-plug multi-monitor rebuild
+- **🖼️ Dynamic Wallpapers** — Video / HTML (WebGL-capable) injected beneath the desktop; auto-downshift on battery; hot-plug multi-monitor rebuild; per-monitor wallpapers
 - **📊 System Monitor** — Real-time CPU / memory / network sampling, visible on the Island and in the tray
+- **🎨 Themes** — Light / dark / follow-system with 4 accent colors, applied to every window instantly
+- **🔄 Auto Update** — In-app check, download, one-click upgrade with SHA-256 verification
 - **🔒 Private & Light** — API keys stored locally only; idle memory under 120MB; zero background waste
 
 ## 💻 System Requirements
@@ -31,7 +34,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 
 ## 🚀 Quick Start
 
-1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.1.0_x64.msi` or `setup.exe`)
+1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.1.0_x64-setup.exe` recommended, or `Aurora_0.1.0_x64_en-US.msi`)
 2. Install and launch Aurora
 3. Press `Ctrl+Shift+Space` to summon global search and start
 
@@ -45,6 +48,9 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 | `Ctrl+Alt+D` | File drawer |
 | `Ctrl+Alt+V` | Clipboard history |
 | `Ctrl+Alt+A` | AI assistant |
+| `Ctrl+Shift+H` | Show / hide all windows |
+
+> Note: the drawer / clipboard / AI modules are off by default — enable them in Settings first (their hotkeys activate with the module). The three `Ctrl+Alt+*` hotkeys can be re-assigned in Settings.
 
 ## 🛠️ For Developers
 
@@ -58,6 +64,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11 — global s
 - Modular and toggleable — no bloat
 - The frontend only renders; the heavy lifting stays in the Rust backend
 - Idle memory under 120MB, zero background polling storms
+- Every setting takes effect the moment you save it — no restarts
 - AI keys live in local config only — never in the frontend, never on the network
 
 ## Credits
