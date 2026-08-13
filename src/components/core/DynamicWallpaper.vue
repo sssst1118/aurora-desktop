@@ -3,14 +3,13 @@
 // 挂载点 = App.vue label 前缀分支(由集成 agent 接线)。
 //
 // - video 素材:<video autoplay muted loop playsinline>(壁纸永不出声);
-// - html 素材:<iframe> 直接渲染用户提供的页面;
 // - 素材 URL 两段式(设计 §1.5):默认图片目录内 → convertFileSrc 走 asset 协议,
 //   目录外 → set 命令后端返回 data URL(state.url);
 // - 电池降载(设计 §1.4):收到 wallpaper-power{on_battery:true} → 暂停视频 + 遮罩提示,
 //   遮罩可点"恢复播放"手动临时恢复;on_battery:false → 自动恢复播放。
 // - Phase5 多屏(设计 §2.2):
 //   - 拼接模式:每屏窗口加载同一素材,素材坐标系 = 虚拟桌面 rect(各屏窗口按自身
-//     在虚拟桌面中的坐标切片显示,img/video/html 统一用 translate 定位实现);
+//     在虚拟桌面中的坐标切片显示,img/video 统一用 translate 定位实现);
 //   - 独立模式:每屏窗口从 get_state().monitors 取自己 index 的素材单独渲染;
 //   - 多屏关:走 4.1 单值状态,行为与 Phase4 完全一致。
 // - 样式用现有硬编码风格(4.4 主题令牌合入后由集成 agent 统一迁移)。
@@ -131,7 +130,7 @@ const scaleClass = computed(() => {
   }
 });
 
-// 电池降载遮罩:仅视频素材展示(html 素材动画由素材自身 JS 处理,此处只隐藏画面停合成)
+// 电池降载遮罩:仅视频素材展示
 const showBatteryOverlay = computed(
   () => state.value.on_battery && !userResumed.value && myMaterial.value.kind === "video",
 );
@@ -189,13 +188,6 @@ onUnmounted(() => {
         playsinline
         class="w-full h-full"
         :class="scaleClass"
-      />
-      <!-- html 素材:iframe 直接渲染用户提供的页面;电池模式隐藏画面(停合成省电) -->
-      <iframe
-        v-else-if="myMaterial.kind === 'html' && mediaSrc"
-        :src="mediaSrc"
-        class="w-full h-full border-0"
-        :class="{ invisible: state.on_battery && !userResumed }"
       />
       <!-- 无素材/禁用态:纯黑底(注入 WorkerW 前不可见,注入后即黑底壁纸) -->
       <div v-else class="w-full h-full bg-black" />

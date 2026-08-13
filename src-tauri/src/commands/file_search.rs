@@ -107,6 +107,8 @@ fn ext_matches(path: &Path, ext_hint: Option<&[&str]>) -> bool {
 
 /// 深度优先扫描:深度 ≤[MAX_DEPTH];每层条目按名称排序后截断 [MAX_PER_LEVEL];
 /// 匹配 = 文件名小写 contains query_lower + 扩展名提示叠加;目录读取错误跳过,不中断整体。
+/// 安全加固:符号链接一律跳过(symlink_metadata 不跟随链接)——白名单目录内的
+/// 链接可能指向白名单外目录,跟随会把越权内容带回搜索结果
 fn dfs(
     dir: &Path,
     depth: usize,
@@ -128,7 +130,12 @@ fn dfs(
     });
     entries.truncate(MAX_PER_LEVEL); // 巨目录保护:同层超限先行截断
     for p in entries {
-        let Ok(meta) = p.metadata() else { continue };
+        // symlink_metadata:不跟随符号链接;链接(文件或目录)一律跳过,
+        // 防白名单内链接逃逸到白名单外目录(越权读取)
+        let Ok(meta) = p.symlink_metadata() else { continue };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
         let is_dir = meta.is_dir();
         let name = p
             .file_name()
@@ -170,6 +177,13 @@ fn search_in_roots(query: &str, dirs: &[String], roots: &[String]) -> Vec<FileHi
     } else if let Some(d) = desktop_dir() {
         scan_dirs.push(d); // dirs 与 roots 均为空 → 仅桌面
     }
+    // 安全加固:扫描根本身若是符号链接同样跳过(根在组件级白名单内、
+    // 但链接目标可能在白名单外,根目录也必须是真实目录)
+    scan_dirs.retain(|d| {
+        d.symlink_metadata()
+            .map(|m| !m.file_type().is_symlink())
+            .unwrap_or(false)
+    });
 
     // 逐个根目录 DFS,全局去重
     let mut hits: Vec<FileHit> = Vec::new();
@@ -382,6 +396,67 @@ mod tests {
         let hits = search_in_roots("aurora目标", &[r"relative\dir".to_string()], &roots);
         assert!(hits.is_empty());
 
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    // ---- 符号链接逃逸防护(安全加固) ----
+
+    /// 建符号链接(Windows 需要开发者模式或管理员权限;不支持的环境跳过测试)
+    fn try_symlink(target: &Path, link: &Path) -> bool {
+        if target.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+        } else {
+            std::os::windows::fs::symlink_file(target, link).is_ok()
+        }
+    }
+
+    #[test]
+    fn search_does_not_follow_symlink_dir_out_of_root() {
+        // 白名单 root 内的目录链接指向白名单外目录 → 外目录文件不得命中
+        let root = tmp_dir("symlink_root");
+        let outside = tmp_dir("symlink_outside");
+        touch(&root.join("aurora白名单内.pdf"));
+        touch(&outside.join("aurora越权文件.pdf"));
+        let link = root.join("link_out");
+        if !try_symlink(&outside, &link) {
+            eprintln!("当前环境无符号链接权限,跳过 symlink 测试");
+            let _ = std::fs::remove_dir_all(&root);
+            let _ = std::fs::remove_dir_all(&outside);
+            return;
+        }
+        let roots = vec![root_str(&root)];
+        let hits = search_in_roots("aurora越权", &[], &roots);
+        assert!(hits.is_empty(), "链接指向的白名单外文件不得命中");
+        // 白名单内文件照常命中
+        let hits = search_in_roots("aurora白名单内", &[], &roots);
+        assert_eq!(hits.len(), 1);
+        let _ = std::fs::remove_dir_all(&link);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn search_skips_symlink_file_and_symlink_root() {
+        let root = tmp_dir("symlink_file_root");
+        let outside = tmp_dir("symlink_file_outside");
+        touch(&outside.join("aurora链接文件.pdf"));
+        let link_file = root.join("aurora链接文件.pdf");
+        if try_symlink(&outside.join("aurora链接文件.pdf"), &link_file) {
+            let roots = vec![root_str(&root)];
+            let hits = search_in_roots("aurora链接文件", &[], &roots);
+            assert!(hits.is_empty(), "文件符号链接不得命中");
+            let _ = std::fs::remove_file(&link_file);
+        }
+        // 根本身是链接 → 整个根被跳过
+        let link_root = std::env::temp_dir().join(format!("aurora_link_root_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&link_root);
+        if try_symlink(&root, &link_root) {
+            let roots = vec![link_root.to_string_lossy().into_owned()];
+            let hits = search_in_roots("aurora", &[], &roots);
+            assert!(hits.is_empty(), "链接形式的扫描根不得进入");
+            let _ = std::fs::remove_dir_all(&link_root);
+        }
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
     }

@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 /** 与 Rust 侧 PerMonitorState 对应(get_state.monitors 元素) */
 export interface PerMonitorState {
   index: number;
-  kind: "none" | "video" | "html";
+  kind: "none" | "video";
   path: string | null;
   url: string | null;
 }
@@ -13,9 +13,9 @@ export interface PerMonitorState {
 /** 与 Rust 侧 DynamicWallpaperState 对应(wallpaper_dynamic_get_state 返回) */
 export interface DynamicWallpaperState {
   enabled: boolean;
-  kind: "none" | "image" | "video" | "html";
+  kind: "none" | "image" | "video";
   path: string | null;
-  /** video/html 素材:目录外 = data URL;默认 Pictures 内 = null(前端 convertFileSrc) */
+  /** video 素材:目录外 = data URL;默认 Pictures 内 = null(前端 convertFileSrc) */
   url: string | null;
   on_battery: boolean;
   downshift_active: boolean;

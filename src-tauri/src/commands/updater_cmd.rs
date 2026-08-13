@@ -26,6 +26,58 @@ fn updates_dir() -> std::path::PathBuf {
     base.join("Aurora").join("updates")
 }
 
+/// 下载校验通过记录文件名(安全加固):update_download 校验通过后把
+/// (version → sha256) 写入该 sidecar,update_install 安装前对所选 exe
+/// **复验**哈希——攻击者把伪造安装包丢进 updates 目录(命名对齐版本号)
+/// 无法通过复验,杜绝"下载目录被投毒后一键安装"链路
+const VERIFIED_FILE: &str = "latest_verified.json";
+
+/// sidecar 文件路径(纯函数,可单测)
+pub fn verified_sidecar_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join(VERIFIED_FILE)
+}
+
+/// 读 sidecar:version → sha256 映射(文件缺失/损坏 → 空映射,宁可拒绝安装)
+pub fn load_verified(dir: &std::path::Path) -> std::collections::HashMap<String, String> {
+    let Ok(bytes) = std::fs::read(verified_sidecar_path(dir)) else {
+        return std::collections::HashMap::new();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+/// 写 sidecar:合并已有记录后落盘(纯函数 + IO,可单测)
+pub fn save_verified(
+    dir: &std::path::Path,
+    version: &str,
+    sha256: &str,
+) -> Result<(), String> {
+    let mut map = load_verified(dir);
+    map.insert(version.trim().to_string(), sha256.trim().to_string());
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建更新目录失败: {e}"))?;
+    let json = serde_json::to_string_pretty(&map)
+        .map_err(|e| format!("序列化校验记录失败: {e}"))?;
+    std::fs::write(verified_sidecar_path(dir), json)
+        .map_err(|e| format!("写入校验记录失败: {e}"))
+}
+
+/// 安装前复验(纯函数 + IO,可单测):sidecar 无该 version 记录或所选 exe
+/// 哈希与记录不符 → Err(拒绝安装);防 updates 目录被投毒后绕过下载校验
+pub fn recheck_installer(
+    dir: &std::path::Path,
+    version: &str,
+    exe: &std::path::Path,
+) -> Result<(), String> {
+    let verified = load_verified(dir);
+    let expected = verified
+        .get(version)
+        .ok_or_else(|| "安装包无已验证记录,请重新下载更新".to_string())?;
+    let actual = updater::sha256_hex(exe).map_err(|e| format!("校验失败: {e}"))?;
+    if !expected.eq_ignore_ascii_case(&actual) {
+        return Err("安装包校验失败(哈希与下载时不一致),已拒绝安装,请重新下载".to_string());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct UpdateCheckResult {
     pub status: String, // "latest" | "available" | "error"
@@ -138,6 +190,7 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
     let dest = dir.join(format!("Aurora_setup_{}.exe", info.version));
     // 已下载且校验通过 → 直接完成(幂等)
     if dest.exists() && updater::sha256_hex(&dest).ok().as_deref() == Some(info.sha256.as_str()) {
+        save_verified(&dir, &info.version, &info.sha256)?; // 复验记录补齐(幂等)
         let _ = app.emit(
             "update-downloaded",
             &UpdateInfo {
@@ -158,6 +211,7 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
         let _ = std::fs::remove_file(&dest);
         return Err("下载文件校验失败(哈希不匹配),已删除,请重试".to_string());
     }
+    save_verified(&dir, &info.version, &info.sha256)?; // 下载校验通过 → 落复验记录
     let _ = app.emit(
         "update-downloaded",
         &UpdateInfo {
@@ -203,22 +257,29 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
         })
         .collect();
     // 取语义化最大版本(version_cmp 为纯函数,见 updater.rs 单测)
-    let Some((_ver, exe)) = pick_latest_candidate(candidates) else {
+    let Some((ver, exe)) = pick_latest_candidate(candidates) else {
         return Err("未找到已下载的安装包,请先下载更新".to_string());
     };
+    // 安全加固:安装前对所选 exe 复验哈希(sidecar 记录的下载时校验值),
+    // updates 目录被投毒(伪造同名安装包)时在此拒绝,不进入安装流程
+    recheck_installer(&dir, &ver, &exe)?;
     let install_dir = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Users\Public\AppData\Local"))
         .join("Aurora");
     let app_exe = install_dir.join("Aurora.exe");
-    // 包装脚本:等静默安装完成 → 启动新版本(独立 cmd 进程,与 app 生命周期解耦)
-    let script = format!(
-        "start /wait \"\" \"{}\" /S && start \"\" \"{}\"",
-        exe.display(),
-        app_exe.display()
-    );
+    // 包装脚本(固定文案,不含任何路径):等静默安装完成 → 启动新版本
+    // (独立 cmd 进程,与 app 生命周期解耦)。
+    // 安全加固:路径经环境变量 %AURORA_SETUP_EXE% / %AURORA_NEW_EXE% 注入,
+    // 不拼进命令行——直接 format 拼接时路径含 %VAR% 会被 cmd 环境变量展开误伤,
+    // 含 & 等特殊字符还会被注入额外命令;cmd 的变量展开先于特殊字符解析且
+    // 不二次展开,env 注入后路径原样作为参数使用
+    const INSTALL_SCRIPT: &str =
+        "start /wait \"\" \"%AURORA_SETUP_EXE%\" /S && start \"\" \"%AURORA_NEW_EXE%\"";
     let _ = std::process::Command::new("cmd")
-        .args(["/C", &script])
+        .args(["/C", INSTALL_SCRIPT])
+        .env("AURORA_SETUP_EXE", &exe)
+        .env("AURORA_NEW_EXE", &app_exe)
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .spawn()
         .map_err(|e| format!("启动安装器失败: {e}"))?;
@@ -257,5 +318,74 @@ mod tests {
         let entries = vec![("bad".to_string(), PathBuf::from("Aurora_setup_bad.exe"))];
         // "bad" 不可解析 → 与任何项 Equal,取第一个(候选集只有它时仍返回)
         assert!(pick_latest_candidate(entries).is_some());
+    }
+
+    // ---- sidecar 校验记录(安全加固:安装前复验) ----
+
+    fn tmp_updates_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("aurora_upd_{tag}_{nanos}"));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn verified_sidecar_roundtrip_and_merge() {
+        let dir = tmp_updates_dir("sidecar");
+        // 初始:无 sidecar → 空映射
+        assert!(load_verified(&dir).is_empty());
+        // 写入两条(不同版本),记录合并保留
+        save_verified(&dir, "0.2.0", "aaaa").unwrap();
+        save_verified(&dir, "0.3.0", "bbbb").unwrap();
+        let map = load_verified(&dir);
+        assert_eq!(map.get("0.2.0").map(String::as_str), Some("aaaa"));
+        assert_eq!(map.get("0.3.0").map(String::as_str), Some("bbbb"));
+        // 同版本重复写入 = 覆盖(下载重试场景)
+        save_verified(&dir, "0.2.0", "cccc").unwrap();
+        assert_eq!(load_verified(&dir).get("0.2.0").map(String::as_str), Some("cccc"));
+        // sidecar 文件真实存在
+        assert!(verified_sidecar_path(&dir).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recheck_installer_accepts_matching_sha() {
+        let dir = tmp_updates_dir("recheck_ok");
+        let exe = dir.join("Aurora_setup_0.2.0.exe");
+        std::fs::write(&exe, b"installer-bytes").unwrap();
+        let sha = updater::sha256_hex(&exe).unwrap();
+        save_verified(&dir, "0.2.0", &sha).unwrap();
+        assert!(recheck_installer(&dir, "0.2.0", &exe).is_ok(), "哈希一致应放行");
+        // 大小写不敏感的 hex 比较
+        let upper = sha.to_uppercase();
+        save_verified(&dir, "0.2.0", &upper).unwrap();
+        assert!(recheck_installer(&dir, "0.2.0", &exe).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recheck_installer_rejects_tampered_or_unrecorded() {
+        let dir = tmp_updates_dir("recheck_bad");
+        let exe = dir.join("Aurora_setup_0.2.0.exe");
+        std::fs::write(&exe, b"installer-bytes").unwrap();
+        let sha = updater::sha256_hex(&exe).unwrap();
+        save_verified(&dir, "0.2.0", &sha).unwrap();
+        // 篡改安装包 → 哈希不匹配 → 拒绝
+        std::fs::write(&exe, b"tampered!!").unwrap();
+        assert!(recheck_installer(&dir, "0.2.0", &exe).is_err(), "被篡改的安装包必须拒绝");
+        // sidecar 无该版本记录 → 拒绝(投毒文件从未经过下载校验)
+        let other = dir.join("Aurora_setup_9.9.9.exe");
+        std::fs::write(&other, b"poison").unwrap();
+        assert!(recheck_installer(&dir, "9.9.9", &other).is_err(), "无已验证记录的安装包必须拒绝");
+        // sidecar 缺失 → 拒绝
+        let empty = tmp_updates_dir("recheck_empty");
+        let e2 = empty.join("Aurora_setup_1.0.0.exe");
+        std::fs::write(&e2, b"x").unwrap();
+        assert!(recheck_installer(&empty, "1.0.0", &e2).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }

@@ -384,6 +384,11 @@ where
     Ok(finish_stream(full, &tool_chunks))
 }
 
+/// 流式工具调用分片 index 上限(安全加固):index 来自远端 JSON,无上限时
+/// 恶意 index(如 40 亿)会让 `merged.resize(idx+1)` 直接 OOM abort 进程。
+/// 正常工具循环一次最多几个工具,32 绰绰有余;超限分片直接丢弃。
+const MAX_TOOL_CALLS: usize = 32;
+
 /// 流结束收尾(纯函数):收集到 tool_calls 分片 → 返回构造的完整 message JSON
 /// (与 chat 返回契约一致,供 parse_tool_calls 解析,§2.3);
 /// 无分片 → 返回 content 全文。
@@ -391,9 +396,13 @@ fn finish_stream(full: String, tool_chunks: &[(usize, String, String, String)]) 
     if tool_chunks.is_empty() {
         return full;
     }
-    // 按 index 归并:id/name 取非空(仅首片携带),arguments 跨片拼接
+    // 按 index 归并:id/name 取非空(仅首片携带),arguments 跨片拼接;
+    // index 超上限的分片直接丢弃(防远端恶意大 index 触发巨量 resize)
     let mut merged: Vec<(String, String, String)> = Vec::new();
     for (idx, id, name, args) in tool_chunks {
+        if *idx >= MAX_TOOL_CALLS {
+            continue;
+        }
         if merged.len() <= *idx {
             merged.resize(*idx + 1, (String::new(), String::new(), String::new()));
         }
@@ -406,8 +415,10 @@ fn finish_stream(full: String, tool_chunks: &[(usize, String, String, String)]) 
         }
         e.2.push_str(args);
     }
+    // 空槽过滤:恶意 index 跳号产生的中间空槽(id/name/arguments 全空)不产出 tool_call
     let calls: Vec<Value> = merged
         .into_iter()
+        .filter(|(id, name, args)| !(id.is_empty() && name.is_empty() && args.is_empty()))
         .map(|(id, name, args)| {
             json!({
                 "id": id,
@@ -634,5 +645,50 @@ mod tests {
     #[test]
     fn finish_stream_returns_plain_text_without_chunks() {
         assert_eq!(finish_stream("纯文本".to_string(), &[]), "纯文本");
+    }
+
+    #[test]
+    fn finish_stream_rejects_index_beyond_limit() {
+        // 安全加固:远端恶意超大 index(如 40 亿)不能触发巨量 resize OOM,
+        // 超上限分片直接丢弃,合并结果不含它们
+        let chunks = vec![
+            (0, "call_ok".to_string(), "open_item".to_string(), String::new()),
+            (MAX_TOOL_CALLS, "call_bad".to_string(), "evil".to_string(), "{}".to_string()),
+            (usize::MAX, "call_worse".to_string(), "evil2".to_string(), "{}".to_string()),
+        ];
+        let out = finish_stream(String::new(), &chunks);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 1, "仅保留合法 index 的分片,实际: {calls:?}");
+        assert_eq!(calls[0]["function"]["name"], "open_item");
+    }
+
+    #[test]
+    fn finish_stream_index_at_boundary_accepted() {
+        // 边界:index == 上限-1 合法;index == 上限 被拒
+        let chunks = vec![
+            (MAX_TOOL_CALLS - 1, "call_last".to_string(), "get_system_status".to_string(), "{}".to_string()),
+            (MAX_TOOL_CALLS, String::new(), "bad".to_string(), String::new()),
+        ];
+        let out = finish_stream(String::new(), &chunks);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], "call_last");
+    }
+
+    #[test]
+    fn finish_stream_filters_empty_gap_slots() {
+        // index 跳号产生的中间空槽(id/name/arguments 全空)不产出空 tool_call
+        let chunks = vec![
+            (0, "call_0".to_string(), "open_item".to_string(), "{}".to_string()),
+            (5, "call_5".to_string(), "search_files".to_string(), "{}".to_string()),
+        ];
+        let out = finish_stream(String::new(), &chunks);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 2, "空槽不应产出 tool_call");
+        assert_eq!(calls[0]["id"], "call_0");
+        assert_eq!(calls[1]["id"], "call_5");
     }
 }

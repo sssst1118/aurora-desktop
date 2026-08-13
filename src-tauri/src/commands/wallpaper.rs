@@ -154,11 +154,37 @@ pub fn wallpaper_list_local_cmd() -> Vec<WallpaperEntry> {
 
 /// 缩略图最长边(像素):预览网格用,控制 IPC 传输量(原图可达数 MB,缩略后几十 KB)
 const THUMB_MAX_EDGE: u32 = 480;
+/// 缩略图源图宽/高上限(像素,安全加固):解码前从文件头读宽高,超限直接拒绝
+/// (伪造超大尺寸的解压炸弹会在 decode 阶段打爆内存)
+pub const THUMB_SRC_MAX_EDGE: u32 = 12_000;
+/// 缩略图源图像素总量上限(64MP ≈ 256MB RGBA,安全加固)
+pub const THUMB_SRC_MAX_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// 源图尺寸校验(纯函数,可单测):宽高 ≤ 12000 且像素总量 ≤ 64MP
+pub fn check_thumb_src_dims(w: u32, h: u32) -> Result<(), String> {
+    if w == 0 || h == 0 {
+        return Err("图片尺寸异常(宽高为 0)".to_string());
+    }
+    if w > THUMB_SRC_MAX_EDGE || h > THUMB_SRC_MAX_EDGE {
+        return Err(format!(
+            "图片尺寸过大({w}x{h}),上限 {THUMB_SRC_MAX_EDGE}x{THUMB_SRC_MAX_EDGE},请更换图片"
+        ));
+    }
+    if w as u64 * h as u64 > THUMB_SRC_MAX_PIXELS {
+        return Err(format!(
+            "图片尺寸过大({w}x{h}),像素总量上限 {} MP,请更换图片",
+            THUMB_SRC_MAX_PIXELS / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
 
 /// 生成缩略图 data URI(jpeg base64)。
 /// 不走 asset 协议(scope 只认 Tauri 变量集且无运行时扩展 API,自定义目录
 /// 如 C:\ProgramData\Lenovo\Themes 全部 403)——改为后端读图缩略后返回,
 /// 任意目录均可预览;读取/解码/编码失败返回 Err,前端显示"预览不可用"占位。
+/// 安全加固:解码前先读文件头判宽高([check_thumb_src_dims]),并用
+/// ImageReader::with_limits 再限一层(纵深防御,防解压炸弹打爆内存)
 #[tauri::command(rename = "wallpaper_thumbnail")]
 pub fn wallpaper_thumbnail_cmd(file_path: String) -> Result<String, String> {
     if file_path.trim().is_empty() {
@@ -168,12 +194,23 @@ pub fn wallpaper_thumbnail_cmd(file_path: String) -> Result<String, String> {
     if !p.is_absolute() || !p.is_file() {
         return Err(format!("壁纸文件不存在: {file_path}"));
     }
-    let img = image::ImageReader::open(p)
+    // 解码前尺寸校验:into_dimensions 只读文件头不解码,无大内存分配
+    let (w, h) = image::ImageReader::open(p)
+        .map_err(|e| format!("读取图片失败: {e}"))?
+        .into_dimensions()
+        .map_err(|e| format!("识别图片格式失败: {e}"))?;
+    check_thumb_src_dims(w, h)?;
+    // 解码:ImageReader::limits 兜底限制宽高(纵深防御;image 0.25 的 Limits
+    // 默认 max_alloc=512MB 已限分配),双保险
+    let mut reader = image::ImageReader::open(p)
         .map_err(|e| format!("读取图片失败: {e}"))?
         .with_guessed_format()
-        .map_err(|e| format!("识别图片格式失败: {e}"))?
-        .decode()
-        .map_err(|e| format!("解码图片失败: {e}"))?;
+        .map_err(|e| format!("识别图片格式失败: {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(THUMB_SRC_MAX_EDGE);
+    limits.max_image_height = Some(THUMB_SRC_MAX_EDGE);
+    reader.limits(limits);
+    let img = reader.decode().map_err(|e| format!("解码图片失败: {e}"))?;
     // 等比缩到最长边 THUMB_MAX_EDGE(已是小图则原样输出)
     let (w, h) = img.dimensions();
     let (tw, th) = if w > THUMB_MAX_EDGE || h > THUMB_MAX_EDGE {
@@ -378,6 +415,74 @@ mod tests {
         let txt = dir.join("a.txt");
         std::fs::write(&txt, b"not an image").unwrap();
         assert!(wallpaper_thumbnail_cmd(txt.to_string_lossy().into_owned()).is_err()); // 非图片
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- 解码尺寸上限(安全加固:解压炸弹防护) ----
+
+    #[test]
+    fn check_thumb_src_dims_boundaries() {
+        assert!(check_thumb_src_dims(1, 1).is_ok());
+        // 宽高上限 12000:单边极限(12000×1)OK;双边上限(12000×12000)面积 144MP 超 64MP → Err
+        assert!(check_thumb_src_dims(12000, 1).is_ok());
+        assert!(check_thumb_src_dims(1, 12000).is_ok());
+        assert!(check_thumb_src_dims(12000, 12000).is_err());
+        assert!(check_thumb_src_dims(12001, 1).is_err(), "超宽上限 1 像素即拒绝");
+        assert!(check_thumb_src_dims(1, 12001).is_err());
+        assert!(check_thumb_src_dims(0, 10).is_err(), "0 宽非法");
+        assert!(check_thumb_src_dims(10, 0).is_err());
+        // 面积上限 64MP:8192×8192 = 67108864 恰好 64MP → OK;多 1 像素 → Err
+        assert!(check_thumb_src_dims(8192, 8192).is_ok());
+        assert!(check_thumb_src_dims(8192, 8193).is_err());
+        // 伪造超大解压炸弹必须拒绝
+        assert!(check_thumb_src_dims(40000, 40000).is_err());
+    }
+
+    /// PNG chunk CRC32(测试用,构造带合法 CRC 的 IHDR,让解码器能读到宽高)
+    fn png_crc32(data: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (i, entry) in table.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *entry = c;
+        }
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &b in data {
+            crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+        }
+        crc ^ 0xFFFF_FFFF
+    }
+
+    /// 构造只有 IHDR 的 PNG 文件头(宽高伪装成超大值,无像素数据):
+    /// 模拟解压炸弹——解码器读 header 即可拿到伪造尺寸
+    fn make_huge_header_png(dir: &Path, w: u32, h: u32) -> PathBuf {
+        let mut ihdr = Vec::with_capacity(17);
+        ihdr.extend_from_slice(b"IHDR");
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8bit / RGB / 无压缩标志
+        let crc = png_crc32(&ihdr);
+        let mut file = Vec::with_capacity(33);
+        file.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]); // PNG 签名
+        file.extend_from_slice(&13u32.to_be_bytes()); // IHDR 数据长度恒 13
+        file.extend_from_slice(&ihdr);
+        file.extend_from_slice(&crc.to_be_bytes());
+        let p = dir.join("huge.png");
+        std::fs::write(&p, file).unwrap();
+        p
+    }
+
+    #[test]
+    fn thumbnail_rejects_huge_header_dimensions() {
+        let dir = tmp_dir("thumb_huge");
+        // 宽高超上限(20000×20000):必须在解码前拒绝,不得进入解码分配
+        let p = make_huge_header_png(&dir, 20000, 20000);
+        assert!(wallpaper_thumbnail_cmd(p.to_string_lossy().into_owned()).is_err());
+        // 宽高在上限内但面积超 64MP(8192×8193):同样拒绝
+        let p2 = make_huge_header_png(&dir, 8192, 8193);
+        assert!(wallpaper_thumbnail_cmd(p2.to_string_lossy().into_owned()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

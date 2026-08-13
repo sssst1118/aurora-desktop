@@ -7,8 +7,10 @@
 //! - 电池降载:GetSystemPowerStatus 每 wallpaper_battery_check_sec(默认 30)s 检测一次,
 //!   仅状态翻转时 emit `wallpaper-power{on_battery}`(事件契约见设计文档 §0.3);
 //! - 素材扫描:只扫配置目录(wallpaper_dynamic_dir → 2.4 wallpaper_dir →
-//!   %USERPROFILE%\Pictures 回退链),白名单 mp4/webm/avi/mov/jpg/png/webp/bmp/gif/html,
+//!   %USERPROFILE%\Pictures 回退链),白名单 mp4/webm/avi/mov/jpg/png/webp/bmp/gif,
 //!   按名称排序截 100,目录不存在返回空列表不 panic;
+//!   ⚠️ 安全加固:html 已移出白名单——Pictures 内 html 经 asset 协议加载会与前端同源,
+//!   可调用全部后端命令(读剪贴板/写配置/执行程序),属高危注入面,一律拒绝;
 //! - URL 两段式(设计 §1.5):默认 Pictures 内素材走 asset 协议(前端 convertFileSrc,
 //!   url=None);目录外素材由 set 命令后端读文件转 base64 data URL(≤50MB,超出报错提示
 //!   放 Pictures 下)。base64 无依赖手写(Cargo.toml 属集成 agent 不可加依赖,
@@ -40,9 +42,11 @@ use crate::commands::wallpaper::WallpaperEntry;
 const WM_SPAWN_WORKERW: u32 = 0x052C;
 /// 注入消息超时(ms)
 const SPAWN_TIMEOUT_MS: u32 = 1000;
-/// 素材列表白名单(视频/图片/html,大小写不敏感;与设计 §1.1 一致)
-pub const DYNAMIC_EXT_WHITELIST: [&str; 11] = [
-    "mp4", "webm", "avi", "mov", "jpg", "jpeg", "png", "webp", "bmp", "gif", "html",
+/// 素材列表白名单(视频/图片,大小写不敏感;与设计 §1.1 一致)。
+/// 安全加固:html 已移除——asset 协议加载 Pictures 内 html 与前端同源,可注入调用
+/// 全部后端命令(剪贴板/配置/进程执行),不再允许作为壁纸素材
+pub const DYNAMIC_EXT_WHITELIST: [&str; 10] = [
+    "mp4", "webm", "avi", "mov", "jpg", "jpeg", "png", "webp", "bmp", "gif",
 ];
 /// 列表展示上限(有节制,不扫全盘)
 const MAX_DYNAMIC_LIST: usize = 100;
@@ -84,7 +88,8 @@ fn ext_whitelisted(name: &str) -> bool {
         .is_some_and(|e| DYNAMIC_EXT_WHITELIST.iter().any(|w| e.eq_ignore_ascii_case(w)))
 }
 
-/// 素材类型(纯函数):"image" | "video" | "html" | "other"
+/// 素材类型(纯函数):"image" | "video" | "other"
+/// 安全加固:html 归为 "other"(已移出白名单,任何路径都不可能产生 "html" 状态)
 pub fn material_kind(path: &str) -> &'static str {
     let ext = Path::new(path)
         .extension()
@@ -93,9 +98,8 @@ pub fn material_kind(path: &str) -> &'static str {
         .to_lowercase();
     match ext.as_str() {
         "mp4" | "webm" | "avi" | "mov" => "video",
-        "html" => "html",
         "jpg" | "jpeg" | "png" | "webp" | "bmp" | "gif" => "image",
-        _ => "other",
+        _ => "other", // html/htm 与未知扩展名均不可用作壁纸素材
     }
 }
 
@@ -139,7 +143,7 @@ pub fn validate_set_args(path: &str) -> Result<(), String> {
     }
     if !ext_whitelisted(path) {
         return Err(format!(
-            "不支持的素材格式,仅支持 mp4/webm/avi/mov/jpg/png/webp/bmp/gif/html: {path}"
+            "不支持的素材格式,仅支持 mp4/webm/avi/mov/jpg/png/webp/bmp/gif: {path}"
         ));
     }
     if !p.is_file() {
@@ -612,7 +616,8 @@ pub fn set_state(st: Option<WallpaperState>) {
 // URL 两段式(设计 §1.5/AD-2):Pictures 内走 asset 协议;目录外走 data URL
 // ---------------------------------------------------------------------------
 
-/// 素材 MIME(仅视频/html 需要 data URL;图片不走到这里,兜底 video/mp4)
+/// 素材 MIME(仅视频需要 data URL;图片不走到这里,兜底 video/mp4)。
+/// 安全加固:html/htm 不再映射(已移出白名单,resolve_material_url 先拒绝)
 pub fn mime_for_path(path: &str) -> &'static str {
     let ext = Path::new(path)
         .extension()
@@ -623,7 +628,6 @@ pub fn mime_for_path(path: &str) -> &'static str {
         "webm" => "video/webm",
         "avi" => "video/x-msvideo",
         "mov" => "video/quicktime",
-        "html" | "htm" => "text/html",
         _ => "video/mp4",
     }
 }
@@ -638,8 +642,18 @@ fn path_in_dir(path: &Path, dir: &Path) -> bool {
 
 /// 素材 URL 两段式(纯函数,可单测):
 /// 素材在默认图片目录(Pictures)内 → Ok(None)(前端用 convertFileSrc 走 asset 协议);
-/// 目录外 → 后端读文件转 base64 data URL(≤50MB,超出报错提示放 Pictures 下)
+/// 目录外 → 后端读文件转 base64 data URL(≤50MB,超出报错提示放 Pictures 下)。
+/// 安全加固:html/htm 一律拒绝——asset 协议加载 html 与前端同源可注入 IPC,
+/// 即使绕过 validate_set_args 也不能生成 data:text/html URL
 pub fn resolve_material_url(path: &str, default_pictures: &Path) -> Result<Option<String>, String> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext == "html" || ext == "htm" {
+        return Err("不支持 html 素材,请使用图片或视频".to_string());
+    }
     if path_in_dir(Path::new(path), default_pictures) {
         return Ok(None);
     }
@@ -747,7 +761,7 @@ mod tests {
         let dir = tmp_dir("scan");
         touch(&dir.join("b.mp4"));
         touch(&dir.join("A.WEBM")); // 大写扩展名
-        touch(&dir.join("c.html"));
+        touch(&dir.join("c.html")); // 安全加固:html 已移出白名单,必须被过滤
         touch(&dir.join("d.jpg"));
         touch(&dir.join("e.gif"));
         touch(&dir.join("f.avi"));
@@ -759,7 +773,8 @@ mod tests {
         touch(&dir.join("subdir/inside.mp4")); // 不递归子目录
         let list = scan_dynamic_dir(&dir);
         let names: Vec<&str> = list.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["A.WEBM", "b.mp4", "c.html", "d.jpg", "e.gif", "f.avi", "g.mov"]);
+        assert_eq!(names, vec!["A.WEBM", "b.mp4", "d.jpg", "e.gif", "f.avi", "g.mov"]);
+        assert!(!names.contains(&"c.html"), "html 素材必须被过滤");
         assert!(list.iter().all(|e| e.size > 0));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -842,10 +857,10 @@ mod tests {
     fn set_accepts_absolute_whitelist() {
         let dir = tmp_dir("good");
         touch(&dir.join("a.mp4"));
-        touch(&dir.join("b.HTML")); // 大小写不敏感
+        touch(&dir.join("b.HTML")); // 大小写不敏感,但 html 已移出白名单 → 拒绝
         touch(&dir.join("c.PNG"));
         assert!(validate_set_args(&dir.join("a.mp4").to_string_lossy()).is_ok());
-        assert!(validate_set_args(&dir.join("b.HTML").to_string_lossy()).is_ok());
+        assert!(validate_set_args(&dir.join("b.HTML").to_string_lossy()).is_err());
         assert!(validate_set_args(&dir.join("c.PNG").to_string_lossy()).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -856,7 +871,7 @@ mod tests {
     fn kind_classification() {
         assert_eq!(material_kind("a.MP4"), "video");
         assert_eq!(material_kind("a.webm"), "video");
-        assert_eq!(material_kind("a.html"), "html");
+        assert_eq!(material_kind("a.html"), "other", "安全加固:html 归 other,不再支持");
         assert_eq!(material_kind("a.JPG"), "image");
         assert_eq!(material_kind("a.jpeg"), "image");
         assert_eq!(material_kind("a.webp"), "image");
@@ -895,8 +910,8 @@ mod tests {
         assert_eq!(mime_for_path("a.WEBM"), "video/webm");
         assert_eq!(mime_for_path("a.avi"), "video/x-msvideo");
         assert_eq!(mime_for_path("a.mov"), "video/quicktime");
-        assert_eq!(mime_for_path("a.html"), "text/html");
-        assert_eq!(mime_for_path("a.htm"), "text/html");
+        assert_eq!(mime_for_path("a.html"), "video/mp4", "html 不再映射 text/html(已移出白名单)");
+        assert_eq!(mime_for_path("a.htm"), "video/mp4");
         assert_eq!(mime_for_path("a.unknown"), "video/mp4");
     }
 
@@ -923,12 +938,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_url_html_data_url() {
+    fn resolve_url_html_rejected() {
+        // 安全加固:html 素材一律拒绝(asset 协议同源注入 IPC 高危面),目录内外都一样
         let pictures = tmp_dir("pics3");
         let outside = tmp_dir("out3");
         std::fs::write(outside.join("page.html"), b"<html></html>").unwrap();
         let r = resolve_material_url(&outside.join("page.html").to_string_lossy(), &pictures);
-        assert!(matches!(&r, Ok(Some(u)) if u.starts_with("data:text/html;base64,")));
+        assert!(r.is_err(), "目录外 html 必须拒绝");
+        std::fs::write(pictures.join("page.htm"), b"<html></html>").unwrap();
+        let r = resolve_material_url(&pictures.join("page.htm").to_string_lossy(), &pictures);
+        assert!(r.is_err(), "Pictures 内 htm 也必须拒绝");
         let _ = std::fs::remove_dir_all(&pictures);
         let _ = std::fs::remove_dir_all(&outside);
     }

@@ -84,6 +84,17 @@ unsafe extern "system" {
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 
+/// 图标位图宽高上限(像素,安全加固):biWidth/biHeight 来自用户文件(图标资源),
+/// 伪造 40000×40000 的位图会让 `vec![0u8; w*h*4]` 分配 6.4GB 直接 abort 进程。
+/// 512 上限下最坏 512×512×4 = 1MB,Dock 图标 32/48 像素绰绰有余;超限返回 None
+/// (调用方回退默认图标)
+pub const MAX_ICON_DIM: u32 = 512;
+
+/// 尺寸是否在图标位图上限内(纯函数,可单测;0 视为非法)
+pub fn icon_dims_within_limit(w: u32, h: u32) -> bool {
+    w > 0 && h > 0 && w <= MAX_ICON_DIM && h <= MAX_ICON_DIM
+}
+
 // ---- 提取管线 ----
 
 /// 从文件(exe/lnk/ico 等)提取图标像素,返回 (宽, 高, RGBA)
@@ -180,6 +191,12 @@ fn dibs_pixels(hbm: *mut core::ffi::c_void) -> Option<(u32, u32, Vec<u8>)> {
         let top_down = ah < 0; // 负高度 = 自上而下;图标位图通常是 top-down
         let w = w as u32;
         let h = ah.unsigned_abs();
+        // 安全加固:宽高上限校验必须在分配像素缓冲之前(伪造超大尺寸会 OOM abort),
+        // 超限返回 None,调用方回退默认图标
+        if !icon_dims_within_limit(w, h) {
+            DeleteDC(hdc);
+            return None;
+        }
         // 第二次:32bpp BGRA
         bi.bmi_header.bi_bit_count = 32;
         bi.bmi_header.bi_compression = BI_RGB;
@@ -335,6 +352,21 @@ mod tests {
     fn fnv1a_standard_vectors() {
         assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c);
+    }
+
+    #[test]
+    fn icon_dims_limit_boundaries() {
+        // 安全加固:宽高 ≤ 512;边界值与伪造超大尺寸的拒绝行为
+        assert!(icon_dims_within_limit(1, 1));
+        assert!(icon_dims_within_limit(512, 512), "上限边界应允许");
+        assert!(icon_dims_within_limit(32, 32), "常规图标尺寸");
+        assert!(!icon_dims_within_limit(513, 1), "超上限 1 像素即拒绝");
+        assert!(!icon_dims_within_limit(1, 513));
+        assert!(!icon_dims_within_limit(0, 32), "0 宽非法");
+        assert!(!icon_dims_within_limit(32, 0));
+        // 伪造超大位图(40000×40000 → 6.4GB)必须拒绝
+        assert!(!icon_dims_within_limit(40000, 40000));
+        assert!(!icon_dims_within_limit(u32::MAX, u32::MAX));
     }
 
     #[test]

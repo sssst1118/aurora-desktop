@@ -34,6 +34,13 @@ const WHEEL_STEP: i32 = 120;
 const UIPI_REJECTED_MSG: &str =
     "输入被系统拒绝(目标窗口可能为管理员权限,UIPI 限制),错误码 ";
 
+/// 文本输入长度上限(字符数,安全加固):无上限时 1MB 文本会构造 200 万条 INPUT
+/// 灌入系统输入队列,卡死整个系统的键盘输入;20000 字符对应至多 4 万条 INPUT
+pub const MAX_TEXT_CHARS: usize = 20_000;
+/// 单次 SendInput 提交的 INPUT 条数上限(分批点选在 SendInput 层):
+/// 每批 1000 条(即 500 个字符),避免单次调用系统输入缓冲溢出
+const INPUTS_PER_BATCH: usize = 1000;
+
 // ---------------------------------------------------------------------------
 // 纯函数:INPUT 构造(可单测;注入本身不单测)
 // ---------------------------------------------------------------------------
@@ -242,6 +249,17 @@ fn build_key_inputs(key: &str, modifiers: &[&str]) -> Result<Vec<INPUT>, String>
     Ok(inputs)
 }
 
+/// 文本长度校验(纯函数,安全加固):超 [MAX_TEXT_CHARS] 字符 → Err。
+/// 1MB 文本 = 200 万条 INPUT,会把系统输入队列灌死
+pub fn check_text_len(text: &str) -> Result<(), String> {
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return Err(format!(
+            "文本过长(上限 {MAX_TEXT_CHARS} 字符),请分批输入"
+        ));
+    }
+    Ok(())
+}
+
 /// 构造 UNICODE 文本输入的 INPUT 数组(纯函数):
 /// 逐 UTF-16 码元,每码元 = 按下(KEYEVENTF_UNICODE)+ 抬起(KEYEVENTF_UNICODE|KEYEVENTF_KEYUP),
 /// wVk=0、wScan=码元(非 ASCII 安全,不碰剪贴板)。空文本 → 空数组(无操作成功)。
@@ -264,6 +282,12 @@ fn build_unicode_inputs(text: &str) -> Vec<INPUT> {
         }
     }
     inputs
+}
+
+/// INPUT 数组按批切分(纯函数):每批 ≤ [INPUTS_PER_BATCH],防止单次
+/// SendInput 提交过大阻塞系统输入处理
+fn input_batches(inputs: &[INPUT]) -> impl Iterator<Item = &[INPUT]> {
+    inputs.chunks(INPUTS_PER_BATCH)
 }
 
 // ---------------------------------------------------------------------------
@@ -317,9 +341,16 @@ pub fn press_key(key: &str, modifiers: &[&str]) -> Result<(), String> {
     inject(&build_key_inputs(key, modifiers)?)
 }
 
-/// Unicode 文本输入(逐字符 SendInput KEYEVENTF_UNICODE,非 ASCII 安全;不依赖剪贴板)
+/// Unicode 文本输入(逐字符 SendInput KEYEVENTF_UNICODE,非 ASCII 安全;不依赖剪贴板)。
+/// 安全加固:长度 ≤ [MAX_TEXT_CHARS](超限报错),并按每批 [INPUTS_PER_BATCH] 条分批
+/// SendInput——单次提交 200 万条 INPUT 会卡死系统输入,分批提交让系统逐批消化
 pub fn type_text(text: &str) -> Result<(), String> {
-    inject(&build_unicode_inputs(text))
+    check_text_len(text)?;
+    let inputs = build_unicode_inputs(text);
+    for batch in input_batches(&inputs) {
+        inject(batch)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -541,5 +572,37 @@ mod tests {
 
         // 空文本 → 空数组(注入端视为成功)
         assert!(build_unicode_inputs("").is_empty());
+    }
+
+    // ---- 文本长度上限与分批(安全加固) ----
+
+    #[test]
+    fn check_text_len_boundaries() {
+        assert!(check_text_len("").is_ok());
+        assert!(check_text_len(&"字".repeat(MAX_TEXT_CHARS)).is_ok(), "恰好上限应放行");
+        assert!(check_text_len(&"字".repeat(MAX_TEXT_CHARS + 1)).is_err(), "超上限 1 字符即拒绝");
+        assert!(check_text_len(&"字".repeat(1_000_000)).is_err(), "1MB 级文本必须拒绝");
+        let err = check_text_len(&"字".repeat(MAX_TEXT_CHARS + 1)).unwrap_err();
+        assert!(err.contains("20000"), "错误文案应含上限值: {err}");
+    }
+
+    #[test]
+    fn input_batches_split_at_limit() {
+        // 每批 ≤ 1000 条 INPUT(即 500 个字符);2500 字符 = 5000 条 → 5 批
+        let text = "x".repeat(2500);
+        let inputs = build_unicode_inputs(&text);
+        assert_eq!(inputs.len(), 5000);
+        let batches: Vec<&[INPUT]> = input_batches(&inputs).collect();
+        assert_eq!(batches.len(), 5);
+        assert!(batches.iter().all(|b| b.len() <= INPUTS_PER_BATCH));
+        assert_eq!(batches[0].len(), INPUTS_PER_BATCH);
+        // 恰好整数批边界:1000 条 → 1 批
+        let inputs2 = build_unicode_inputs(&"x".repeat(500));
+        let batches2: Vec<&[INPUT]> = input_batches(&inputs2).collect();
+        assert_eq!(batches2.len(), 1);
+        // 空输入 → 0 批(注入端视为成功,不调用 SendInput)
+        let empty_inputs = build_unicode_inputs("");
+        let batches3: Vec<&[INPUT]> = input_batches(&empty_inputs).collect();
+        assert!(batches3.is_empty());
     }
 }

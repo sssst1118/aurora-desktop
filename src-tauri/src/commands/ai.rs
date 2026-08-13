@@ -73,13 +73,6 @@ fn truncate_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     }
 }
 
-/// model/base_url 解析:None 或空串 → 配置默认值
-fn pick(v: Option<String>, cfg_default: &str) -> String {
-    v.map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| cfg_default.to_string())
-}
-
 /// 解析后的连接目标(双模式差异已收敛;密钥在此解析,之后只注入 client)
 #[derive(Debug, Clone, PartialEq)]
 struct Endpoint {
@@ -90,18 +83,16 @@ struct Endpoint {
 }
 
 /// 双模式端点解析(纯函数):deepseek 带密钥(缺失 → MissingKey);ollama 无认证。
-fn resolve_endpoint(
-    cfg: &AppConfig,
-    model: Option<String>,
-    base_url: Option<String>,
-) -> Result<Endpoint, AiErrorKind> {
+/// 安全加固:model/base_url 只从配置读取,不再接受命令入参覆盖——
+/// 此前 base_url 可由前端传入而密钥仍从配置注入,恶意前端可把 key 引到攻击者服务器
+fn resolve_endpoint(cfg: &AppConfig) -> Result<Endpoint, AiErrorKind> {
     let provider = cfg.ai_provider.trim().to_string();
     if provider.is_empty() {
         return Err(AiErrorKind::Other("AI 服务商未配置,请在设置中选择".to_string()));
     }
     let is_ollama = provider == "ollama";
-    let model = pick(model, if is_ollama { &cfg.ai_ollama_model } else { &cfg.ai_model });
-    let base_url = pick(base_url, if is_ollama { &cfg.ai_ollama_url } else { &cfg.ai_base_url });
+    let model = if is_ollama { &cfg.ai_ollama_model } else { &cfg.ai_model };
+    let base_url = if is_ollama { &cfg.ai_ollama_url } else { &cfg.ai_base_url };
     let api_key = if is_ollama {
         None
     } else {
@@ -113,7 +104,7 @@ fn resolve_endpoint(
             .ok_or(AiErrorKind::MissingKey)?;
         Some(k.to_string())
     };
-    Ok(Endpoint { provider, base_url, model, api_key })
+    Ok(Endpoint { provider, base_url: base_url.trim().to_string(), model: model.trim().to_string(), api_key })
 }
 
 // ==================== 工具循环(§2.3) ====================
@@ -360,19 +351,16 @@ fn fmt_clipboard_summary(items: &[crate::commands::clipboard::ClipboardItem]) ->
 
 /// 流式对话(SSE):spawn 异步任务,逐行 emit `ai-event`(chunk/tool/done/error)。
 /// 返回 Err 仅代表"任务未能启动"(消息为空/参数配置类错误,已 emit error)。
+/// 安全加固:model/base_url 不再作为入参(只信任配置),防 base_url 可覆盖而
+/// 密钥仍从配置注入 → key 被引到攻击者服务器的组合漏洞
 #[tauri::command]
-pub fn ai_chat_stream(
-    app: AppHandle,
-    messages: Vec<ChatMessage>,
-    model: Option<String>,
-    base_url: Option<String>,
-) -> Result<(), String> {
+pub fn ai_chat_stream(app: AppHandle, messages: Vec<ChatMessage>) -> Result<(), String> {
     if messages.is_empty() {
         return Err("消息不能为空".to_string());
     }
     // 任务启动前同步校验配置类错误(无 key / 服务商未配置等),快速失败
     let cfg = load_cfg(&app);
-    let ep = match resolve_endpoint(&cfg, model, base_url) {
+    let ep = match resolve_endpoint(&cfg) {
         Ok(ep) => ep,
         Err(kind) => return Err(classify_error(&kind, &cfg.ai_provider)),
     };
@@ -414,15 +402,14 @@ pub fn ai_chat_stream(
 }
 
 /// 非流式对话(含工具循环):直接返回完整回复文本。
+/// 安全加固:model/base_url 不再作为入参(只信任配置,同 ai_chat_stream)
 #[tauri::command]
 pub async fn ai_chat_completion(
     app: AppHandle,
     messages: Vec<ChatMessage>,
-    model: Option<String>,
-    base_url: Option<String>,
 ) -> Result<String, String> {
     let cfg = load_cfg(&app);
-    let ep = match resolve_endpoint(&cfg, model, base_url) {
+    let ep = match resolve_endpoint(&cfg) {
         Ok(ep) => ep,
         Err(kind) => return Err(classify_error(&kind, &cfg.ai_provider)),
     };
@@ -466,7 +453,7 @@ pub async fn ai_chat_completion(
 #[tauri::command]
 pub async fn ai_execute_tool(app: AppHandle, instruction: String) -> AiToolResult {
     let cfg = load_cfg(&app);
-    let ep = match resolve_endpoint(&cfg, None, None) {
+    let ep = match resolve_endpoint(&cfg) {
         Ok(ep) => ep,
         Err(kind) => {
             return AiToolResult {
@@ -544,7 +531,7 @@ mod tests {
     #[test]
     fn resolve_endpoint_ollama_no_key_needed() {
         let cfg = AppConfig { ai_provider: "ollama".into(), ai_ollama_model: "qwen2.5:7b".into(), ai_ollama_url: "http://127.0.0.1:11434/v1".into(), ..AppConfig::default() };
-        let ep = resolve_endpoint(&cfg, None, None).unwrap();
+        let ep = resolve_endpoint(&cfg).unwrap();
         assert_eq!(ep.provider, "ollama");
         assert_eq!(ep.model, "qwen2.5:7b");
         assert_eq!(ep.base_url, "http://127.0.0.1:11434/v1");
@@ -554,13 +541,14 @@ mod tests {
     #[test]
     fn resolve_endpoint_deepseek_missing_key_is_err() {
         let cfg = AppConfig { ai_provider: "deepseek".into(), ai_api_key: None, ..AppConfig::default() };
-        assert_eq!(resolve_endpoint(&cfg, None, None), Err(AiErrorKind::MissingKey));
+        assert_eq!(resolve_endpoint(&cfg), Err(AiErrorKind::MissingKey));
         let cfg2 = AppConfig { ai_provider: "deepseek".into(), ai_api_key: Some("   ".into()), ..AppConfig::default() };
-        assert_eq!(resolve_endpoint(&cfg2, None, None), Err(AiErrorKind::MissingKey), "空白 key 视为缺失");
+        assert_eq!(resolve_endpoint(&cfg2), Err(AiErrorKind::MissingKey), "空白 key 视为缺失");
     }
 
     #[test]
-    fn resolve_endpoint_overrides_and_defaults() {
+    fn resolve_endpoint_uses_config_only() {
+        // 安全加固:model/base_url 一律取配置值,命令入参不再可覆盖(入参已移除)
         let cfg = AppConfig {
             ai_provider: "deepseek".into(),
             ai_api_key: Some("sk-real".into()),
@@ -568,17 +556,13 @@ mod tests {
             ai_base_url: "https://api.deepseek.com/v1".into(),
             ..AppConfig::default()
         };
-        // 显式传值覆盖配置
-        let ep = resolve_endpoint(&cfg, Some("deepseek-reasoner".into()), Some("http://x/v2".into())).unwrap();
-        assert_eq!(ep.model, "deepseek-reasoner");
-        assert_eq!(ep.base_url, "http://x/v2");
-        assert_eq!(ep.api_key.as_deref(), Some("sk-real"));
-        // 空串 → 用配置
-        let ep = resolve_endpoint(&cfg, Some("  ".into()), None).unwrap();
+        let ep = resolve_endpoint(&cfg).unwrap();
         assert_eq!(ep.model, "deepseek-chat");
+        assert_eq!(ep.base_url, "https://api.deepseek.com/v1");
+        assert_eq!(ep.api_key.as_deref(), Some("sk-real"));
         // 空服务商 → Err
         let bad = AppConfig { ai_provider: "  ".into(), ..AppConfig::default() };
-        assert!(resolve_endpoint(&bad, None, None).is_err());
+        assert!(resolve_endpoint(&bad).is_err());
     }
 
     // ---------- 结果格式化(纯函数) ----------
