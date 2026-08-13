@@ -18,8 +18,17 @@ interface AppEntry {
   icon?: string | null;
 }
 
+/** 后端 search_files 返回的文件条目({ path, name, is_dir } 契约,is_dir 供类型角标区分) */
+interface FileEntry {
+  path: string;
+  name: string;
+  is_dir: boolean;
+}
+
 const query = ref("");
-const results = ref<AppEntry[]>([]);
+// 应用搜索结果与文件搜索结果分开存(§6.3「应用优先,其次文件」:两组分别渲染)
+const appResults = ref<AppEntry[]>([]);
+const fileResults = ref<FileEntry[]>([]);
 const selected = ref(0);
 const inputEl = ref<HTMLInputElement | null>(null);
 const showSettings = ref(false);
@@ -44,14 +53,20 @@ let searchSeq = 0; // 请求序号:快速输入时丢弃过期响应,防旧结�
 
 const win = getCurrentWindow();
 
-/** 当前展示列表:有输入 → 搜索结果;无输入 → 最近打开 */
-const displayItems = computed<AppEntry[] | RecentApp[]>(() =>
-  query.value.trim() ? results.value : recents.value,
+/** 可导航条目最小公共形状(应用/文件/最近打开;文件条目的 is_dir 供角标使用) */
+type NavItem = { name: string; path: string; icon?: string | null; is_dir?: boolean };
+
+/** 有输入时的合并展示:应用组在前、文件组在后(应用优先,其次文件) */
+const allResults = computed<NavItem[]>(() => [...appResults.value, ...fileResults.value]);
+
+/** 当前键盘可导航列表:有输入 → 应用+文件合并(↑↓ 在两组间连续移动);无输入 → 最近打开 */
+const navigableItems = computed<NavItem[] | RecentApp[]>(() =>
+  query.value.trim() ? allResults.value : recents.value,
 );
 
-// 展示列表变化(新搜索结果/回到最近打开)后:选中项回滚进视口 + 补齐图标
+// 可导航列表变化(新搜索结果/回到最近打开)后:选中项回滚进视口 + 补齐图标
 watch(
-  displayItems,
+  navigableItems,
   () => {
     void scrollSelectedIntoView();
     refreshIcons();
@@ -93,13 +108,27 @@ async function iconOf(path: string): Promise<string | undefined> {
   return undefined;
 }
 
-/** 为当前可见条目补齐图标(命中缓存即跳过;图标未就绪期间显示 emoji 占位) */
+/** 为当前可见条目补齐图标(命中缓存即跳过;图标未就绪期间显示 emoji 占位)。
+ * 文件条目不取系统图标(dock_get_icon 的 ExtractIconExW 只认 exe/ico,
+ * 普通文件/目录必失败),固定用类型角标,避免每次搜索空发一串 IPC。 */
 function refreshIcons() {
-  for (const it of displayItems.value) {
+  for (const it of query.value.trim() ? appResults.value : recents.value) {
     const ic = (it as AppEntry).icon;
     if (ic && ic.startsWith("data:")) continue;
     if (!icons.value.has(it.path)) void iconOf(it.path);
   }
+}
+
+/** 文件条目的位置提示(相对路径省略):取路径去掉文件名后的目录段,
+ * 过长时只保留最末两级目录并前置省略号;路径即文件名(罕见)时为空 */
+function dirLabelOf(item: FileEntry): string {
+  const dir = item.path.endsWith(item.name)
+    ? item.path.slice(0, item.path.length - item.name.length)
+    : "";
+  if (!dir) return "";
+  const segs = dir.split(/[\\/]+/).filter(Boolean);
+  const tail = segs.slice(-2).join(" / ");
+  return segs.length > 2 ? `… ${tail}` : tail;
 }
 
 // Dock 开关立即读取(不等 onShown):Dock 组件在应用启动时即挂载并后台提取图标,
@@ -144,8 +173,9 @@ async function doSearch() {
   const q = query.value.trim();
   const seq = ++searchSeq;
   if (!q) {
-    // 空输入回到最近打开列表(结果清空,进行中指示熄灭)
-    results.value = [];
+    // 空输入回到最近打开列表(应用/文件结果清空,进行中指示熄灭)
+    appResults.value = [];
+    fileResults.value = [];
     selected.value = 0;
     searching.value = false;
     searchError.value = "";
@@ -153,19 +183,24 @@ async function doSearch() {
   }
   searching.value = true;
   searchError.value = "";
-  try {
-    const list = (await invoke<AppEntry[]>("search_apps", { query: q })) ?? [];
-    if (seq !== searchSeq) return; // 已有更新的请求,丢弃过期结果
-    results.value = list;
-    selected.value = 0;
-  } catch (e) {
-    console.error(e);
-    if (seq !== searchSeq) return;
-    results.value = [];
-    searchError.value = "搜索失败,请稍后重试";
-  } finally {
-    if (seq === searchSeq) searching.value = false;
-  }
+  // 应用与文件搜索并行发起;文件搜索失败静默降级(只缺文件组,不影响应用结果),
+  // 应用搜索失败才提示错误(与旧行为一致,避免误导成"无匹配结果")
+  const [apps, files] = await Promise.all([
+    invoke<AppEntry[]>("search_apps", { query: q }).catch((e) => {
+      console.error(e);
+      return undefined;
+    }),
+    invoke<FileEntry[]>("search_files", { query: q, maxResults: 8 }).catch((e) => {
+      console.error(e);
+      return undefined;
+    }),
+  ]);
+  if (seq !== searchSeq) return; // 已有更新的请求,丢弃过期结果
+  appResults.value = apps ?? [];
+  fileResults.value = files ?? [];
+  selected.value = 0;
+  searching.value = false;
+  if (apps === undefined) searchError.value = "搜索失败,请稍后重试";
 }
 
 function onInput() {
@@ -174,22 +209,23 @@ function onInput() {
 }
 
 function selectNext() {
-  if (displayItems.value.length === 0) return;
-  selected.value = (selected.value + 1) % displayItems.value.length;
+  if (navigableItems.value.length === 0) return;
+  selected.value = (selected.value + 1) % navigableItems.value.length;
   void scrollSelectedIntoView();
 }
 
 function selectPrev() {
-  if (displayItems.value.length === 0) return;
+  if (navigableItems.value.length === 0) return;
   selected.value =
-    (selected.value - 1 + displayItems.value.length) % displayItems.value.length;
+    (selected.value - 1 + navigableItems.value.length) % navigableItems.value.length;
   void scrollSelectedIntoView();
 }
 
 async function openSelected() {
-  const item = displayItems.value[selected.value];
+  // 应用与文件走同一 open_item(ShellExecute 语义,文件/目录/应用通吃)
+  const item = navigableItems.value[selected.value];
   if (!item) return;
-  // 打开成功即写入最近使用(置顶去重);失败也照旧关窗,与既有行为一致
+  // 打开成功即写入最近使用(置顶去重;文件条目同样记入);失败也照旧关窗,与既有行为一致
   const ok = await invoke<boolean>("open_item", { path: item.path });
   if (ok) saveRecent(item);
   await win.hide();
@@ -244,7 +280,8 @@ function onWindowKeydown(e: KeyboardEvent) {
 function onShown() {
   if (showSettings.value) showSettings.value = false;
   query.value = "";
-  results.value = [];
+  appResults.value = [];
+  fileResults.value = [];
   selected.value = 0;
   searching.value = false;
   searchError.value = "";
@@ -385,7 +422,7 @@ onUnmounted(() => {
           ref="inputEl"
           v-model="query"
           class="flex-1 bg-transparent outline-none text-sm placeholder:text-[var(--aurora-text-dim)]"
-          placeholder="搜索应用…"
+          placeholder="搜索应用、文件…"
           @input="onInput"
         />
         <button
@@ -414,35 +451,82 @@ onUnmounted(() => {
         </div>
         <!-- 有输入且无结果:空态 -->
         <div
-          v-else-if="query.trim() && displayItems.length === 0"
+          v-else-if="query.trim() && allResults.length === 0"
           class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]"
         >
           无匹配结果
         </div>
         <!-- 空 query:引导文案,下方展示最近打开 -->
         <div v-else-if="!query.trim()" class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]">
-          输入关键词搜索应用
+          输入关键词搜索应用、文件
         </div>
-        <div
-          v-for="(item, i) in displayItems"
-          :key="item.path"
-          :ref="(el) => setItemEl(el, i)"
-          class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
-          :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
-          @mouseenter="selected = i"
-          @click="openSelected"
-        >
-          <!-- 真实图标:后端 icon 字段(data URI)或 dock_get_icon 提取;未就绪回退 emoji -->
-          <img
-            v-if="iconFor(item)"
-            :src="iconFor(item)"
-            class="h-5 w-5 object-contain pointer-events-none"
-            draggable="false"
-            alt=""
-          />
-          <span v-else class="text-base">🖥️</span>
-          <span>{{ item.name }}</span>
-        </div>
+        <!-- 有输入:应用组在前、文件组在后(应用优先,其次文件;键盘 ↑↓ 在两组间连续移动) -->
+        <template v-if="query.trim()">
+          <div
+            v-for="(item, i) in appResults"
+            :key="item.path"
+            :ref="(el) => setItemEl(el, i)"
+            class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
+            :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
+            @mouseenter="selected = i"
+            @click="openSelected"
+          >
+            <!-- 真实图标:后端 icon 字段(data URI)或 dock_get_icon 提取;未就绪回退 emoji -->
+            <img
+              v-if="iconFor(item)"
+              :src="iconFor(item)"
+              class="h-5 w-5 object-contain pointer-events-none"
+              draggable="false"
+              alt=""
+            />
+            <span v-else class="text-base">🖥️</span>
+            <span>{{ item.name }}</span>
+          </div>
+          <!-- 文件组(最多 8 条,后端默认一致):空结果不渲染标题与列表 -->
+          <template v-if="fileResults.length">
+            <div class="px-4 pt-3 pb-1 text-[10px] tracking-wide text-[var(--aurora-text-dim)]">
+              文件
+            </div>
+            <div
+              v-for="(item, i) in fileResults"
+              :key="'file:' + item.path"
+              :ref="(el) => setItemEl(el, appResults.length + i)"
+              class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
+              :class="appResults.length + i === selected ? 'bg-[var(--aurora-field)]' : ''"
+              @mouseenter="selected = appResults.length + i"
+              @click="openSelected"
+            >
+              <!-- 类型角标:目录 📁 / 文件 📄(dock_get_icon 只认 exe/ico,普通文件不取图标) -->
+              <span class="text-base">{{ item.is_dir ? "📁" : "📄" }}</span>
+              <span class="max-w-[60%] truncate">{{ item.name }}</span>
+              <span class="flex-1 min-w-0 truncate text-[10px] text-[var(--aurora-text-dim)]">
+                {{ dirLabelOf(item) }}
+              </span>
+            </div>
+          </template>
+        </template>
+        <!-- 无输入:最近打开 -->
+        <template v-else>
+          <div
+            v-for="(item, i) in recents"
+            :key="item.path"
+            :ref="(el) => setItemEl(el, i)"
+            class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
+            :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
+            @mouseenter="selected = i"
+            @click="openSelected"
+          >
+            <img
+              v-if="iconFor(item)"
+              :src="iconFor(item)"
+              class="h-5 w-5 object-contain pointer-events-none"
+              draggable="false"
+              alt=""
+            />
+            <span v-else class="text-base">🖥️</span>
+            <span>{{ item.name }}</span>
+          </div>
+        </template>
       </div>
       <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">
         ↑↓ 选择 · Enter 打开 · Esc 清空/关闭

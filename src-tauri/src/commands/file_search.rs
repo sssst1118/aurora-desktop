@@ -1,6 +1,8 @@
-//! 3.3 自然语言文件搜索。
+//! 3.3 自然语言文件搜索 + 搜索框关键词文件搜索。
 //!
 //! - `ai_search_files`:供前端与 AI 工具(3.2 的 search_files)两用;
+//! - `search_files`:搜索框直搜文件(§6.3「应用优先,其次文件」),纯关键词子串匹配,
+//!   不做扩展名提示映射,命中上限后提前退出(防抖后单次搜索必须快);
 //! - 目录白名单:dirs ⊆ ai_search_roots ∪ {桌面},越权/相对路径目录忽略(不报错,防 AI 越界);
 //!   未指定 dirs → ai_search_roots,仍空 → 仅桌面(**禁止全盘扫描**铁律);
 //! - 扩展名自然语言提示(`ext_hint_from_query`):query 含 pdf/word(文档)/excel(表格)/
@@ -212,6 +214,159 @@ pub async fn ai_search_files(query: String, dirs: Option<Vec<String>>) -> Vec<Fi
         let roots = configured_roots();
         let dirs = dirs.unwrap_or_default();
         search_in_roots(&query, &dirs, &roots)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+// ==================== 搜索框关键词文件搜索(search_files,§6.3) ====================
+
+/// 搜索框文件搜索结果条目。字段名用 `path` 而非 FileHit 的 `full_path`,
+/// 对齐 AppEntry.path 契约:前端拿到后可直接喂给 `open_item` 打开。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SearchFileHit {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// 结果默认条数(前端文件组最多展示 8 条,后端默认一致)
+const DEFAULT_SEARCH_RESULTS: usize = 8;
+/// 结果硬上限(防御异常入参;提前退出以该值为界)
+const MAX_SEARCH_RESULTS: usize = 20;
+
+/// 扫描期内部条目:携带排序所需信息,序列化前剥离为 [SearchFileHit]。
+struct KeywordHit {
+    name: String,
+    path: PathBuf,
+    is_dir: bool,
+    /// 命中类型:文件名(不含目录部分)含关键词 = true;仅路径的目录段含关键词 = false
+    name_hit: bool,
+    /// 修改时间(同优先级排序用;读取失败为 None,排到末尾)
+    modified: Option<std::time::SystemTime>,
+}
+
+/// 关键词 DFS:与 [dfs] 相同的深度/每层上限/符号链接跳过约束,但:
+/// - 不做扩展名提示过滤(关键词原样子串匹配,ext_hint 是自然语言搜索专属);
+/// - 收满 [cap] 条即提前退出,绝不扫完全树(150ms 防抖后的搜索必须快);
+/// - 去重随扫随做(seen 集合),不再像 ai_search_files 那样事后全局去重。
+fn keyword_dfs(
+    dir: &Path,
+    depth: usize,
+    query_lower: &str,
+    cap: usize,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<KeywordHit>,
+) {
+    if depth >= MAX_DEPTH || out.len() >= cap {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return; // 权限不足/目录不存在:跳过该目录(与 ai_search_files 同策略)
+    };
+    let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    entries.sort_by_key(|p| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
+    entries.truncate(MAX_PER_LEVEL); // 巨目录保护:同层超限先行截断
+    for p in entries {
+        if out.len() >= cap {
+            return; // 已收满:提前退出,不扫剩余条目与更深子目录
+        }
+        // symlink_metadata:不跟随符号链接;链接(文件或目录)一律跳过,
+        // 防白名单内链接逃逸到白名单外目录(越权读取)
+        let Ok(meta) = p.symlink_metadata() else { continue };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let is_dir = meta.is_dir();
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name_hit = name.to_lowercase().contains(query_lower);
+        // 纯路径命中:文件名不含关键词、但完整路径含(命中落在目录段上)
+        let path_hit = name_hit || p.to_string_lossy().to_lowercase().contains(query_lower);
+        if path_hit && seen.insert(dedup_key(&p.to_string_lossy())) {
+            out.push(KeywordHit {
+                name,
+                path: p.clone(),
+                is_dir,
+                name_hit,
+                modified: meta.modified().ok(),
+            });
+        }
+        if is_dir {
+            keyword_dfs(&p, depth + 1, query_lower, cap, seen, out);
+        }
+    }
+}
+
+/// 关键词搜索核心(同步,由命令层 spawn_blocking 包裹):
+/// - 扫描集合 = ai_search_roots ∪ {桌面}:桌面是白名单固定成员,搜索框是用户主动的
+///   全局搜索,桌面文件必须可搜到(与 roots 重叠时由 seen 去重兜底);
+/// - 排序 = 文件名命中(不含目录部分)优先于纯路径命中,同优先级按修改时间
+///   新→旧(最近修改的文件更可能是用户想找的),修改时间不可得时按名称
+///   字典序(大小写不敏感)兜底,保证输出确定。
+fn keyword_search(query: &str, cap: usize, roots: &[String]) -> Vec<SearchFileHit> {
+    let query_lower = query.trim().to_lowercase();
+    if query_lower.is_empty() {
+        return Vec::new(); // 空关键词无意义(空串会命中所有条目),直接返回空
+    }
+    let mut scan_dirs: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+    if let Some(d) = desktop_dir() {
+        scan_dirs.push(d); // 桌面固定并入扫描集合
+    }
+    // 安全加固:扫描根本身若是符号链接同样跳过(根在白名单内、链接目标可能在白名单外)
+    scan_dirs.retain(|d| {
+        d.symlink_metadata()
+            .map(|m| !m.file_type().is_symlink())
+            .unwrap_or(false)
+    });
+
+    let mut hits: Vec<KeywordHit> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for dir in &scan_dirs {
+        keyword_dfs(dir, 0, &query_lower, cap, &mut seen, &mut hits);
+        if hits.len() >= cap {
+            break; // 已收满,不再扫其余根
+        }
+    }
+    hits.sort_by(|a, b| {
+        b.name_hit
+            .cmp(&a.name_hit)
+            .then_with(|| b.modified.cmp(&a.modified))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    hits.into_iter()
+        .map(|h| SearchFileHit {
+            path: h.path.to_string_lossy().into_owned(),
+            name: h.name,
+            is_dir: h.is_dir,
+        })
+        .collect()
+}
+
+/// 搜索框文件搜索:文件名/路径子串匹配(大小写不敏感,纯关键词非自然语言)。
+/// 复用 ai_search_files 的目录白名单(ai_search_roots ∪ 桌面)/深度/每层上限/去重机制,
+/// 但不做 ext_hint 扩展名映射(query 是用户打的原始关键词)。
+///
+/// 性能:命中 max_results(默认 8,上限 20)即提前退出,绝不扫完全树;
+/// 扫描有「深度 ≤3 × 每层 ≤500」的结构性上限,常规搜索只读少量目录,
+/// 150ms 防抖后的单次搜索在常规磁盘远低于 300ms(全树最坏情况的边界
+/// 与 ai_search_files 相同,且提前退出让典型场景远优于该边界);
+/// 全部目录 IO 在 spawn_blocking 内,不阻塞主线程。
+#[tauri::command]
+pub async fn search_files(query: String, max_results: Option<usize>) -> Vec<SearchFileHit> {
+    let cap = max_results
+        .unwrap_or(DEFAULT_SEARCH_RESULTS)
+        .min(MAX_SEARCH_RESULTS)
+        .max(1); // 下限 1:0 没有展示意义,前端误传 0 时不至于收到空组
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = configured_roots();
+        keyword_search(&query, cap, &roots)
     })
     .await
     .unwrap_or_default()
@@ -521,5 +676,170 @@ mod tests {
         let s = serde_json::to_string(&h).unwrap();
         // JSON 中反斜杠须转义为双反斜杠
         assert_eq!(s, r#"{"name":"a.pdf","full_path":"C:\\x\\a.pdf","is_dir":false}"#);
+    }
+
+    // ---- 搜索框关键词搜索(keyword_search 核心;查询词统一带 auroraKW 前缀,
+    //      避免与测试机真实桌面文件撞名——扫描集合固定包含桌面)----
+
+    #[test]
+    fn search_files_matches_substring_case_insensitive() {
+        let root = tmp_dir("kw_sub");
+        let roots = vec![root_str(&root)];
+        touch(&root.join("auroraKW季度报告.PDF"));
+        touch(&root.join("auroraKW无关.docx"));
+        // 子串命中 + 大小写不敏感(大写文件名 + 小写关键词)
+        let hits = keyword_search("aurorakw季度", 8, &roots);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "auroraKW季度报告.PDF");
+        assert!(!hits[0].is_dir);
+        // 大写关键词同样命中
+        let hits = keyword_search("AURORAKW季度", 8, &roots);
+        assert_eq!(hits.len(), 1);
+        // 无扩展名映射:query 含 pdf 词也不过滤非 pdf 文件(与 ai_search_files 不同)
+        touch(&root.join("auroraKW发票.docx"));
+        let hits = keyword_search("auroraKW发票 pdf", 8, &roots);
+        assert_eq!(hits.len(), 0, "关键词子串匹配不做扩展名过滤");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_files_path_hit_and_dir_hit() {
+        let root = tmp_dir("kw_path");
+        let roots = vec![root_str(&root)];
+        // 目录命中:目录名含关键词 → 以 is_dir=true 出现在结果里
+        std::fs::create_dir_all(root.join("auroraKW项目")).unwrap();
+        // 纯路径命中:目录段含关键词、文件名不含
+        touch(&root.join("auroraKW项目").join("其他资料.txt"));
+        let hits = keyword_search("auroraKW项目", 8, &roots);
+        assert!(
+            hits.iter().any(|h| h.is_dir && h.name == "auroraKW项目"),
+            "目录命中应带 is_dir"
+        );
+        assert!(
+            hits.iter().any(|h| !h.is_dir && h.name == "其他资料.txt"),
+            "目录内文件经路径命中"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_files_depth_cutoff() {
+        let root = tmp_dir("kw_depth");
+        let roots = vec![root_str(&root)];
+        // 可达边界(与 ai_search_files 相同):根下第 2 级目录内的文件可达,
+        // 第 3 级目录的内容不列(MAX_DEPTH=3,递归深度 3 时直接返回)
+        touch(&root.join("d1").join("d2").join("auroraKW深层.pdf"));
+        touch(&root.join("d1").join("d2").join("d3").join("auroraKW超深.pdf"));
+        let hits = keyword_search("auroraKW", 8, &roots);
+        assert!(hits.iter().any(|h| h.name == "auroraKW深层.pdf"));
+        assert!(
+            hits.iter().all(|h| !h.path.contains("d3")),
+            "第 3 级目录内文件不应命中"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_files_confined_to_roots() {
+        // 白名单越界:只扫传入 roots(命令层为 ai_search_roots ∪ 桌面),root 外文件不命中
+        let root = tmp_dir("kw_scope");
+        let outside = tmp_dir("kw_scope_out");
+        touch(&root.join("auroraKW白名单内.txt"));
+        touch(&outside.join("auroraKW白名单外.txt"));
+        let roots = vec![root_str(&root)];
+        let hits = keyword_search("auroraKW白名单", 8, &roots);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "auroraKW白名单内.txt");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn search_files_caps_results_and_early_exits() {
+        let root = tmp_dir("kw_cap");
+        let roots = vec![root_str(&root)];
+        // 第 1 层 10 个命中 + 按名称序排在其后的 zzz 子目录内 10 个命中
+        for i in 0..10 {
+            touch(&root.join(format!("auroraKWcap{i:02}.txt")));
+        }
+        std::fs::create_dir_all(root.join("zzz")).unwrap();
+        for i in 0..10 {
+            touch(&root.join("zzz").join(format!("auroraKWcap_deep{i:02}.txt")));
+        }
+        // cap 小时结果数不超限,且按扫描序排在后面的深层命中不存在(提前退出未扫到)
+        let hits = keyword_search("auroraKWcap", 3, &roots);
+        assert_eq!(hits.len(), 3, "结果数不得超 cap(提前退出)");
+        assert!(
+            hits.iter().all(|h| !h.name.contains("deep")),
+            "扫描序靠后的深层命中不应出现"
+        );
+        // cap 放宽后全部命中(共 20 条,命令层上限内)
+        let hits = keyword_search("auroraKWcap", 20, &roots);
+        assert_eq!(hits.len(), 20);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_files_name_hit_before_path_hit_and_mtime_order() {
+        let root = tmp_dir("kw_sort");
+        let roots = vec![root_str(&root)];
+        // 两个文件名命中:名字序 新.txt < 老.txt,但修改时间相反(新.txt 旧、老.txt 新)。
+        // mtime 显式设到"未来"(相对 now),保证与目录 mtime(≈ now,无法显式设置)严格有序
+        let a = root.join("auroraKW新.txt");
+        let b = root.join("auroraKW老.txt");
+        touch(&a);
+        touch(&b);
+        let now = std::time::SystemTime::now();
+        std::fs::File::options()
+            .write(true)
+            .open(&a)
+            .unwrap()
+            .set_modified(now + std::time::Duration::from_secs(60))
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(now + std::time::Duration::from_secs(120))
+            .unwrap();
+        // 关键词命中的目录自身也是命中(名字含关键词);目录内文件为纯路径命中
+        std::fs::create_dir_all(root.join("auroraKW资料")).unwrap();
+        let c = root.join("auroraKW资料").join("随便.txt");
+        touch(&c);
+
+        let hits = keyword_search("auroraKW", 8, &roots);
+        let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(hits.len(), 4, "命中应恰好 4 条: {names:?}");
+        // 文件名/目录名命中优先于纯路径命中(纯路径命中排最后)
+        assert_eq!(hits[3].name, "随便.txt", "纯路径命中排最后: {names:?}");
+        // 同为文件名命中 → 修改时间新→旧:老.txt(mtime 最新)在最前,
+        // 目录 mtime ≈ now 小于两个文件显式设置的未来时间,排在两个文件之后
+        assert_eq!(hits[0].name, "auroraKW老.txt");
+        assert_eq!(hits[1].name, "auroraKW新.txt");
+        assert!(hits[2].is_dir && hits[2].name == "auroraKW资料");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_files_empty_query_returns_empty() {
+        let root = tmp_dir("kw_empty");
+        let roots = vec![root_str(&root)];
+        touch(&root.join("auroraKW任意.txt"));
+        // 空/纯空白关键词无意义,直接返回空(空串子串会命中所有条目)
+        assert!(keyword_search("", 8, &roots).is_empty());
+        assert!(keyword_search("   ", 8, &roots).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_file_hit_serializes_with_contract_fields() {
+        let h = SearchFileHit {
+            path: r"C:\x\a.pdf".to_string(),
+            name: "a.pdf".to_string(),
+            is_dir: false,
+        };
+        let s = serde_json::to_string(&h).unwrap();
+        // JSON 中反斜杠须转义为双反斜杠;字段名是 path 而非 full_path
+        assert_eq!(s, r#"{"path":"C:\\x\\a.pdf","name":"a.pdf","is_dir":false}"#);
     }
 }
