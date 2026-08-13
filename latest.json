@@ -1,6 +1,6 @@
 {
-  "version": "0.1.0",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.1.0/Aurora_0.1.0_x64-setup.exe",
-  "sha256": "6c609774b657b01896a584bb90cc9a3abb0ad45f76fd5f21627c66d2a29b8c7d",
-  "notes": "Aurora 首个公开发布版本:灵动岛 / 全局搜索 / Dock / 文件抽屉 / 剪贴板历史 / 壁纸引擎 / AI 助手 / 自动化 / 主题 / 自动更新"
+  "version": "0.1.1",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.1.1/Aurora_0.1.1_x64-setup.exe",
+  "sha256": "e717684281b2214e6b98d0813d9528c7c27839347afedada6b9c38f53bab3408",
+  "notes": "搜索框直接搜文件;AI 危险工具执行前用户确认;剪贴板单条删除;热键录制输入;主题即时生效修复;多项安全加固(html 壁纸权限洞/更新源白名单/符号链接逃逸封堵)"
 }
