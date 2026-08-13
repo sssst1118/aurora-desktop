@@ -10,6 +10,15 @@
   --aurora-border: rgba(15, 23, 42, 0.12);
   --aurora-accent: #3b82f6; /* 默认蓝,theme_accent 换 token 名映射 */
   --aurora-field: rgba(15, 23, 42, 0.05); /* 输入框底色 */
+  /* 语义色(危险/成功/警示):浅色用 600/700 系深色保证白底可读,bg 为同色系淡底 */
+  --aurora-danger: #b91c1c;
+  --aurora-danger-bg: rgba(185, 28, 28, 0.08);
+  --aurora-success: #047857;
+  --aurora-success-bg: rgba(4, 120, 87, 0.08);
+  --aurora-warn: #b45309;
+  --aurora-warn-bg: rgba(180, 83, 9, 0.08);
+  /* 开关滑块:浅色下用深灰,保证在浅色轨道上可见(深色下为白) */
+  --aurora-switch-thumb: #475569;
 }
 
 :root.dark {
@@ -21,4 +30,12 @@
   --aurora-border: rgba(255, 255, 255, 0.1);
   --aurora-accent: #3b82f6;
   --aurora-field: rgba(255, 255, 255, 0.05);
+  /* 语义色:深色沿用迁移前 300 系浅色观感,bg 为同色系 10% 淡底 */
+  --aurora-danger: #fca5a5; /* red-300 */
+  --aurora-danger-bg: rgba(239, 68, 68, 0.1); /* red-500/10 */
+  --aurora-success: #6ee7b7; /* emerald-300 */
+  --aurora-success-bg: rgba(16, 185, 129, 0.1); /* emerald-500/10 */
+  --aurora-warn: #fde68a; /* amber-200 */
+  --aurora-warn-bg: rgba(245, 158, 11, 0.1); /* amber-500/10 */
+  --aurora-switch-thumb: #ffffff;
 }

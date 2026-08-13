@@ -70,8 +70,12 @@ export const useConfigStore = defineStore("config", {
     async save() {
       if (!this.cfg) return;
       const ok = await invoke<boolean>("config_save", { cfg: this.cfg });
+      // 保存失败统一抛错,由调用方(Settings 等)捕获后回滚本地值并提示
+      if (!ok) {
+        throw new Error("config_save 返回失败");
+      }
       // 热生效:保存成功即广播,依赖配置的组件(如 Dock 开关)监听后即时刷新,无需重启/下次呼出
-      if (ok) window.dispatchEvent(new CustomEvent("aurora:config-saved"));
+      window.dispatchEvent(new CustomEvent("aurora:config-saved"));
     },
   },
 });

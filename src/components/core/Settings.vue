@@ -4,10 +4,32 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useConfigStore } from "../../stores/config";
+import { apply_theme } from "../../theme";
+import ToggleSwitch from "../ToggleSwitch.vue";
 import WallpaperPanel from "./WallpaperPanel.vue";
 
 const store = useConfigStore();
 const emit = defineEmits<{ (e: "close"): void }>();
+
+/** 配置保存统一入口:失败时回滚本地值为后端实际配置并展示红字提示;成功清空提示 */
+const saveError = ref("");
+
+async function saveSafe(): Promise<boolean> {
+  if (!store.cfg) return false;
+  try {
+    await store.save();
+    saveError.value = "";
+    return true;
+  } catch (e) {
+    saveError.value = `保存失败:${e}`;
+    try {
+      await store.load(); // 回滚:以后端实际落盘配置为准,丢弃失败的本地修改
+    } catch {
+      /* 后端读取也失败时保留本地值,用户可重试 */
+    }
+    return false;
+  }
+}
 
 onMounted(async () => {
   void store.load();
@@ -63,7 +85,7 @@ onUnmounted(() => {
 async function toggleIsland() {
   if (!store.cfg) return;
   store.cfg.enable_island = !store.cfg.enable_island;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase2 模块开关(热生效:config_save 后 runtime::apply 同步 watcher/监听器/窗口显隐) */
@@ -72,40 +94,40 @@ async function toggleModule(
 ) {
   if (!store.cfg) return;
   store.cfg[key] = !store.cfg[key];
-  await store.save();
+  await saveSafe();
 }
 
 /** 搜索框显示方式(热生效:保存后 SearchBar 经 aurora:config-saved 即时刷新,无需重启) */
 async function setSearchStyle(style: "glass" | "solid") {
   if (!store.cfg) return;
   store.cfg.search_style = style;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase3 AI 总开关(热生效:热键注册走 apply_hotkeys diff,关闭即注销) */
 async function toggleAiEnable() {
   if (!store.cfg) return;
   store.cfg.enable_ai = !store.cfg.enable_ai;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase3 服务商切换(deepseek / ollama) */
 async function setProvider(p: "deepseek" | "ollama") {
   if (!store.cfg) return;
   store.cfg.ai_provider = p;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase3 文本输入保存(失焦/回车时提交,避免逐键保存) */
 async function saveText() {
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase3 工具调用总开关(热生效:命令内每次请求实时读配置) */
 async function toggleAiTools() {
   if (!store.cfg) return;
   store.cfg.ai_tools_enabled = !store.cfg.ai_tools_enabled;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase3 搜索目录集合:文本域每行一个目录(默认空 = 仅桌面,禁止全盘扫描) */
@@ -116,14 +138,14 @@ async function onSearchRootsChange(e: Event) {
     .split("\n")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase3 密钥清除:传空串让后端清空(Rust 侧 resolve_key_save 对非掩码值直接生效) */
 async function clearApiKey() {
   if (!store.cfg) return;
   store.cfg.ai_api_key = "";
-  await store.save();
+  await saveSafe();
 }
 
 // ---- Phase4 模块开关(全部热生效:壁纸撤下/电池线程/命令门控均实时响应配置)----
@@ -132,28 +154,28 @@ async function clearApiKey() {
 async function toggleDynamicWallpaper() {
   if (!store.cfg) return;
   store.cfg.enable_dynamic_wallpaper = !store.cfg.enable_dynamic_wallpaper;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase4 4.1 电池降载子开关(受总开关控制,关闭时不可用) */
 async function toggleBatteryDownshift() {
   if (!store.cfg) return;
   store.cfg.wallpaper_battery_downshift = !store.cfg.wallpaper_battery_downshift;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase4 4.2/4.3 自动化总开关 */
 async function toggleAutomation() {
   if (!store.cfg) return;
   store.cfg.enable_automation = !store.cfg.enable_automation;
-  await store.save();
+  await saveSafe();
 }
 
 /** Phase4 4.3 UIA 控件操作子开关(受自动化总开关控制,关闭时不可用) */
 async function toggleUiaEnable() {
   if (!store.cfg) return;
   store.cfg.automation_uia_enable = !store.cfg.automation_uia_enable;
-  await store.save();
+  await saveSafe();
 }
 
 // ---- Phase5 5.2 多屏壁纸(设计文档 §2.3;开关/模式即时生效 = 保存后调 multi_apply)----
@@ -202,7 +224,7 @@ async function loadMultiMonitorState() {
 async function toggleMultiMonitor() {
   if (!store.cfg) return;
   store.cfg.wallpaper_multi_monitor = !store.cfg.wallpaper_multi_monitor;
-  await store.save();
+  if (!(await saveSafe())) return; // 保存失败已回滚,不再应用多屏
   try {
     await invoke("wallpaper_multi_apply");
     await loadMultiMonitorState();
@@ -215,7 +237,7 @@ async function toggleMultiMonitor() {
 async function setSpanMode(span: boolean) {
   if (!store.cfg) return;
   store.cfg.wallpaper_span_mode = span;
-  await store.save();
+  if (!(await saveSafe())) return; // 保存失败已回滚,不再重建
   try {
     await invoke("wallpaper_multi_apply");
     await loadMultiMonitorState();
@@ -243,7 +265,7 @@ const materialSel = ref("");
 const materialError = ref("");
 const materialNotice = ref("");
 
-/** 应用选中的动态壁纸素材(video/html 走 WorkerW;图片走系统壁纸;拼接模式自动铺满全屏) */
+/** 应用选中的动态壁纸素材(video 走 WorkerW;图片走系统壁纸;拼接模式自动铺满全屏) */
 async function applyMaterial() {
   materialError.value = "";
   materialNotice.value = "";
@@ -272,18 +294,21 @@ async function clearMaterial() {
   }
 }
 
-/** Phase4 4.4 主题三态切换(system/dark/light;即时应用接线在 4.4 模块合入后接入 theme.ts) */
+/** Phase4 4.4 主题三态切换(system/dark/light;保存成功后经 theme.ts 立即应用) */
 async function setThemeMode(mode: "system" | "dark" | "light") {
   if (!store.cfg) return;
   store.cfg.theme_mode = mode;
-  await store.save();
+  await saveSafe();
+  // 成功即应用新值;失败时 saveSafe 已回滚 cfg,此处按回滚值重放,保证界面与落盘一致
+  apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
 }
 
-/** Phase4 4.4 强调色选择(存 token 名,不存色值) */
+/** Phase4 4.4 强调色选择(存 token 名,不存色值;保存成功后立即应用) */
 async function setAccent(name: string) {
   if (!store.cfg) return;
   store.cfg.theme_accent = name;
-  await store.save();
+  await saveSafe();
+  apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
 }
 
 // ---- Phase5 5.1 自动更新(自研 updater;命令契约见 docs/Phase5-设计.md §1)----
@@ -478,6 +503,13 @@ async function uiaType() {
     </div>
     <!-- 内容区禁拖(设置项滚动/开关点击放行;标题栏留可拖,设置页也能拖窗口) -->
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4" data-tauri-drag-region="false">
+      <!-- 保存失败提示(saveSafe 捕获所有开关/设置的保存失败,回滚后红字展示) -->
+      <div
+        v-if="saveError"
+        class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5"
+      >
+        {{ saveError }}
+      </div>
       <!-- 快捷键速查:搜索/抽屉/剪贴板三个快捷键一屏可见(抽屉/剪贴板键位可在各自区块修改) -->
       <div class="bg-[var(--aurora-field)] rounded p-2.5 space-y-1.5">
         <div class="text-xs text-[var(--aurora-text-dim)]">快捷键速查</div>
@@ -514,40 +546,20 @@ async function uiaType() {
         <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出搜索框;全部显示/隐藏为固定值;抽屉/剪贴板可在各自区块修改</p>
       </div>
 
-      <div class="flex items-center justify-between">
-        <div>
-          <div class="text-sm">灵动岛</div>
-          <div class="text-[10px] text-[var(--aurora-text-dim)]">顶部常驻:时间 + CPU/内存/网络,保存后生效</div>
-        </div>
-        <button
-          class="w-10 h-5 rounded-full relative transition-colors"
-          :class="store.cfg?.enable_island ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-          @click="toggleIsland"
-        >
-          <span
-            class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-            :class="store.cfg?.enable_island ? 'left-[22px]' : 'left-0.5'"
-          />
-        </button>
-      </div>
+      <ToggleSwitch
+        :model-value="on(store.cfg?.enable_island)"
+        label="灵动岛"
+        description="顶部常驻:时间 + CPU/内存/网络,立即生效"
+        @update:model-value="toggleIsland"
+      />
 
       <!-- Dock 栏:并入搜索窗口底部,拖拽添加 -->
-      <div class="flex items-center justify-between">
-        <div>
-          <div class="text-sm">Dock 栏</div>
-          <div class="text-[10px] text-[var(--aurora-text-dim)]">搜索窗口底部快捷栏,拖拽 exe/lnk 添加,下次呼出生效</div>
-        </div>
-        <button
-          class="w-10 h-5 rounded-full relative transition-colors"
-          :class="store.cfg?.enable_dock ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-          @click="toggleModule('enable_dock')"
-        >
-          <span
-            class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-            :class="store.cfg?.enable_dock ? 'left-[22px]' : 'left-0.5'"
-          />
-        </button>
-      </div>
+      <ToggleSwitch
+        :model-value="on(store.cfg?.enable_dock)"
+        label="Dock 栏"
+        description="搜索窗口底部快捷栏,拖拽 exe/lnk 添加,立即生效"
+        @update:model-value="toggleModule('enable_dock')"
+      />
 
       <!-- 搜索框:显示方式可选(毛玻璃/不透明);几何(位置/大小)自动记忆,无需设置项 -->
       <div v-if="store.cfg" class="flex flex-col gap-1.5">
@@ -578,30 +590,20 @@ async function uiaType() {
 
       <!-- 文件抽屉:热键受模块开关门控,关闭时仅展示不生效 -->
       <div class="flex flex-col gap-1.5">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">文件抽屉</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,保存后生效</div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="store.cfg?.enable_file_drawer ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            @click="toggleModule('enable_file_drawer')"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="store.cfg?.enable_file_drawer ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
+        <ToggleSwitch
+          :model-value="on(store.cfg?.enable_file_drawer)"
+          label="文件抽屉"
+          description="立即生效"
+          @update:model-value="toggleModule('enable_file_drawer')"
+        />
         <div v-if="store.cfg" class="flex items-center gap-1.5">
           <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">抽屉热键</span>
           <input
             v-model="store.cfg.drawer_hotkey"
-            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
             @change="saveText"
           />
-          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">保存后生效</span>
+          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
         <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
@@ -610,30 +612,20 @@ async function uiaType() {
 
       <!-- 剪贴板历史:热键受模块开关门控,关闭时仅展示不生效 -->
       <div class="flex flex-col gap-1.5">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">剪贴板历史</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">Phase2 开放,保存后生效</div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="store.cfg?.enable_clipboard_history ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            @click="toggleModule('enable_clipboard_history')"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="store.cfg?.enable_clipboard_history ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
+        <ToggleSwitch
+          :model-value="on(store.cfg?.enable_clipboard_history)"
+          label="剪贴板历史"
+          description="立即生效"
+          @update:model-value="toggleModule('enable_clipboard_history')"
+        />
         <div v-if="store.cfg" class="flex items-center gap-1.5">
           <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">剪贴板热键</span>
           <input
             v-model="store.cfg.hotkey_clipboard"
-            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
             @change="saveText"
           />
-          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">保存后生效</span>
+          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
         <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
@@ -648,24 +640,12 @@ async function uiaType() {
 
       <!-- Phase3 AI 设置区块(密钥脱敏契约:config_load 返回掩码,前端永不见明文) -->
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-3">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">AI 助手</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">
-              总开关,关闭时热键立即注销,保存后生效
-            </div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="store.cfg.enable_ai ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            @click="toggleAiEnable"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="store.cfg.enable_ai ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
+        <ToggleSwitch
+          :model-value="on(store.cfg.enable_ai)"
+          label="AI 助手"
+          description="总开关,关闭时热键立即注销"
+          @update:model-value="toggleAiEnable"
+        />
 
         <div v-if="store.cfg.enable_ai" class="space-y-2.5">
           <!-- 服务商切换 -->
@@ -694,7 +674,7 @@ async function uiaType() {
               <input
                 v-model="store.cfg.ai_api_key"
                 type="password"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
                 placeholder="未配置"
                 @change="saveText"
               />
@@ -710,7 +690,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">模型</span>
               <input
                 v-model="store.cfg.ai_model"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -718,7 +698,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">接口地址</span>
               <input
                 v-model="store.cfg.ai_base_url"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -730,7 +710,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">Ollama 地址</span>
               <input
                 v-model="store.cfg.ai_ollama_url"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -738,7 +718,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">Ollama 模型</span>
               <input
                 v-model="store.cfg.ai_ollama_model"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -748,30 +728,18 @@ async function uiaType() {
           </template>
 
           <!-- 工具调用总开关 -->
-          <div class="flex items-center justify-between">
-            <div>
-              <div class="text-sm">工具调用</div>
-              <div class="text-[10px] text-[var(--aurora-text-dim)]">
-                让 AI 打开应用/搜文件/设壁纸等,关闭后纯对话
-              </div>
-            </div>
-            <button
-              class="w-10 h-5 rounded-full relative transition-colors"
-              :class="store.cfg.ai_tools_enabled ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-              @click="toggleAiTools"
-            >
-              <span
-                class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-                :class="store.cfg.ai_tools_enabled ? 'left-[22px]' : 'left-0.5'"
-              />
-            </button>
-          </div>
+          <ToggleSwitch
+            :model-value="on(store.cfg.ai_tools_enabled)"
+            label="工具调用"
+            description="让 AI 打开应用/搜文件/设壁纸等,关闭后纯对话"
+            @update:model-value="toggleAiTools"
+          />
 
           <!-- 搜索目录集合(每行一个,默认空 = 仅桌面) -->
           <div>
             <div class="text-xs text-[var(--aurora-text-dim)] mb-1">文件搜索目录</div>
             <textarea
-              class="w-full text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono resize-y leading-relaxed"
+              class="w-full text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono resize-y leading-relaxed"
               rows="2"
               placeholder="每行一个目录(留空 = 仅桌面,禁止全盘扫描)"
               :value="store.cfg.ai_search_roots.join('\n')"
@@ -787,7 +755,7 @@ async function uiaType() {
               type="number"
               min="1"
               max="10"
-              class="w-16 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              class="w-16 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               @change="saveText"
             />
           </div>
@@ -795,34 +763,22 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">AI 热键</span>
             <input
               v-model="store.cfg.ai_hotkey"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
               @change="saveText"
             />
-            <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">保存后生效</span>
+            <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
           </div>
         </div>
       </div>
 
       <!-- Phase4 4.1 动态壁纸区块(素材选择/预览待 4.1 模块合入后启用) -->
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">动态壁纸</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">
-              WorkerW 壁纸层:本地视频/网页壁纸,关闭开关即撤下,保存后生效
-            </div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="on(store.cfg.enable_dynamic_wallpaper) ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            @click="toggleDynamicWallpaper"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="on(store.cfg.enable_dynamic_wallpaper) ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
+        <ToggleSwitch
+          :model-value="on(store.cfg.enable_dynamic_wallpaper)"
+          label="动态壁纸"
+          description="WorkerW 壁纸层:本地视频壁纸,关闭开关即撤下,立即生效"
+          @update:model-value="toggleDynamicWallpaper"
+        />
 
         <!-- 动态壁纸素材选择(单屏/拼接模式共用;独立模式走下方逐屏选择) -->
         <div
@@ -832,7 +788,7 @@ async function uiaType() {
           <div class="flex items-center gap-1.5">
             <select
               v-model="materialSel"
-              class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
             >
               <option value="">(选择动态壁纸素材…)</option>
               <option v-for="e in materials" :key="e.path" :value="e.path">
@@ -853,12 +809,12 @@ async function uiaType() {
               恢复系统壁纸
             </button>
           </div>
-          <div v-if="materialError" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+          <div v-if="materialError" class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5">
             {{ materialError }}
           </div>
           <div
             v-else-if="materialNotice"
-            class="text-xs text-emerald-300 bg-emerald-500/10 rounded-lg px-3 py-1.5"
+            class="text-xs text-[var(--aurora-success)] bg-[var(--aurora-success-bg)] rounded-lg px-3 py-1.5"
           >
             {{ materialNotice }}
           </div>
@@ -866,57 +822,29 @@ async function uiaType() {
             v-else-if="materials.length === 0"
             class="text-[10px] text-[var(--aurora-text-dim)]"
           >
-            素材目录为空(配置动态壁纸目录或放入 mp4/html 素材后点"刷新")
+            素材目录为空(配置动态壁纸目录或放入 mp4/webm 等视频素材后点"刷新")
           </div>
         </div>
 
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">电池降载</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">电池模式下自动暂停动态渲染,减少耗电</div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="
-              on(store.cfg.enable_dynamic_wallpaper)
-                ? on(store.cfg.wallpaper_battery_downshift)
-                  ? 'bg-[var(--aurora-accent)]'
-                  : 'bg-[var(--aurora-field)]'
-                : 'bg-[var(--aurora-field)] opacity-40'
-            "
-            :disabled="!on(store.cfg.enable_dynamic_wallpaper)"
-            @click="toggleBatteryDownshift"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="on(store.cfg.wallpaper_battery_downshift) ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
+        <ToggleSwitch
+          :model-value="on(store.cfg.wallpaper_battery_downshift)"
+          :disabled="!on(store.cfg.enable_dynamic_wallpaper)"
+          label="电池降载"
+          description="电池模式下自动暂停动态渲染,减少耗电"
+          @update:model-value="toggleBatteryDownshift"
+        />
 
         <!-- Phase5 5.2 多显示器小节(设计文档 §2.3:开关/模式即时生效,素材逐屏设置) -->
         <div
           class="border-t border-[var(--aurora-border)] pt-2.5 space-y-2.5"
           :class="{ 'opacity-40 pointer-events-none': !on(store.cfg.enable_dynamic_wallpaper) }"
         >
-          <div class="flex items-center justify-between">
-            <div>
-              <div class="text-sm">多显示器壁纸</div>
-              <div class="text-[10px] text-[var(--aurora-text-dim)]">
-                每屏独立壁纸窗口;拼接 = 一张素材铺满全部屏幕
-              </div>
-            </div>
-            <button
-              class="w-10 h-5 rounded-full relative transition-colors"
-              :class="on(store.cfg.wallpaper_multi_monitor) ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-              @click="toggleMultiMonitor"
-            >
-              <span
-                class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-                :class="on(store.cfg.wallpaper_multi_monitor) ? 'left-[22px]' : 'left-0.5'"
-              />
-            </button>
-          </div>
+          <ToggleSwitch
+            :model-value="on(store.cfg.wallpaper_multi_monitor)"
+            label="多显示器壁纸"
+            description="每屏独立壁纸窗口;拼接 = 一张素材铺满全部屏幕"
+            @update:model-value="toggleMultiMonitor"
+          />
 
           <!-- 多屏开启后:模式单选 + 显示器只读信息 + 独立模式逐屏素材 -->
           <div v-if="on(store.cfg.wallpaper_multi_monitor)" class="space-y-2.5">
@@ -946,7 +874,7 @@ async function uiaType() {
               </button>
             </div>
 
-            <div v-if="multiError" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+            <div v-if="multiError" class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5">
               {{ multiError }}
             </div>
 
@@ -970,7 +898,7 @@ async function uiaType() {
                 </span>
                 <select
                   v-model="perMonitorSel[m.index]"
-                  class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 outline-none focus:bg-[var(--aurora-field)]"
+                  class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 >
                   <option value="">(未设置,显示系统壁纸)</option>
                   <option v-for="e in materials" :key="e.path" :value="e.path">
@@ -1014,45 +942,19 @@ async function uiaType() {
 
       <!-- Phase4 4.2/4.3 自动化区块(测试区待 4.2/4.3 模块合入后追加) -->
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">自动化</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">键鼠模拟 + 控件操作,命令内实时校验,保存后生效</div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="on(store.cfg.enable_automation) ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            @click="toggleAutomation"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="on(store.cfg.enable_automation) ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm">控件操作(UIA)</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">读取/点击窗口内控件,比键鼠模拟风险更高</div>
-          </div>
-          <button
-            class="w-10 h-5 rounded-full relative transition-colors"
-            :class="
-              on(store.cfg.enable_automation)
-                ? on(store.cfg.automation_uia_enable)
-                  ? 'bg-[var(--aurora-accent)]'
-                  : 'bg-[var(--aurora-field)]'
-                : 'bg-[var(--aurora-field)] opacity-40'
-            "
-            :disabled="!on(store.cfg.enable_automation)"
-            @click="toggleUiaEnable"
-          >
-            <span
-              class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-              :class="on(store.cfg.automation_uia_enable) ? 'left-[22px]' : 'left-0.5'"
-            />
-          </button>
-        </div>
+        <ToggleSwitch
+          :model-value="on(store.cfg.enable_automation)"
+          label="自动化"
+          description="键鼠模拟 + 控件操作,命令内实时校验,立即生效"
+          @update:model-value="toggleAutomation"
+        />
+        <ToggleSwitch
+          :model-value="on(store.cfg.automation_uia_enable)"
+          :disabled="!on(store.cfg.enable_automation)"
+          label="控件操作(UIA)"
+          description="读取/点击窗口内控件,比键鼠模拟风险更高"
+          @update:model-value="toggleUiaEnable"
+        />
         <p class="text-[10px] text-[var(--aurora-text-dim)] leading-relaxed">
           自动化为高风险模块:普通用户权限下无法操作管理员窗口/UWP 应用;坐标点击依赖前台窗口位置,请确认目标可见
         </p>
@@ -1063,12 +965,12 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">坐标点击</span>
             <input
               v-model="simX"
-              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
               placeholder="x"
             />
             <input
               v-model="simY"
-              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)] font-mono"
+              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
               placeholder="y"
             />
             <button
@@ -1082,7 +984,7 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">输入文本</span>
             <input
               v-model="simText"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               placeholder="写入前台焦点窗口(中文安全)"
               @keyup.enter="simType"
             />
@@ -1093,7 +995,7 @@ async function uiaType() {
               输入
             </button>
           </div>
-          <p v-if="simError" class="text-[10px] text-red-400 break-all">{{ simError }}</p>
+          <p v-if="simError" class="text-[10px] text-[var(--aurora-danger)] break-all">{{ simError }}</p>
         </div>
 
         <!-- 4.3 UIA 控件操作测试区(UIA 子开关也开启后可用) -->
@@ -1102,7 +1004,7 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">窗口搜索</span>
             <input
               v-model="uiaWinTitle"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               placeholder="按标题子串搜索(留空列出全部可见窗口)"
               @keyup.enter="uiaSearchWindows"
             />
@@ -1162,7 +1064,7 @@ async function uiaType() {
             </button>
             <input
               v-model="uiaTypeText"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:bg-[var(--aurora-field)]"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               placeholder="输入文本(中文安全)"
               @keyup.enter="uiaType"
             />
@@ -1174,11 +1076,11 @@ async function uiaType() {
             </button>
             <span v-if="uiaText" class="text-[10px] text-[var(--aurora-text-dim)] break-all w-full">{{ uiaText }}</span>
           </div>
-          <p v-if="uiaError" class="text-[10px] text-red-400 break-all">{{ uiaError }}</p>
+          <p v-if="uiaError" class="text-[10px] text-[var(--aurora-danger)] break-all">{{ uiaError }}</p>
         </div>
       </div>
 
-      <!-- Phase4 4.4 主题区块(即时应用接线在 4.4 模块合入后接入 theme.ts) -->
+      <!-- Phase4 4.4 主题区块(切换后经 theme.ts 立即应用) -->
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
         <div class="text-sm mb-1">主题</div>
         <div class="flex items-center gap-1.5">
@@ -1242,12 +1144,12 @@ async function uiaType() {
           </button>
         </div>
 
-        <div v-if="updateError" class="text-xs text-red-300 bg-red-500/10 rounded-lg px-3 py-1.5">
+        <div v-if="updateError" class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5">
           {{ updateError }}
         </div>
         <div
           v-else-if="updateStatus === 'latest'"
-          class="text-xs text-emerald-300 bg-emerald-500/10 rounded-lg px-3 py-1.5"
+          class="text-xs text-[var(--aurora-success)] bg-[var(--aurora-success-bg)] rounded-lg px-3 py-1.5"
         >
           已是最新版本(更新源 v{{ updateVersion || "?" }})
         </div>
@@ -1260,7 +1162,7 @@ async function uiaType() {
             <span v-if="updateStatus === 'downloading'" class="text-[var(--aurora-text-dim)]">
               (正在下载…)
             </span>
-            <span v-else-if="updateStatus === 'downloaded'" class="text-emerald-300">
+            <span v-else-if="updateStatus === 'downloaded'" class="text-[var(--aurora-success)]">
               (下载完成)
             </span>
           </div>
