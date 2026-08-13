@@ -56,8 +56,33 @@ const win = getCurrentWindow();
 /** 可导航条目最小公共形状(应用/文件/最近打开;文件条目的 is_dir 供角标使用) */
 type NavItem = { name: string; path: string; icon?: string | null; is_dir?: boolean };
 
-/** 有输入时的合并展示:应用组在前、文件组在后(应用优先,其次文件) */
-const allResults = computed<NavItem[]>(() => [...appResults.value, ...fileResults.value]);
+// 最近使用的路径集合(有输入时给命中应用打"最近"标识;Set 保证 O(1) 判定)
+const recentPaths = computed(() => new Set(recents.value.map((r) => r.path)));
+
+/**
+ * 应用结果展示序(搜索质量包 2026-08-13):有输入时把「命中结果中的最近打开应用」
+ * 置顶(按最近打开倒序),其余保持后端返回的原序(后端已按匹配层级排好);
+ * 最近打开但未命中的应用不额外塞入。纯前端排序,不改后端契约。
+ */
+const rankedAppResults = computed<AppEntry[]>(() => {
+  const apps = appResults.value;
+  if (apps.length === 0 || recentPaths.value.size === 0) return apps;
+  const byPath = new Map(apps.map((a) => [a.path, a]));
+  const boosted: AppEntry[] = [];
+  for (const r of recents.value) {
+    const hit = byPath.get(r.path);
+    if (hit) boosted.push(hit);
+  }
+  if (boosted.length === 0) return apps;
+  const seen = new Set(boosted.map((a) => a.path));
+  return [...boosted, ...apps.filter((a) => !seen.has(a.path))];
+});
+
+/** 有输入时的合并展示:应用组在前(含最近置顶)、文件组在后(应用优先,其次文件) */
+const allResults = computed<NavItem[]>(() => [
+  ...rankedAppResults.value,
+  ...fileResults.value,
+]);
 
 /** 当前键盘可导航列表:有输入 → 应用+文件合并(↑↓ 在两组间连续移动);无输入 → 最近打开 */
 const navigableItems = computed<NavItem[] | RecentApp[]>(() =>
@@ -112,7 +137,7 @@ async function iconOf(path: string): Promise<string | undefined> {
  * 文件条目不取系统图标(dock_get_icon 的 ExtractIconExW 只认 exe/ico,
  * 普通文件/目录必失败),固定用类型角标,避免每次搜索空发一串 IPC。 */
 function refreshIcons() {
-  for (const it of query.value.trim() ? appResults.value : recents.value) {
+  for (const it of query.value.trim() ? rankedAppResults.value : recents.value) {
     const ic = (it as AppEntry).icon;
     if (ic && ic.startsWith("data:")) continue;
     if (!icons.value.has(it.path)) void iconOf(it.path);
@@ -460,10 +485,11 @@ onUnmounted(() => {
         <div v-else-if="!query.trim()" class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]">
           输入关键词搜索应用、文件
         </div>
-        <!-- 有输入:应用组在前、文件组在后(应用优先,其次文件;键盘 ↑↓ 在两组间连续移动) -->
+        <!-- 有输入:应用组在前(最近打开的应用置顶带标识)、文件组在后(应用优先,其次文件;
+             键盘 ↑↓ 在两组间连续移动) -->
         <template v-if="query.trim()">
           <div
-            v-for="(item, i) in appResults"
+            v-for="(item, i) in rankedAppResults"
             :key="item.path"
             :ref="(el) => setItemEl(el, i)"
             class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
@@ -480,7 +506,15 @@ onUnmounted(() => {
               alt=""
             />
             <span v-else class="text-base">🖥️</span>
-            <span>{{ item.name }}</span>
+            <span class="flex-1 min-w-0 truncate">{{ item.name }}</span>
+            <!-- 最近标识(搜索质量包 2026-08-13):命中结果中的最近打开应用 -->
+            <span
+              v-if="recentPaths.has(item.path)"
+              class="shrink-0 flex items-center gap-1 text-[10px] text-[var(--aurora-text-dim)]"
+            >
+              <span class="inline-block h-1.5 w-1.5 rounded-full bg-[var(--aurora-accent)]"></span>
+              最近
+            </span>
           </div>
           <!-- 文件组(最多 8 条,后端默认一致):空结果不渲染标题与列表 -->
           <template v-if="fileResults.length">
@@ -490,10 +524,10 @@ onUnmounted(() => {
             <div
               v-for="(item, i) in fileResults"
               :key="'file:' + item.path"
-              :ref="(el) => setItemEl(el, appResults.length + i)"
+              :ref="(el) => setItemEl(el, rankedAppResults.length + i)"
               class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
-              :class="appResults.length + i === selected ? 'bg-[var(--aurora-field)]' : ''"
-              @mouseenter="selected = appResults.length + i"
+              :class="rankedAppResults.length + i === selected ? 'bg-[var(--aurora-field)]' : ''"
+              @mouseenter="selected = rankedAppResults.length + i"
               @click="openSelected"
             >
               <!-- 类型角标:目录 📁 / 文件 📄(dock_get_icon 只认 exe/ico,普通文件不取图标) -->

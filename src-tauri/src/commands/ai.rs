@@ -631,6 +631,8 @@ pub fn ai_confirm_tool(app: AppHandle, confirm_id: String, approve: bool) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    // AppEntry 构造测试需要 PinyinRep(搜索质量包 2026-08-13 新增字段),仅在测试态导入
+    use crate::indexer::app_index::PinyinRep;
     use crate::ai::tools::tools_json;
 
     // ---------- 消息截断(§1.7) ----------
@@ -736,7 +738,17 @@ mod tests {
 
     #[test]
     fn summarize_apps_and_hits_caps_at_5() {
-        let entries: Vec<AppEntry> = (0..8).map(|i| AppEntry { name: format!("app{i}"), path: format!("C:\\a\\app{i}.exe") }).collect();
+        // AppEntry 新增 pinyin 字段(搜索质量包 2026-08-13),构造处补上
+        let entries: Vec<AppEntry> = (0..8)
+            .map(|i| {
+                let name = format!("app{i}");
+                AppEntry {
+                    path: format!("C:\\a\\{name}.exe"),
+                    pinyin: PinyinRep::from_name(&name),
+                    name,
+                }
+            })
+            .collect();
         let text = summarize_apps(&entries);
         assert_eq!(text.lines().count(), 5);
         assert!(text.starts_with("app0 | C:\\a\\app0.exe"));

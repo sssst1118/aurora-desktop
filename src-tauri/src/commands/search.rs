@@ -2,7 +2,9 @@ use crate::indexer::app_index::{AppEntry, AppIndex};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
-/// 在内存索引中做大小写不敏感子串匹配,返回按名称排序的 top 20
+/// 在内存索引中搜索应用(搜索质量包 2026-08-13):
+/// 名称子串 > 拼音全拼前缀 > 拼音首字母三层匹配,层内完全命中优先,
+/// 其余按名称字典序(见 indexer::app_index::AppIndex::search),返回 top 20
 #[tauri::command]
 pub fn search_apps(query: String, index: State<'_, Mutex<AppIndex>>) -> Vec<AppEntry> {
     // 并发修复(2026-08-13):索引原只在启动时构建一次,新安装应用不重启永远搜不到。

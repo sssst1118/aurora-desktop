@@ -42,3 +42,8 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["time", "sync"] }
 image = "0.25.10"
 base64 = "0.23.1"
+# 拼音匹配(搜索质量包 2026-08-13):应用名搜索支持拼音全拼/首字母。
+# 选型 pinyin(mozillazg/rust-pinyin):数据源 pinyin-data 41,925 条全 CJK 覆盖、
+# 零运行时依赖(纯 std + build.rs 生成静态表,不拖依赖树)、0.11 起带 heteronym
+# 多音字。只开 plain(无调全拼)+ heteronym,不编声调表,省体积与编译时间。
+pinyin = { version = "0.11", default-features = false, features = ["plain", "heteronym"] }
