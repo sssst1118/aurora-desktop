@@ -14,7 +14,10 @@ const emit = defineEmits<{ (e: "update:modelValue", value: boolean): void }>();
 <template>
   <div class="flex items-center justify-between">
     <div>
-      <div v-if="label" class="text-sm">{{ label }}</div>
+      <div v-if="label" class="text-sm flex items-center gap-1.5">
+        <span class="w-[3px] h-3 rounded-full bg-[var(--aurora-accent)]"></span>
+        {{ label }}
+      </div>
       <div v-if="description" class="text-[10px] text-[var(--aurora-text-dim)]">
         {{ description }}
       </div>
@@ -32,7 +35,7 @@ const emit = defineEmits<{ (e: "update:modelValue", value: boolean): void }>();
       @click="emit('update:modelValue', !modelValue)"
     >
       <span
-        class="absolute top-0.5 w-4 h-4 rounded-full bg-[var(--aurora-switch-thumb)] transition-all"
+        class="absolute top-0.5 w-4 h-4 rounded-full bg-[var(--aurora-switch-thumb)] shadow-[0_1px_3px_rgba(0,0,0,0.35)] transition-all"
         :class="modelValue ? 'left-[22px]' : 'left-0.5'"
       />
     </button>

@@ -67,11 +67,27 @@ export const useConfigStore = defineStore("config", {
     cfg: null as AppConfig | null,
   }),
   actions: {
-    async load() {
-      this.cfg = await invoke<AppConfig>("config_load");
+    /**
+     * 拉取后端配置。整对象替换会冲掉用户在加载期间的本地修改(P1 根因 2026-08-13:
+     * 设置面板激活时 onActivated 发起 load,用户紧接着点击按钮,晚到的旧快照覆盖新值,
+     * 导致"配置已落盘但界面没切换")。防覆盖规则:
+     * - 已有更新的 load 发起 → 本结果过期,丢弃;
+     * - 本次加载期间用户保存成功过(本地修改优先于旧快照)→ 丢弃;
+     * - force=true 时无条件覆盖(saveSafe 失败回滚用,以磁盘实际落盘为准)。
+     */
+    async load(force = false) {
+      const id = ++loadId;
+      const fresh = await invoke<AppConfig>("config_load");
+      if (!force && (id !== loadId || lastSaveId >= id)) return;
+      this.cfg = fresh;
     },
     async save() {
       if (!this.cfg) return;
+      // 标记在发起时而非成功时:用户点击到 save 发起是同一同步块,标记后任何
+      // 更早发起的 load 快照(IPC 在飞)返回时都会因 lastSaveId >= id 被丢弃,
+      // 不会覆盖保存期间的本地修改(若等保存成功才标记,保存 IPC 在飞时旧
+      // load 返回仍会冲掉用户的新值)
+      lastSaveId = loadId;
       const ok = await invoke<boolean>("config_save", { cfg: this.cfg });
       // 保存失败统一抛错,由调用方(Settings 等)捕获后回滚本地值并提示
       if (!ok) {
@@ -82,3 +98,8 @@ export const useConfigStore = defineStore("config", {
     },
   },
 });
+
+/** load 请求单调序号(防旧 load 晚到覆盖新 load 结果) */
+let loadId = 0;
+/** 最近一次成功保存时的 loadId:所有 id ≤ lastSaveId 的 load 结果均视为过期 */
+let lastSaveId = 0;

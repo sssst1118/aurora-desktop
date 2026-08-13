@@ -9,6 +9,15 @@ import ToggleSwitch from "../ToggleSwitch.vue";
 import WallpaperPanel from "./WallpaperPanel.vue";
 
 const store = useConfigStore();
+
+/**
+ * 胶囊按钮双态样式(P1 修复 2026-08-13):
+ * - 选中 = 强调色底 + 白字 + 同色系柔和投影,与未选中拉开明确差距(此前深字蓝底对比不足,用户感知"没切换");
+ * - 未选中 = 字段底 + hover 提亮;按钮本体另有 transition-all + active:scale-95 按下反馈。
+ */
+const CHIP_ON =
+  "bg-[var(--aurora-accent)] text-white shadow-[0_2px_10px_color-mix(in_srgb,var(--aurora-accent)_45%,transparent)]";
+const CHIP_OFF = "bg-[var(--aurora-field)] hover:bg-[var(--aurora-field-hover)]";
 const emit = defineEmits<{ (e: "close"): void }>();
 
 /** 配置保存统一入口:失败时回滚本地值为后端实际配置并展示红字提示;成功清空提示 */
@@ -41,7 +50,8 @@ async function saveSafe(): Promise<boolean> {
   } catch (e) {
     saveError.value = `保存失败:${e}`;
     try {
-      await store.load(); // 回滚:以后端实际落盘配置为准,丢弃失败的本地修改
+      // 回滚:以后端实际落盘配置为准,丢弃失败的本地修改;force 绕过过期丢弃(此处就是要覆盖)
+      await store.load(true);
     } catch {
       /* 后端读取也失败时保留本地值,用户可重试 */
     }
@@ -756,9 +766,13 @@ async function uiaType() {
   >
     <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--aurora-border)]">
       <span class="text-sm">设置</span>
-      <button class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm" title="关闭" aria-label="关闭设置" @click="emit('close')">
-        ✕
-      </button>
+      <div class="flex items-center gap-1">
+        <!-- P2:设置页标题栏同样留拖拽把手(内容区禁拖保护滚动,标题栏可拖) -->
+        <span class="aurora-drag-hint text-xs px-1 cursor-grab" title="拖动窗口移动">⠿</span>
+        <button class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm" title="关闭" aria-label="关闭设置" @click="emit('close')">
+          ✕
+        </button>
+      </div>
     </div>
     <!-- 内容区禁拖(设置项滚动/开关点击放行;标题栏留可拖,设置页也能拖窗口) -->
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4" data-tauri-drag-region="false">
@@ -940,7 +954,10 @@ async function uiaType() {
 
       <!-- 2.4 静态壁纸区块 -->
       <div>
-        <div class="text-sm mb-1.5">壁纸</div>
+        <div class="text-sm mb-1.5 flex items-center gap-1.5">
+          <span class="w-[3px] h-3 rounded-full bg-[var(--aurora-accent)]"></span>
+          壁纸
+        </div>
         <WallpaperPanel />
       </div>
 
@@ -958,16 +975,16 @@ async function uiaType() {
           <div class="flex items-center gap-1.5">
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">服务商</span>
             <button
-              class="text-xs px-2 py-0.5 rounded transition-colors"
-              :class="store.cfg.ai_provider === 'deepseek' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+              class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
+              :class="store.cfg.ai_provider === 'deepseek' ? CHIP_ON : CHIP_OFF"
               aria-label="选择服务商 DeepSeek"
               @click="setProvider('deepseek')"
             >
               DeepSeek
             </button>
             <button
-              class="text-xs px-2 py-0.5 rounded transition-colors"
-              :class="store.cfg.ai_provider === 'ollama' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+              class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
+              :class="store.cfg.ai_provider === 'ollama' ? CHIP_ON : CHIP_OFF"
               aria-label="选择服务商 Ollama"
               @click="setProvider('ollama')"
             >
@@ -1415,28 +1432,31 @@ async function uiaType() {
 
       <!-- Phase4 4.4 主题区块(切换后经 theme.ts 立即应用) -->
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
-        <div class="text-sm mb-1">主题</div>
+        <div class="text-sm mb-1 flex items-center gap-1.5">
+          <span class="w-[3px] h-3 rounded-full bg-[var(--aurora-accent)]"></span>
+          主题
+        </div>
         <div class="flex items-center gap-1.5">
           <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">外观</span>
           <button
-            class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.theme_mode === 'light' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
+            :class="store.cfg.theme_mode === 'light' ? CHIP_ON : CHIP_OFF"
             aria-label="切换浅色主题"
             @click="setThemeMode('light')"
           >
             浅色
           </button>
           <button
-            class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.theme_mode === 'dark' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
+            :class="store.cfg.theme_mode === 'dark' ? CHIP_ON : CHIP_OFF"
             aria-label="切换深色主题"
             @click="setThemeMode('dark')"
           >
             深色
           </button>
           <button
-            class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.theme_mode === 'system' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
+            :class="store.cfg.theme_mode === 'system' ? CHIP_ON : CHIP_OFF"
             aria-label="切换跟随系统主题"
             @click="setThemeMode('system')"
           >

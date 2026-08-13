@@ -10,6 +10,7 @@
   --aurora-border: rgba(15, 23, 42, 0.12);
   --aurora-accent: #3b82f6; /* 默认蓝,theme_accent 换 token 名映射 */
   --aurora-field: rgba(15, 23, 42, 0.05); /* 输入框底色 */
+  --aurora-field-hover: rgba(15, 23, 42, 0.09); /* 字段/按钮 hover 提亮 */
   /* 语义色(危险/成功/警示):浅色用 600/700 系深色保证白底可读,bg 为同色系淡底 */
   --aurora-danger: #b91c1c;
   --aurora-danger-bg: rgba(185, 28, 28, 0.08);
@@ -30,6 +31,7 @@
   --aurora-border: rgba(255, 255, 255, 0.1);
   --aurora-accent: #3b82f6;
   --aurora-field: rgba(255, 255, 255, 0.05);
+  --aurora-field-hover: rgba(255, 255, 255, 0.1);
   /* 语义色:深色沿用迁移前 300 系浅色观感,bg 为同色系 10% 淡底 */
   --aurora-danger: #fca5a5; /* red-300 */
   --aurora-danger-bg: rgba(239, 68, 68, 0.1); /* red-500/10 */
@@ -38,4 +40,39 @@
   --aurora-warn: #fde68a; /* amber-200 */
   --aurora-warn-bg: rgba(245, 158, 11, 0.1); /* amber-500/10 */
   --aurora-switch-thumb: #ffffff;
+}
+
+/* ---- 全局质感(2026-08-13 UI 升级) ---- */
+
+/* 细窄半透明滚动条:深浅色自动适配,拖拽提示之外的滚动体验优化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--aurora-border);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--aurora-text-dim);
+}
+
+/* 输入光标取强调色:小细节,聚焦时与主题色呼应 */
+input,
+textarea {
+  caret-color: var(--aurora-accent);
+}
+
+/* 可拖区域把手(搜索框 header/设置页标题栏):默认极淡,悬停提亮,提示"这里能拖窗口" */
+.aurora-drag-hint {
+  color: var(--aurora-text-dim);
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+  user-select: none;
+}
+.aurora-drag-hint:hover {
+  opacity: 1;
 }

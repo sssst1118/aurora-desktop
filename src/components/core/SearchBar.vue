@@ -457,6 +457,13 @@ onUnmounted(() => {
         >
           ⚙
         </button>
+        <!-- 拖拽把手(P2 修复 2026-08-13):header 空白/把手处可拖窗口,悬停提亮提示可拖 -->
+        <span
+          class="aurora-drag-hint text-xs px-1 cursor-grab"
+          title="拖动窗口移动(输入框/按钮除外)"
+        >
+          ⠿
+        </span>
       </div>
       <!-- 结果列表禁拖:滚动条拖动/列表项点击放行 -->
       <div class="flex-1 overflow-y-auto py-1" data-tauri-drag-region="false">
@@ -492,11 +499,16 @@ onUnmounted(() => {
             v-for="(item, i) in rankedAppResults"
             :key="item.path"
             :ref="(el) => setItemEl(el, i)"
-            class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
-            :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
+            class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer relative"
+            :class="i === selected ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]'"
             @mouseenter="selected = i"
             @click="openSelected"
           >
+            <!-- 选中指示:左侧强调色竖条,键盘/鼠标选中一目了然 -->
+            <span
+              v-if="i === selected"
+              class="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full bg-[var(--aurora-accent)]"
+            ></span>
             <!-- 真实图标:后端 icon 字段(data URI)或 dock_get_icon 提取;未就绪回退 emoji -->
             <img
               v-if="iconFor(item)"
@@ -525,11 +537,15 @@ onUnmounted(() => {
               v-for="(item, i) in fileResults"
               :key="'file:' + item.path"
               :ref="(el) => setItemEl(el, rankedAppResults.length + i)"
-              class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
-              :class="rankedAppResults.length + i === selected ? 'bg-[var(--aurora-field)]' : ''"
+              class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer relative"
+              :class="rankedAppResults.length + i === selected ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]'"
               @mouseenter="selected = rankedAppResults.length + i"
               @click="openSelected"
             >
+              <span
+                v-if="rankedAppResults.length + i === selected"
+                class="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full bg-[var(--aurora-accent)]"
+              ></span>
               <!-- 类型角标:目录 📁 / 文件 📄(dock_get_icon 只认 exe/ico,普通文件不取图标) -->
               <span class="text-base">{{ item.is_dir ? "📁" : "📄" }}</span>
               <span class="max-w-[60%] truncate">{{ item.name }}</span>
@@ -545,11 +561,16 @@ onUnmounted(() => {
             v-for="(item, i) in recents"
             :key="item.path"
             :ref="(el) => setItemEl(el, i)"
-            class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
-            :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
+            class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer relative"
+            :class="i === selected ? 'bg-[var(--aurora-field)]' : 'hover:bg-[var(--aurora-field)]'"
             @mouseenter="selected = i"
             @click="openSelected"
           >
+            <!-- 选中指示:左侧强调色竖条,键盘/鼠标选中一目了然 -->
+            <span
+              v-if="i === selected"
+              class="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full bg-[var(--aurora-accent)]"
+            ></span>
             <img
               v-if="iconFor(item)"
               :src="iconFor(item)"
@@ -562,8 +583,14 @@ onUnmounted(() => {
           </div>
         </template>
       </div>
-      <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">
-        ↑↓ 选择 · Enter 打开 · Esc 清空/关闭
+      <div
+        class="px-4 py-2 flex items-center justify-between text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]"
+      >
+        <span>↑↓ 选择 · Enter 打开 · Esc 清空/关闭</span>
+        <!-- P2:拖拽提示(底部条空白处可拖窗口;右下角手柄调整大小) -->
+        <span class="aurora-drag-hint flex items-center gap-0.5" title="底部空白处拖动窗口移动">
+          <span>⠿ 拖动窗口</span>
+        </span>
       </div>
     </template>
     <!-- KeepAlive 缓存设置页(2026-08-13):关闭再开保持滚动位置与组件状态,避免每次重建重复拉取 -->

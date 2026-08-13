@@ -119,13 +119,17 @@ async function apply(path: string) {
 
 onMounted(() => {
   // 配置由 Settings 统一加载(本组件不再重复 store.load());
-  // 子组件 mounted 先于 Settings,cfg 可能尚未就绪,watch 等它回填目录输入框一次
-  const stopSync = watch(
+  // 子组件 mounted 先于 Settings,cfg 可能尚未就绪,watch 等它回填目录输入框一次。
+  // ⚠️ stop 用 let + 可选调用:immediate 回调在 watch 返回前同步执行,若回调内直接
+  // 引用 const stopSync 会命中 TDZ 抛 ReferenceError(P1 根因 2026-08-13:dev 下打开
+  // 设置页时 cfg 已就绪,回调走到底即崩,中断当次渲染,表现为"按钮点击落盘但界面不切换")
+  let stop: (() => void) | null = null;
+  stop = watch(
     () => store.cfg?.wallpaper_dir,
     (v) => {
       if (v === undefined) return; // cfg 未加载完成,继续等
       dirInput.value = v ?? "";
-      stopSync();
+      stop?.();
     },
     { immediate: true },
   );
