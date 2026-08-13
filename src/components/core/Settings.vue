@@ -99,6 +99,7 @@ onMounted(async () => {
 onActivated(() => {
   void loadCfg();
   void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
+  void loadLaunchState(); // 开机自启:注册表实际状态
 });
 
 // 离开设置页(KeepAlive 停用/销毁):结束热键录制,防止残留窗口级监听
@@ -116,6 +117,39 @@ async function toggleIsland() {
   if (!store.cfg) return;
   store.cfg.enable_island = !store.cfg.enable_island;
   await saveSafe();
+}
+
+// ---- 稳定性包:开机自启动(真值 = 注册表 Run 键;设置后以注册表实际状态校准) ----
+const launchAtStartup = ref(false);
+const launchError = ref("");
+
+/** 读取开机自启实际状态(注册表为准;顺带同步进配置字段) */
+async function loadLaunchState() {
+  try {
+    launchAtStartup.value = await invoke<boolean>("launch_get_startup");
+    if (store.cfg) store.cfg.launch_at_startup = launchAtStartup.value;
+  } catch (e) {
+    launchError.value = `读取开机自启动状态失败:${e}`;
+  }
+}
+
+/** 开关切换:写注册表 → 以注册表实际状态校准显示 → 同步进配置;失败红字提示 */
+async function toggleLaunchAtStartup() {
+  launchError.value = "";
+  const target = !launchAtStartup.value;
+  try {
+    await invoke("launch_set_startup", { enabled: target });
+    // 状态以注册表实际为准(重新查询校准,防写入被系统静默拒绝后的显示漂移)
+    launchAtStartup.value = await invoke<boolean>("launch_get_startup");
+    if (store.cfg) {
+      store.cfg.launch_at_startup = launchAtStartup.value;
+      // 配置落盘失败走统一 saveError 红字(注册表已生效,开关显示仍准确)
+      await saveSafe().catch(() => {});
+    }
+  } catch (e) {
+    launchError.value = `设置开机自启动失败:${e}`;
+    await loadLaunchState(); // 失败回显注册表实际状态
+  }
 }
 
 /** Phase2 模块开关(热生效:config_save 后 runtime::apply 同步 watcher/监听器/窗口显隐) */
@@ -698,6 +732,20 @@ async function uiaType() {
         description="顶部常驻:时间 + CPU/内存/网络,立即生效"
         @update:model-value="toggleIsland"
       />
+
+      <!-- 稳定性包:开机自启动(注册表 Run 键为真值;写成功后按实际状态校准) -->
+      <ToggleSwitch
+        :model-value="launchAtStartup"
+        label="开机自启动"
+        description="登录 Windows 后自动运行,立即生效"
+        @update:model-value="toggleLaunchAtStartup"
+      />
+      <div
+        v-if="launchError"
+        class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5"
+      >
+        {{ launchError }}
+      </div>
 
       <!-- Dock 栏:并入搜索窗口底部,拖拽添加 -->
       <ToggleSwitch

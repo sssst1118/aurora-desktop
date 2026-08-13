@@ -57,6 +57,9 @@ export interface AppConfig {
   search_y: number | null;
   search_width: number | null;
   search_height: number | null;
+  // ---- 稳定性包(与 src-tauri/src/commands/config.rs 同步)----
+  launch_at_startup: boolean; // 开机自启;真值为注册表 Run 键(后端 launch_get_startup 读取)
+  first_run_done: boolean; // 首次启动引导完成标记(后端自动置位)
 }
 
 export const useConfigStore = defineStore("config", {

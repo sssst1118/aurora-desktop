@@ -291,6 +291,8 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
     // 安全加固:安装前对所选 exe 复验哈希(sidecar 记录的下载时校验值),
     // updates 目录被投毒(伪造同名安装包)时在此拒绝,不进入安装流程
     recheck_installer(&dir, &ver, &exe)?;
+    // 稳定性包:更新安装属关键事件,记入事件日志(退出重启前的最后一条)
+    crate::logger::log_event("INFO", &format!("开始静默安装更新 v{ver}(安装完成后自动重启)"));
     let install_dir = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Users\Public\AppData\Local"))

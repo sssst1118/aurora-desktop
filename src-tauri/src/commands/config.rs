@@ -70,6 +70,9 @@ pub struct AppConfig {
     pub search_y: Option<i32>,
     pub search_width: Option<f64>,         // 记住的窗口大小;None=配置默认 620x420
     pub search_height: Option<f64>,
+    // ---- 稳定性包(2026-08-13)----
+    pub launch_at_startup: bool,           // 开机自启;注册表 Run 键为真值(commands/launch.rs 读写)
+    pub first_run_done: bool,              // 首次启动引导是否已完成(见 first_run.rs;默认 false)
 }
 
 impl Default for AppConfig {
@@ -118,6 +121,8 @@ impl Default for AppConfig {
             search_y: None,
             search_width: None,
             search_height: None,
+            launch_at_startup: false,
+            first_run_done: false,
         }
     }
 }
@@ -221,6 +226,13 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> Result<bool, St
     // H1 供应链加固:更新源 URL 白名单校验(只拦 save 不拦 load_from,避免启动误拒)。
     // 校验失败返回 Err 拒绝保存(前端 saveSafe 已有捕获链路:提示 + 回滚本地值)
     validate_feed_url_change(&prev.update_feed_url, &cfg.update_feed_url)?;
+    // 稳定性包:首次启动引导兜底——保存任意配置即视为引导完成(用户已找到设置页)。
+    // 主路径是引导窗口关闭即置位(见 first_run.rs),此处兜底防关闭事件丢失导致
+    // 每次启动重复引导;同步撤下托盘快捷键提示
+    if !cfg.first_run_done {
+        cfg.first_run_done = true;
+        crate::tray::set_first_run_hint(false);
+    }
     let ok = save_to(&path, &cfg);
     // 落盘完成即可放锁:热生效只读配置(见 runtime::apply),不参与读-改-写,留在锁外缩小临界区
     drop(guard);
@@ -265,11 +277,26 @@ pub fn resolve_key_save(prev: &Option<String>, incoming: &Option<String>) -> Opt
     }
 }
 
-/// 读取配置;文件缺失或 JSON 损坏时回退默认值
+/// 损坏的配置文件备份:改名为 `<文件名>.broken`(已存在先删除——只保留最近一次
+/// 损坏现场)。改名失败静默,不影响回退流程。
+/// 备份只发生一次:文件改名后,后续读取走"文件缺失 → 默认"分支。
+/// 审计场景「配置 JSON 损坏」:不备份的话,损坏文件会在下一次 config_save 时被
+/// 默认配置静默覆盖,原始内容(可能人工可修)永久丢失。
+pub fn backup_corrupt_file(path: &Path) {
+    let mut backup_os = path.as_os_str().to_os_string();
+    backup_os.push(".broken");
+    let backup = PathBuf::from(backup_os);
+    let _ = std::fs::remove_file(&backup);
+    let _ = std::fs::rename(path, &backup);
+}
+
+/// 读取配置;文件缺失时回退默认值;JSON 损坏时先把原文件备份为 `<文件名>.broken`
+/// 再回退默认值(防止后续保存把无法解析的原文件静默覆盖)
 pub fn load_from(path: &Path) -> AppConfig {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_else(|_| {
-            eprintln!("[aurora] config.json 损坏,回退默认配置: {path:?}");
+            eprintln!("[aurora] config.json 损坏,回退默认配置(原文件已备份为 .broken): {path:?}");
+            backup_corrupt_file(path);
             AppConfig::default()
         }),
         Err(_) => AppConfig::default(),
@@ -327,9 +354,11 @@ mod tests {
     fn tmp_cfg(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("aurora_cfg_test_{tag}.json"));
         let _ = std::fs::remove_file(&p);
-        // 同时清掉可能的 tmp 残留(原子写测试断言无 tmp,需从干净状态开始)
+        // 同时清掉可能的 tmp / broken 残留(原子写与损坏备份测试需从干净状态开始)
         let tmp = PathBuf::from(format!("{}.tmp", p.display()));
         let _ = std::fs::remove_file(&tmp);
+        let broken = PathBuf::from(format!("{}.broken", p.display()));
+        let _ = std::fs::remove_file(&broken);
         p
     }
 
@@ -410,6 +439,56 @@ mod tests {
         std::fs::write(&p, "{ not valid json !!").unwrap();
         let cfg = load_from(&p);
         assert_eq!(cfg.hotkey_search, "Ctrl+Shift+Space");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- 损坏备份(审计修复 2026-08-13):损坏的 config.json 改名 .broken 后再回退,
+    //      防止下一次保存把无法解析的原文件静默覆盖 ----
+
+    #[test]
+    fn corrupted_json_backed_up_before_fallback() {
+        let p = tmp_cfg("corrupt_backup");
+        let original = r#"{ "hotkey_search": "ctrl+alt+z", "enable_ai": tr"#;
+        std::fs::write(&p, original).unwrap();
+        // 读取:回退默认,原文件被备份为 .broken,原路径不再存在
+        let cfg = load_from(&p);
+        assert_eq!(cfg.hotkey_search, "Ctrl+Shift+Space");
+        let broken = PathBuf::from(format!("{}.broken", p.display()));
+        assert!(broken.exists(), "损坏原文件应备份为 .broken");
+        assert_eq!(std::fs::read_to_string(&broken).unwrap(), original, "备份内容与原件一致");
+        assert!(!p.exists(), "原路径应已改名");
+        // 再次读取:走"缺失 → 默认"分支,不重复备份、不 panic
+        let cfg2 = load_from(&p);
+        assert_eq!(cfg2.hotkey_search, "Ctrl+Shift+Space");
+        assert_eq!(std::fs::read_to_string(&broken).unwrap(), original);
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&broken);
+    }
+
+    // ---- 稳定性包字段(2026-08-13):老配置缺字段逐字段回退默认 false ----
+
+    #[test]
+    fn missing_stability_fields_fall_back_false() {
+        let p = tmp_cfg("stability_partial");
+        std::fs::write(&p, r#"{"hotkey_search":"ctrl+alt+z"}"#).unwrap();
+        let cfg = load_from(&p);
+        assert!(!cfg.launch_at_startup);
+        assert!(!cfg.first_run_done);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn stability_fields_roundtrip() {
+        let p = tmp_cfg("stability_roundtrip");
+        let cfg = AppConfig {
+            launch_at_startup: true,
+            first_run_done: true,
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &cfg));
+        let loaded = load_from(&p);
+        assert!(loaded.launch_at_startup);
+        assert!(loaded.first_run_done);
         let _ = std::fs::remove_file(&p);
     }
 

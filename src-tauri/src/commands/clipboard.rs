@@ -265,11 +265,17 @@ pub fn history_path(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("aurora_clipboard.json"))
 }
 
-/// 从磁盘加载历史;文件缺失或 JSON 损坏返回空列表
+/// 从磁盘加载历史;文件缺失返回空列表;JSON 损坏先把原文件备份为
+/// clipboard.json.broken 再返回空列表(审计修复 2026-08-13:不备份的话,
+/// 损坏文件会在下一次落盘时被静默覆盖,原始内容永久丢失)。
+/// 备份只发生一次:文件改名后,后续读取走"缺失 → 空"分支。
 fn load_from_file(path: &Path) -> Vec<ClipboardItem> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_else(|_| {
-            eprintln!("[aurora] clipboard.json 损坏,历史置空: {path:?}");
+            eprintln!(
+                "[aurora] clipboard.json 损坏,历史置空(原文件已备份为 .broken): {path:?}"
+            );
+            super::config::backup_corrupt_file(path);
             Vec::new()
         }),
         Err(_) => Vec::new(),
@@ -600,6 +606,25 @@ mod tests {
         std::fs::write(&p, "{oops").unwrap();
         assert!(load_from_file(&p).is_empty());
         let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- 损坏备份(审计修复 2026-08-13):损坏的 clipboard.json 改名 .broken 后再置空 ----
+
+    #[test]
+    fn load_corrupt_backs_up_original_before_clearing() {
+        let p = tmp_file("corrupt_backup");
+        let original = r#"[{"tp":"text","payload":"旧历史","ts":1}"#;
+        std::fs::write(&p, original).unwrap();
+        assert!(load_from_file(&p).is_empty(), "损坏历史按空处理");
+        let broken = PathBuf::from(format!("{}.broken", p.display()));
+        assert!(broken.exists(), "损坏原文件应备份为 .broken");
+        assert_eq!(std::fs::read_to_string(&broken).unwrap(), original, "备份内容与原件一致");
+        assert!(!p.exists(), "原路径应已改名");
+        // 再次读取:走"缺失 → 空"分支,不重复备份、不 panic
+        assert!(load_from_file(&p).is_empty());
+        assert_eq!(std::fs::read_to_string(&broken).unwrap(), original);
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&broken);
     }
 
     #[test]

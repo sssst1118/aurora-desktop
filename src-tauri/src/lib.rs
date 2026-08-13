@@ -1,8 +1,10 @@
 mod ai;
 mod automation;
 mod commands;
+mod first_run;
 mod hotkey;
 mod indexer;
+mod logger;
 mod runtime;
 mod tray;
 mod updater;
@@ -14,6 +16,10 @@ use tauri::{Emitter, Manager, RunEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 稳定性包:崩溃日志 hook 必须最先注册(此后任何 panic 都会留下日志文件);
+    // 事件日志记录启动事件
+    crate::logger::init();
+    crate::logger::log_event("INFO", &format!("应用启动 v{}", env!("CARGO_PKG_VERSION")));
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 2.3 剪贴板历史:事件驱动监听/读写插件(模块完成后由 commands/clipboard.rs 使用)
@@ -142,6 +148,11 @@ pub fn run() {
             });
             // 2.5 采样线程无需接线:首个 sys_get_status invoke(灵动岛挂载)时幂等懒启动;
             // 托盘 tooltip 的更新订阅在 tray::setup_tray 内完成
+            // 稳定性包:首次启动引导(未完成过 → 自动呼出一次搜索框 + 托盘提示快捷键;
+            // 用户关闭搜索框或保存任意配置后落盘 first_run_done,下次不再引导)
+            if crate::first_run::is_first_run(&cfg) {
+                crate::first_run::start(&handle);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -154,6 +165,9 @@ pub fn run() {
             commands::config::config_save,
             commands::config::search_save_geometry,
             commands::system::sys_get_status,
+            // ---- 稳定性包:开机自启动(注册表 Run 键为真值) ----
+            commands::launch::launch_set_startup,
+            commands::launch::launch_get_startup,
             // ---- Phase2 2.1 Dock ----
             commands::dock::dock_get_items,
             commands::dock::dock_set_items,
@@ -215,8 +229,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // 退出时停止剪贴板监听,不留后台线程(与 setup 的启动对称)
+            // 退出时停止剪贴板监听,不留后台线程(与 setup 的启动对称);
+            // 事件日志记录退出事件(稳定性包)
             if let RunEvent::ExitRequested { .. } = event {
+                crate::logger::log_event("INFO", "应用退出");
                 crate::commands::clipboard::teardown(app);
             }
         });

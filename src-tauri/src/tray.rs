@@ -1,8 +1,39 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Listener,
 };
+
+/// 首次启动引导 tooltip 文案(稳定性包 2026-08-13;快捷键与 hotkey.rs SEARCH_HOTKEY 对应)
+pub const FIRST_RUN_TOOLTIP: &str = "Ctrl+Shift+Space 呼出搜索";
+
+/// 首次引导提示标志:置真时 tooltip 固定显示快捷键提示,优先于 2s 一次的系统
+/// 状态 tooltip;引导完成(config 保存/搜索框关闭,见 first_run.rs)后复位,
+/// 下一次 sys-status 广播(≤2s)自动恢复系统状态 tooltip
+static FIRST_RUN_HINT: AtomicBool = AtomicBool::new(false);
+
+/// 设置首次引导提示标志(引导开始置真,完成复位)
+pub fn set_first_run_hint(on: bool) {
+    FIRST_RUN_HINT.store(on, Ordering::SeqCst);
+}
+
+/// 立即把 tooltip 设为首次引导提示(不等下一次 sys-status 广播)
+pub fn set_first_run_tooltip(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(FIRST_RUN_TOOLTIP.to_string()));
+    }
+}
+
+/// tooltip 文本裁决(纯函数,可单测):首次引导中 → 快捷键提示;否则系统状态
+pub fn current_tooltip(status: &crate::commands::system::SysStatus, first_run_hint: bool) -> String {
+    if first_run_hint {
+        FIRST_RUN_TOOLTIP.to_string()
+    } else {
+        format_tooltip_text(status)
+    }
+}
 
 /// 2.5 托盘 tooltip 文本(CPU/内存/网络,纯函数便于单测)
 fn format_tooltip_text(s: &crate::commands::system::SysStatus) -> String {
@@ -36,7 +67,11 @@ fn subscribe_sys_status_tooltip(app: &AppHandle) {
             return;
         };
         if let Some(tray) = tray_app.tray_by_id("main") {
-            let _ = tray.set_tooltip(Some(format_tooltip_text(&status)));
+            // 首次引导中:固定显示快捷键提示(见 current_tooltip 裁决)
+            let _ = tray.set_tooltip(Some(current_tooltip(
+                &status,
+                FIRST_RUN_HINT.load(Ordering::SeqCst),
+            )));
         }
     });
 }
@@ -123,5 +158,17 @@ mod tests {
         let text = format_tooltip_text(&Default::default());
         assert!(text.contains("CPU 0%"));
         assert!(text.contains("下载 0B/s"));
+    }
+
+    // ---- 首次引导 tooltip 裁决(稳定性包 2026-08-13,纯函数) ----
+
+    #[test]
+    fn first_run_hint_overrides_status_tooltip() {
+        // 引导中:固定快捷键提示(不显示系统状态)
+        assert_eq!(current_tooltip(&status(), true), FIRST_RUN_TOOLTIP);
+        assert_eq!(current_tooltip(&Default::default(), true), FIRST_RUN_TOOLTIP);
+        // 引导结束:恢复系统状态 tooltip
+        let text = current_tooltip(&status(), false);
+        assert!(text.contains("CPU"), "引导结束后应显示系统状态: {text}");
     }
 }
