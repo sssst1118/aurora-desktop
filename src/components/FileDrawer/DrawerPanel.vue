@@ -108,7 +108,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="w-full h-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-2xl border border-[var(--aurora-border)] overflow-hidden text-[var(--aurora-text)] shadow-2xl"
+    class="w-full h-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl border border-[var(--aurora-border)] overflow-hidden text-[var(--aurora-text)] shadow-2xl"
   >
     <!-- 头部(可拖动区域) -->
     <header

@@ -14,6 +14,24 @@ const emit = defineEmits<{ (e: "close"): void }>();
 /** 配置保存统一入口:失败时回滚本地值为后端实际配置并展示红字提示;成功清空提示 */
 const saveError = ref("");
 
+// ---- 配置加载状态(store.cfg 为 null 时模板展示加载中/失败占位,避免整页空白) ----
+/** 初始视为加载中(首次激活必触发 loadCfg),避免错误占位闪现 */
+const cfgLoading = ref(true);
+const cfgError = ref("");
+
+/** 配置拉取入口(激活刷新与失败重试共用;失败保留错误信息供占位展示) */
+async function loadCfg() {
+  cfgLoading.value = true;
+  cfgError.value = "";
+  try {
+    await store.load();
+  } catch (e) {
+    cfgError.value = `配置加载失败:${e}`;
+  } finally {
+    cfgLoading.value = false;
+  }
+}
+
 async function saveSafe(): Promise<boolean> {
   if (!store.cfg) return false;
   try {
@@ -79,7 +97,7 @@ onMounted(async () => {
 });
 
 onActivated(() => {
-  void store.load();
+  void loadCfg();
   void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
 });
 
@@ -606,12 +624,31 @@ async function uiaType() {
   >
     <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--aurora-border)]">
       <span class="text-sm">设置</span>
-      <button class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm" title="关闭" @click="emit('close')">
+      <button class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm" title="关闭" aria-label="关闭设置" @click="emit('close')">
         ✕
       </button>
     </div>
     <!-- 内容区禁拖(设置项滚动/开关点击放行;标题栏留可拖,设置页也能拖窗口) -->
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4" data-tauri-drag-region="false">
+      <!-- 配置未加载占位:加载中提示 / 失败红字 + 重试(cfg 为空时其余区块一律不渲染,避免整页空白) -->
+      <div v-if="!store.cfg" class="py-10 flex flex-col items-center gap-2">
+        <div v-if="cfgLoading" class="text-xs text-[var(--aurora-text-dim)]">配置加载中…</div>
+        <template v-else>
+          <div
+            class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5"
+          >
+            {{ cfgError || "配置加载失败" }}
+          </div>
+          <button
+            class="text-xs px-3 py-1.5 rounded-lg bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white transition-colors"
+            aria-label="重试加载配置"
+            @click="loadCfg"
+          >
+            重试
+          </button>
+        </template>
+      </div>
+      <template v-else>
       <!-- 保存失败提示(saveSafe 捕获所有开关/设置的保存失败,回滚后红字展示) -->
       <div
         v-if="saveError"
@@ -683,6 +720,7 @@ async function uiaType() {
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
             :class="store.cfg.search_style !== 'solid' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            aria-label="搜索框显示方式:毛玻璃"
             @click="setSearchStyle('glass')"
           >
             毛玻璃
@@ -690,6 +728,7 @@ async function uiaType() {
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
             :class="store.cfg.search_style === 'solid' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            aria-label="搜索框显示方式:经典不透明"
             @click="setSearchStyle('solid')"
           >
             经典不透明
@@ -711,7 +750,8 @@ async function uiaType() {
             :value="hotkeyText('drawer')"
             readonly
             placeholder="点击后按下组合键"
-            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 font-mono cursor-pointer"
+            aria-label="抽屉热键"
+            class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
             :class="recordingKey === 'drawer' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
             :title="recordingKey === 'drawer' ? '按下 Esc 取消录制' : '点击进入录制模式'"
             @click="startRecord('drawer')"
@@ -738,7 +778,8 @@ async function uiaType() {
             :value="hotkeyText('clipboard')"
             readonly
             placeholder="点击后按下组合键"
-            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 font-mono cursor-pointer"
+            aria-label="剪贴板热键"
+            class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
             :class="recordingKey === 'clipboard' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
             :title="recordingKey === 'clipboard' ? '按下 Esc 取消录制' : '点击进入录制模式'"
             @click="startRecord('clipboard')"
@@ -773,6 +814,7 @@ async function uiaType() {
             <button
               class="text-xs px-2 py-0.5 rounded transition-colors"
               :class="store.cfg.ai_provider === 'deepseek' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+              aria-label="选择服务商 DeepSeek"
               @click="setProvider('deepseek')"
             >
               DeepSeek
@@ -780,6 +822,7 @@ async function uiaType() {
             <button
               class="text-xs px-2 py-0.5 rounded transition-colors"
               :class="store.cfg.ai_provider === 'ollama' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+              aria-label="选择服务商 Ollama"
               @click="setProvider('ollama')"
             >
               Ollama
@@ -793,13 +836,14 @@ async function uiaType() {
               <input
                 v-model="store.cfg.ai_api_key"
                 type="password"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
+                class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
                 placeholder="未配置"
                 @change="saveText"
               />
               <button
-                class="text-[10px] px-1.5 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+                class="text-xs px-1.5 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
                 title="清空密钥"
+                aria-label="清空 API Key"
                 @click="clearApiKey"
               >
                 清除
@@ -809,7 +853,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">模型</span>
               <input
                 v-model="store.cfg.ai_model"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+                class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -817,7 +861,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">接口地址</span>
               <input
                 v-model="store.cfg.ai_base_url"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+                class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -829,7 +873,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">Ollama 地址</span>
               <input
                 v-model="store.cfg.ai_ollama_url"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+                class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -837,7 +881,7 @@ async function uiaType() {
               <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">Ollama 模型</span>
               <input
                 v-model="store.cfg.ai_ollama_model"
-                class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+                class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
                 @change="saveText"
               />
             </div>
@@ -858,7 +902,7 @@ async function uiaType() {
           <div>
             <div class="text-xs text-[var(--aurora-text-dim)] mb-1">文件搜索目录</div>
             <textarea
-              class="w-full text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono resize-y leading-relaxed"
+              class="w-full text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono resize-y leading-relaxed"
               rows="2"
               placeholder="每行一个目录(留空 = 仅桌面,禁止全盘扫描)"
               :value="store.cfg.ai_search_roots.join('\n')"
@@ -874,7 +918,7 @@ async function uiaType() {
               type="number"
               min="1"
               max="10"
-              class="w-16 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+              class="w-16 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               @change="saveText"
             />
           </div>
@@ -884,7 +928,8 @@ async function uiaType() {
               :value="hotkeyText('ai')"
               readonly
               placeholder="点击后按下组合键"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 font-mono cursor-pointer"
+              aria-label="AI 热键"
+              class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
               :class="recordingKey === 'ai' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
               :title="recordingKey === 'ai' ? '按下 Esc 取消录制' : '点击进入录制模式'"
               @click="startRecord('ai')"
@@ -913,6 +958,7 @@ async function uiaType() {
             <select
               v-model="materialSel"
               class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+              aria-label="选择动态壁纸素材"
             >
               <option value="">(选择动态壁纸素材…)</option>
               <option v-for="e in materials" :key="e.path" :value="e.path">
@@ -920,14 +966,16 @@ async function uiaType() {
               </option>
             </select>
             <button
-              class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white shrink-0"
+              class="text-xs px-2 py-1 rounded bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white shrink-0"
               :disabled="!materialSel"
+              aria-label="应用选中的动态壁纸素材"
               @click="applyMaterial"
             >
               应用
             </button>
             <button
-              class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="恢复系统壁纸"
               @click="clearMaterial"
             >
               恢复系统壁纸
@@ -982,6 +1030,7 @@ async function uiaType() {
                     : 'border-[var(--aurora-border)] text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]'
                 "
                 @click="setSpanMode(true)"
+                aria-label="切换拼接模式"
               >
                 拼接(一张铺满)
               </button>
@@ -993,6 +1042,7 @@ async function uiaType() {
                     : 'border-[var(--aurora-border)] text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]'
                 "
                 @click="setSpanMode(false)"
+                aria-label="切换独立模式"
               >
                 独立(每屏单独)
               </button>
@@ -1007,9 +1057,9 @@ async function uiaType() {
               <div v-for="m in monitors" :key="m.index">
                 屏 {{ m.index + 1 }}{{ m.primary ? "(主)" : "" }}:
                 {{ m.width }}×{{ m.height }}
-                <span class="text-[var(--aurora-text-dim)]/70">@({{ m.x }},{{ m.y }})</span>
+                <span class="text-[var(--aurora-text-dim)] opacity-70">@({{ m.x }},{{ m.y }})</span>
               </div>
-              <div v-if="monitors.length === 0" class="text-[var(--aurora-text-dim)]/70">
+              <div v-if="monitors.length === 0" class="text-[var(--aurora-text-dim)] opacity-70">
                 未获取到显示器信息(点击下方"刷新"重试)
               </div>
             </div>
@@ -1023,6 +1073,7 @@ async function uiaType() {
                 <select
                   v-model="perMonitorSel[m.index]"
                   class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+                  :aria-label="`选择屏 ${m.index + 1} 的素材`"
                 >
                   <option value="">(未设置,显示系统壁纸)</option>
                   <option v-for="e in materials" :key="e.path" :value="e.path">
@@ -1030,8 +1081,9 @@ async function uiaType() {
                   </option>
                 </select>
                 <button
-                  class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+                  class="text-xs px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
                   :disabled="!perMonitorSel[m.index]"
+                  :aria-label="`应用屏 ${m.index + 1} 的素材`"
                   @click="applyMonitorMaterial(m.index)"
                 >
                   应用
@@ -1039,7 +1091,8 @@ async function uiaType() {
               </div>
               <div class="flex gap-2 items-center">
                 <button
-                  class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                  class="text-xs px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                  aria-label="刷新显示器信息"
                   @click="loadMultiMonitorState"
                 >
                   刷新
@@ -1051,7 +1104,8 @@ async function uiaType() {
             </div>
             <div v-else class="flex gap-2 items-center">
               <button
-                class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                class="text-xs px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                aria-label="刷新显示器信息"
                 @click="loadMultiMonitorState"
               >
                 刷新
@@ -1089,16 +1143,17 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">坐标点击</span>
             <input
               v-model="simX"
-              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
+              class="w-14 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
               placeholder="x"
             />
             <input
               v-model="simY"
-              class="w-14 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
+              class="w-14 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
               placeholder="y"
             />
             <button
-              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="执行坐标点击"
               @click="simClick"
             >
               点击
@@ -1108,12 +1163,13 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">输入文本</span>
             <input
               v-model="simText"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+              class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               placeholder="写入前台焦点窗口(中文安全)"
               @keyup.enter="simType"
             />
             <button
-              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="执行文本输入"
               @click="simType"
             >
               输入
@@ -1128,12 +1184,13 @@ async function uiaType() {
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">窗口搜索</span>
             <input
               v-model="uiaWinTitle"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+              class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               placeholder="按标题子串搜索(留空列出全部可见窗口)"
               @keyup.enter="uiaSearchWindows"
             />
             <button
-              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="搜索窗口"
               @click="uiaSearchWindows"
             >
               搜索
@@ -1143,9 +1200,10 @@ async function uiaType() {
             <button
               v-for="w in uiaWindows"
               :key="w.hwnd"
-              class="w-full text-left text-[10px] px-2 py-0.5 rounded truncate"
-              :class="uiaSelHwnd === w.hwnd ? 'bg-[var(--aurora-accent)]/20' : 'bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]'"
+              class="w-full text-left text-xs px-2 py-0.5 rounded truncate"
+              :class="uiaSelHwnd === w.hwnd ? 'cfg-sel-tint' : 'bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]'"
               :title="`hwnd=${w.hwnd} class=${w.class} pid=${w.pid}`"
+              :aria-label="`选择窗口:${w.title || '(无标题)'}`"
               @click="uiaListControls(w.hwnd)"
             >
               {{ w.title || "(无标题)" }} <span class="text-[var(--aurora-text-dim)]">#{{ w.hwnd }}</span>
@@ -1156,7 +1214,8 @@ async function uiaType() {
               <span class="text-[10px] text-[var(--aurora-text-dim)]">控件({{ uiaControls.length }} 个,点选后操作)</span>
               <button
                 v-if="uiaControls.length"
-                class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+                aria-label="刷新控件列表"
                 @click="uiaListControls(uiaSelHwnd)"
               >
                 刷新
@@ -1165,9 +1224,10 @@ async function uiaType() {
             <button
               v-for="c in uiaControls"
               :key="c.id"
-              class="w-full text-left text-[10px] px-2 py-0.5 rounded truncate"
-              :class="uiaSelId === c.id ? 'bg-[var(--aurora-accent)]/20' : 'bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]'"
+              class="w-full text-left text-xs px-2 py-0.5 rounded truncate"
+              :class="uiaSelId === c.id ? 'cfg-sel-tint' : 'bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]'"
               :title="`bounds=${c.bounds.join(',')}`"
+              :aria-label="`选择控件:${c.control_type}`"
               @click="uiaSelId = c.id"
             >
               [{{ c.id }}] {{ c.control_type }} {{ c.name || "(无名称)" }}
@@ -1175,25 +1235,28 @@ async function uiaType() {
           </div>
           <div v-if="uiaSelId" class="flex items-center gap-1.5 flex-wrap">
             <button
-              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="读取选中控件文本"
               @click="uiaReadText"
             >
               读文本
             </button>
             <button
-              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="点击选中控件"
               @click="uiaClick"
             >
               点击
             </button>
             <input
               v-model="uiaTypeText"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
+              class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
               placeholder="输入文本(中文安全)"
               @keyup.enter="uiaType"
             />
             <button
-              class="text-[10px] px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="输入文本到选中控件"
               @click="uiaType"
             >
               输入
@@ -1212,6 +1275,7 @@ async function uiaType() {
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
             :class="store.cfg.theme_mode === 'light' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            aria-label="切换浅色主题"
             @click="setThemeMode('light')"
           >
             浅色
@@ -1219,6 +1283,7 @@ async function uiaType() {
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
             :class="store.cfg.theme_mode === 'dark' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            aria-label="切换深色主题"
             @click="setThemeMode('dark')"
           >
             深色
@@ -1226,6 +1291,7 @@ async function uiaType() {
           <button
             class="text-xs px-2 py-0.5 rounded transition-colors"
             :class="store.cfg.theme_mode === 'system' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
+            aria-label="切换跟随系统主题"
             @click="setThemeMode('system')"
           >
             跟随系统
@@ -1245,6 +1311,7 @@ async function uiaType() {
               store.cfg.theme_accent === c ? 'scale-110 ring-1 ring-[var(--aurora-border)]' : '',
             ]"
             :title="c"
+            :aria-label="`强调色:${c}`"
             @click="setAccent(c)"
           />
         </div>
@@ -1260,8 +1327,9 @@ async function uiaType() {
             </div>
           </div>
           <button
-            class="text-[10px] px-2.5 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+            class="text-xs px-2.5 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
             :disabled="updateStatus === 'checking' || updateStatus === 'downloading'"
+            aria-label="检查更新"
             @click="checkUpdate"
           >
             {{ updateStatus === "checking" ? "检查中…" : "检查更新" }}
@@ -1279,7 +1347,7 @@ async function uiaType() {
         </div>
         <div
           v-else-if="updateStatus === 'available' || updateStatus === 'downloading' || updateStatus === 'downloaded'"
-          class="text-xs bg-[var(--aurora-field)]/60 rounded-lg px-3 py-1.5 space-y-1"
+          class="text-xs bg-[var(--aurora-field)] rounded-lg px-3 py-1.5 space-y-1"
         >
           <div class="text-[var(--aurora-text)]">
             发现新版本 v{{ updateVersion || "?" }}
@@ -1296,13 +1364,15 @@ async function uiaType() {
           <div class="flex items-center gap-2 pt-0.5">
             <button
               v-if="updateStatus === 'available' || updateStatus === 'downloaded'"
-              class="text-[10px] px-2.5 py-1 rounded bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white"
+              class="text-xs px-2.5 py-1 rounded bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white"
+              aria-label="下载并安装更新"
               @click="downloadAndInstall"
             >
               {{ updateStatus === "downloaded" ? "立即安装并重启" : "下载并安装" }}
             </button>
             <button
-              class="text-[10px] px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+              class="text-xs px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+              aria-label="打开下载目录"
               @click="openUpdatesFolder"
             >
               打开下载目录
@@ -1310,6 +1380,15 @@ async function uiaType() {
           </div>
         </div>
       </div>
+      </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 语义色低透明度选中底(UIA 列表选中态;同 WallpaperPanel 做法:
+ * var() 任意值 + /opacity 修饰在 Tailwind v3 下不生成样式,用 color-mix 兜底) */
+.cfg-sel-tint {
+  background: color-mix(in srgb, var(--aurora-accent) 20%, transparent);
+}
+</style>

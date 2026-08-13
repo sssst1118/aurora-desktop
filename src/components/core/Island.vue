@@ -73,7 +73,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="h-full w-full flex items-center gap-4 px-4 text-[var(--aurora-text)] select-none bg-[var(--aurora-panel)] backdrop-blur-md rounded-none cursor-pointer"
+    class="h-full w-full flex items-center gap-4 px-4 text-[var(--aurora-text)] select-none bg-[var(--aurora-panel)] backdrop-blur-md rounded-xl cursor-pointer"
     @click="toggleSearch"
     data-tauri-drag-region
   >

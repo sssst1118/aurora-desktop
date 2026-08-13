@@ -242,7 +242,7 @@ onUnmounted(() => {
   <!-- 整窗可拖后显式禁拖:图标点击/文件投放/排序拖拽放行(tauri 2.11 drag-region false 阻断祖先判定) -->
   <div
     class="relative flex items-center gap-1 border-t border-[var(--aurora-border)] px-2 py-1.5 min-h-14 select-none transition-colors"
-    :class="fileDragOver ? 'bg-[var(--aurora-accent)]/20' : ''"
+    :class="fileDragOver ? 'dock-dragover' : ''"
     data-tauri-drag-region="false"
   >
     <!-- 文件拖入投放提示(悬停时浮在图标排上方) -->
@@ -284,8 +284,9 @@ onUnmounted(() => {
       >
       <!-- 悬停 ✕ 删除(不触发启动:stop 掉点击) -->
       <button
-        class="absolute -top-1.5 -right-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-[var(--aurora-danger)] text-[10px] leading-none text-white shadow group-hover:flex"
+        class="absolute -top-1.5 -right-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-[var(--aurora-danger)] text-[10px] leading-none text-white shadow group-hover:flex transition hover:brightness-110 active:brightness-90"
         :title="`移除 ${it.name}`"
+        :aria-label="`移除 ${it.name}`"
         @click.stop="removeItem(it)"
       >
         ✕
@@ -308,8 +309,9 @@ onUnmounted(() => {
     <!-- 末尾固定 "+" 占位:有图标时可见,半透明提示可继续添加 -->
     <button
       v-if="items.length > 0"
-      class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-[var(--aurora-border)] text-lg text-[var(--aurora-text-dim)]/50 transition-colors hover:border-[var(--aurora-accent)] hover:text-[var(--aurora-accent)]/70"
+      class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-[var(--aurora-border)] text-lg text-[var(--aurora-text-dim)] transition-colors hover:border-[var(--aurora-accent)] hover:text-[var(--aurora-accent)] active:bg-[var(--aurora-field)]"
       title="从资源管理器拖拽 exe/快捷方式到这里即可添加"
+      aria-label="添加应用"
       @click="showAddHint"
     >
       +
@@ -326,6 +328,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 文件拖入高亮底色(语义色 20% 透明;var() 任意值 + /opacity 修饰不生成样式,color-mix 兜底) */
+.dock-dragover {
+  background: color-mix(in srgb, var(--aurora-accent) 20%, transparent);
+}
 /* 启动中反馈:呼吸脉冲(点击后 1.5s,告知"正在启动",防用户急着连点) */
 @keyframes aurora-launch-pulse {
   0%,
