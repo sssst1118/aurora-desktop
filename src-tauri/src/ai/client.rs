@@ -52,7 +52,13 @@ fn build_client(connect_timeout: Duration, local_only: bool) -> Client {
     if local_only {
         builder = builder.no_proxy();
     }
-    builder.build().expect("reqwest Client 构建失败")
+    // 加固(2026-08-13):build 失败(极罕见,通常为系统 TLS 后端缺失/环境异常)不再
+    // expect panic 崩进程,降级为默认 Client——请求仍可用(总超时在请求级 timeout,
+    // 不受影响),仅失去连接超时差异化(deepseek 15s / ollama 3s 快速失败)
+    builder.build().unwrap_or_else(|e| {
+        eprintln!("[aurora] reqwest Client 构建失败,降级为默认 Client(连接超时不再按模式差异化): {e}");
+        Client::new()
+    })
 }
 
 /// 按服务商取全局惰性 Client(ollama=3s 快速失败+禁代理,其余=15s 保留系统代理)

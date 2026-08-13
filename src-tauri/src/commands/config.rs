@@ -158,6 +158,94 @@ pub fn config_load(app: tauri::AppHandle) -> AppConfig {
     cfg
 }
 
+// ---- 设置导入导出(可维护性收尾 2026-08-13:主力工具换机迁移)----
+
+/// 导出配置全文:原样返回 config.json 文本(**含明文密钥**——换机迁移必须连 API Key
+/// 一起带走,否则导入后 DeepSeek 失效;这是用户显式主动的导出动作,文件由用户自行
+/// 保管,与 config_load 的"前端只见掩码"展示契约不冲突)。
+/// 文件不存在(从未保存过)时导出默认配置序列化,保证导出永远可用。
+#[tauri::command]
+pub fn config_export(app: tauri::AppHandle) -> Result<String, String> {
+    let path = config_path(&app);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(_) => serde_json::to_string_pretty(&AppConfig::default())
+            .map_err(|e| format!("导出配置失败: {e}")),
+    }
+}
+
+/// 导入文件的标识字段(AppConfig 无 version 字段,用最早最核心的字段集合做归属判断):
+/// 任一存在即初步判定为 Aurora 配置文件;全部缺失直接拒绝,防止把任意 JSON 导入后
+/// 经 #[serde(default)] 静默变成"全默认配置"清空现有设置。
+const IMPORT_IDENTIFIER_FIELDS: [&str; 5] = [
+    "hotkey_search",
+    "enable_island",
+    "theme_mode",
+    "search_style",
+    "update_enabled",
+];
+
+/// 校验导入 JSON(纯函数,便于单测):必须解析为合法 JSON 对象 + 含标识字段 +
+/// 各字段类型与 AppConfig 一致(serde 对类型不符报具体错误);通过后返回完整配置,
+/// 缺失字段按 #[serde(default)] 逐字段补默认(与老配置升级同语义)。
+pub fn validate_import_json(json: &str) -> Result<AppConfig, String> {
+    let root: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| format!("导入文件不是合法 JSON: {e}"))?;
+    let Some(obj) = root.as_object() else {
+        return Err("导入文件不是 Aurora 配置文件(顶层不是 JSON 对象)".to_string());
+    };
+    if !IMPORT_IDENTIFIER_FIELDS.iter().any(|f| obj.contains_key(*f)) {
+        return Err("导入文件不是 Aurora 配置文件(缺少标识字段,请使用\"导出设置\"生成的 .json)".to_string());
+    }
+    serde_json::from_value::<AppConfig>(root).map_err(|e| format!("配置字段校验失败: {e}"))
+}
+
+/// 导入前备份现有 config.json → `config.json.pre-import`(防误导入丢配置,可人工恢复)。
+/// 已有旧备份先删除再复制(只保留最近一次导入前现场,与 backup_corrupt_file 同策略);
+/// 原文件不存在(首次导入)或复制失败 → 静默跳过,不阻断导入流程。
+pub fn backup_before_import(path: &Path) {
+    if !path.exists() {
+        return; // 首次导入,无旧配置可备份
+    }
+    let mut backup_os = path.as_os_str().to_os_string();
+    backup_os.push(".pre-import");
+    let backup = PathBuf::from(backup_os);
+    let _ = std::fs::remove_file(&backup);
+    if let Err(e) = std::fs::copy(path, &backup) {
+        eprintln!("[aurora] 导入前备份配置失败({}): {e}", backup.display());
+    }
+}
+
+/// 导入配置(换机迁移):先校验 → 备份现有配置为 .pre-import → 落盘 → 热生效。
+/// 与 config_save 复用同一套安全链路(密钥掩码裁决 + 更新源白名单校验 +
+/// first_run_done 兜底 + 配置锁串行化 + save_to 原子写 + 锁外 runtime::apply)。
+#[tauri::command]
+pub fn config_import(app: tauri::AppHandle, json: String) -> Result<bool, String> {
+    let mut cfg = validate_import_json(&json)?;
+    let path = config_path(&app);
+    // 并发修复:与 config_save / search_save_geometry 共用配置锁,读-改-写整体串行
+    let guard = config_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let prev = load_from(&path);
+    // 密钥裁决:导入文件里是掩码 "******"(如手工编辑过)→ 保留本机磁盘旧值,防清空密钥
+    cfg.ai_api_key = resolve_key_save(&prev.ai_api_key, &cfg.ai_api_key);
+    // H1 供应链加固:导入同样是把 update_feed_url 写入配置的路径,白名单边界保持一致
+    // (与磁盘旧值相同 → 放行,防历史 URL 误拒;有改动 → 严格校验)
+    validate_feed_url_change(&prev.update_feed_url, &cfg.update_feed_url)?;
+    if !cfg.first_run_done {
+        cfg.first_run_done = true;
+        crate::tray::set_first_run_hint(false);
+    }
+    // 校验全部通过后才备份:非法导入不产生备份、不动现有配置
+    backup_before_import(&path);
+    let ok = save_to(&path, &cfg);
+    // 落盘完成即放锁:热生效只读配置,不参与读-改-写,留在锁外缩小临界区(同 config_save)
+    drop(guard);
+    if ok {
+        crate::runtime::apply(&app, &cfg);
+    }
+    Ok(ok)
+}
+
 // ---- H1 供应链加固:更新源域名白名单(2026-08-13)----
 
 /// `update_feed_url` 允许的 host 白名单(全部为 GitHub 官方域名及其文件/API/CDN 域)。
@@ -354,11 +442,14 @@ mod tests {
     fn tmp_cfg(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("aurora_cfg_test_{tag}.json"));
         let _ = std::fs::remove_file(&p);
-        // 同时清掉可能的 tmp / broken 残留(原子写与损坏备份测试需从干净状态开始)
+        // 同时清掉可能的 tmp / broken / pre-import 残留
+        // (原子写/损坏备份/导入备份测试需从干净状态开始)
         let tmp = PathBuf::from(format!("{}.tmp", p.display()));
         let _ = std::fs::remove_file(&tmp);
         let broken = PathBuf::from(format!("{}.broken", p.display()));
         let _ = std::fs::remove_file(&broken);
+        let pre = PathBuf::from(format!("{}.pre-import", p.display()));
+        let _ = std::fs::remove_file(&pre);
         p
     }
 
@@ -704,5 +795,112 @@ mod tests {
         // 改为白名单外 → 拒绝
         assert!(validate_feed_url_change(legacy, "https://evil.com/x").is_err());
         assert!(validate_feed_url_change("https://github.com/x", "http://github.com/x").is_err());
+    }
+
+    // ---- 设置导入导出(可维护性收尾 2026-08-13:换机迁移)----
+
+    #[test]
+    fn import_valid_json_parses_with_default_fallback() {
+        // 合法导出文件通过校验;缺失字段按 #[serde(default)] 补默认(老文件导入同升级语义)
+        let json = serde_json::to_string_pretty(&AppConfig {
+            hotkey_search: "ctrl+alt+x".to_string(),
+            theme_mode: "dark".to_string(),
+            ..AppConfig::default()
+        })
+        .unwrap();
+        let cfg = validate_import_json(&json).expect("合法导出文件应通过校验");
+        assert_eq!(cfg.hotkey_search, "ctrl+alt+x");
+        assert_eq!(cfg.theme_mode, "dark");
+        assert!(cfg.enable_island, "未写字段回落默认值");
+    }
+
+    #[test]
+    fn import_partial_json_ok_when_identifier_present() {
+        // 仅含一个标识字段的最小 JSON 也可导入(其余字段补默认)——与 load_from 的老配置语义一致
+        let cfg = validate_import_json(r#"{"hotkey_search":"ctrl+alt+z"}"#).expect("含标识字段应通过");
+        assert_eq!(cfg.hotkey_search, "ctrl+alt+z");
+        assert!(cfg.enable_island);
+    }
+
+    #[test]
+    fn import_invalid_json_rejected() {
+        assert!(validate_import_json("{ not json").is_err(), "坏 JSON 拒绝");
+        assert!(validate_import_json("").is_err(), "空串拒绝");
+        assert!(validate_import_json("[1,2,3]").is_err(), "顶层数组不是对象,拒绝");
+        assert!(validate_import_json("null").is_err(), "顶层 null 拒绝");
+        assert!(validate_import_json("\"hotkey_search\"").is_err(), "顶层字符串拒绝");
+    }
+
+    #[test]
+    fn import_missing_identifier_fields_rejected() {
+        // 缺标识字段的任意 JSON 不允许导入(否则经 serde(default) 静默变成全默认配置,清空现有设置)
+        assert!(validate_import_json(r#"{}"#).is_err());
+        assert!(validate_import_json(r#"{"foo":1}"#).is_err());
+        assert!(validate_import_json(r#"{"name":"aurora"}"#).is_err(), "撞名非标识字段也拒绝");
+    }
+
+    #[test]
+    fn import_wrong_field_type_rejected() {
+        // 标识字段在但类型不符 → serde 报具体类型错误,拒绝导入(不会部分生效)
+        assert!(validate_import_json(r#"{"hotkey_search":123}"#).is_err());
+        assert!(validate_import_json(r#"{"theme_mode":42}"#).is_err());
+        assert!(validate_import_json(r#"{"enable_island":"yes"}"#).is_err());
+        let err = validate_import_json(r#"{"hotkey_search":123}"#).unwrap_err();
+        assert!(err.contains("配置字段校验失败"), "错误信息应定位到字段校验: {err}");
+    }
+
+    #[test]
+    fn import_flow_backs_up_and_persists() {
+        // 模拟 config_import 落盘路径(纯函数串联,免构造 AppHandle):
+        // 旧配置先写盘 → 校验新 JSON → 备份 → 落盘;断言新值生效 + .pre-import 备份存在且内容为旧值
+        let p = tmp_cfg("import");
+        let old = AppConfig {
+            hotkey_search: "ctrl+alt+o".to_string(),
+            theme_mode: "light".to_string(),
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &old));
+        let incoming = serde_json::to_string_pretty(&AppConfig {
+            hotkey_search: "ctrl+alt+n".to_string(),
+            theme_mode: "dark".to_string(),
+            ..AppConfig::default()
+        })
+        .unwrap();
+        let cfg = validate_import_json(&incoming).unwrap();
+        backup_before_import(&p);
+        assert!(save_to(&p, &cfg), "导入落盘应成功");
+        let loaded = load_from(&p);
+        assert_eq!(loaded.hotkey_search, "ctrl+alt+n");
+        assert_eq!(loaded.theme_mode, "dark");
+        // 备份存在且内容 = 导入前的旧配置(误导入可人工恢复)
+        let backup = PathBuf::from(format!("{}.pre-import", p.display()));
+        assert!(backup.exists(), "导入前备份应存在: {}", backup.display());
+        let prev: AppConfig =
+            serde_json::from_str(&std::fs::read_to_string(&backup).unwrap()).unwrap();
+        assert_eq!(prev.hotkey_search, "ctrl+alt+o");
+        assert_eq!(prev.theme_mode, "light");
+        // 二次导入:旧备份被覆盖为最近一次导入前现场
+        let incoming2 = serde_json::to_string_pretty(&AppConfig {
+            hotkey_search: "ctrl+alt+m".to_string(),
+            ..AppConfig::default()
+        })
+        .unwrap();
+        let cfg2 = validate_import_json(&incoming2).unwrap();
+        backup_before_import(&p);
+        assert!(save_to(&p, &cfg2));
+        let prev2: AppConfig =
+            serde_json::from_str(&std::fs::read_to_string(&backup).unwrap()).unwrap();
+        assert_eq!(prev2.hotkey_search, "ctrl+alt+n");
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&backup);
+    }
+
+    #[test]
+    fn import_backup_skipped_when_no_existing_config() {
+        // 首次导入(磁盘无 config.json):备份静默跳过、不 panic、不产生空备份文件
+        let p = tmp_cfg("import_first");
+        backup_before_import(&p);
+        let backup = PathBuf::from(format!("{}.pre-import", p.display()));
+        assert!(!backup.exists(), "无旧配置时不应产生备份文件");
     }
 }

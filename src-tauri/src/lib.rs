@@ -163,6 +163,8 @@ pub fn run() {
             commands::search::toggle_search,
             commands::config::config_load,
             commands::config::config_save,
+            commands::config::config_export,
+            commands::config::config_import,
             commands::config::search_save_geometry,
             commands::system::sys_get_status,
             // ---- 稳定性包:开机自启动(注册表 Run 键为真值) ----

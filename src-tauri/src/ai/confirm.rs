@@ -58,13 +58,16 @@ impl ToolConfirmState {
     /// id 重复(理论不发生)时旧条目被覆盖:旧发送端 drop → 旧等待方收 Err = 拒绝,不产生悬挂。
     pub fn register(&self, id: &str) -> oneshot::Receiver<bool> {
         let (tx, rx) = oneshot::channel();
-        self.map.lock().unwrap().insert(id.to_string(), tx);
+        self.map
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id.to_string(), tx);
         rx
     }
 
     /// 前端回传决策:查表发信。发信成功 → true;条目不存在(已超时清理/从未注册)→ false。
     pub fn resolve(&self, id: &str, approve: bool) -> bool {
-        match self.map.lock().unwrap().remove(id) {
+        match self.map.lock().unwrap_or_else(|p| p.into_inner()).remove(id) {
             Some(tx) => tx.send(approve).is_ok(),
             None => false,
         }
@@ -72,7 +75,10 @@ impl ToolConfirmState {
 
     /// 兜底清理:决策后幂等移除(正常决策时已被 resolve 移除;超时分支清残留)
     pub fn remove(&self, id: &str) {
-        self.map.lock().unwrap().remove(id);
+        self.map
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
     }
 }
 

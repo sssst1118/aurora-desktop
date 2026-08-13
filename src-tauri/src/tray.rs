@@ -98,8 +98,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     menu_items.push(&quit_item);
     let menu = Menu::with_items(app, &menu_items)?;
 
-    TrayIconBuilder::new()
-        .icon(app.default_window_icon().expect("no window icon").clone())
+    let mut builder = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -121,8 +120,13 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => app.exit(0),
             _ => {}
-        })
-        .build(app)?;
+        });
+    // 图标兜底(加固 2026-08-13):打包期 tauri.conf.json 已保证默认图标存在(缺失打包即失败),
+    // 运行时取不到(极端环境)仅跳过设置图标——托盘菜单仍可用,不再 expect panic 崩进程
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
     // 2.5 托盘 tooltip:订阅 sys-status 事件实时更新(采样线程 2s 一广播)
     subscribe_sys_status_tooltip(app);
     Ok(())

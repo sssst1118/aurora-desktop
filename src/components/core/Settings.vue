@@ -87,10 +87,18 @@ onMounted(async () => {
     }),
     await listen("update-downloaded", () => {
       updateStatus.value = "downloaded";
+      updateProgress.value = null; // 下载完成:清进度条,回落到"下载完成"展示态
+    }),
+    // 下载进度(后端节流上报:每 ≥1% 或 ≥512KB 一次;total 未知时 percent 为 null)
+    await listen("update-progress", (ev) => {
+      const p = ev.payload as UpdateProgress;
+      updateProgress.value = p;
+      updateStatus.value = "downloading";
     }),
     await listen("update-error", (ev) => {
       updateStatus.value = "error";
       updateError.value = String((ev.payload as { message?: string }).message ?? "下载失败");
+      updateProgress.value = null;
     }),
   ];
   updateListeners = unlisteners;
@@ -472,6 +480,79 @@ async function setAccent(name: string) {
   apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
 }
 
+// ---- 配置导入导出(可维护性收尾 2026-08-13:主力工具换机迁移)----
+
+const importError = ref("");
+const importNotice = ref("");
+const importFileInput = ref<HTMLInputElement | null>(null);
+
+/**
+ * 导出配置:invoke config_export 拿 config.json 全文 → 触发浏览器下载。
+ * 下载走 Blob + a[download](Windows WebView2 支持,交给系统下载器落盘);
+ * blob 下载在部分 Tauri 环境可能被 webview 拦截且无异常可捕获,故同步做
+ * 剪贴板兜底——无论下载是否成功,内容都已在剪贴板,可粘贴保存为 .json。
+ */
+async function exportConfig() {
+  importError.value = "";
+  importNotice.value = "";
+  try {
+    const text = await invoke<string>("config_export");
+    // 文件名带日期,便于按次归档、区分不同机器的导出
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const name = `aurora-config-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000); // 给系统下载器留取用时间,再释放
+    try {
+      await navigator.clipboard.writeText(text);
+      importNotice.value = "配置已导出(如未弹出下载,内容已复制到剪贴板,可粘贴保存为 .json 文件)";
+    } catch {
+      importNotice.value = "配置已导出(浏览器下载)";
+    }
+  } catch (e) {
+    importError.value = `导出失败:${e}`;
+  }
+}
+
+/** 触发隐藏的 file input(用户选择要导入的配置文件) */
+function pickImportFile() {
+  importFileInput.value?.click();
+}
+
+/**
+ * 导入配置:读文件文本 → 后端校验(合法 JSON + 标识字段 + 字段类型)→
+ * 备份现有配置为 config.json.pre-import → 落盘 + 热生效(热键/监听/窗口即时同步)。
+ * 成功后刷新本地 store 并立即应用主题(导入可能改主题)。
+ */
+async function onImportFileChange(e: Event) {
+  importError.value = "";
+  importNotice.value = "";
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    const json = await file.text();
+    await invoke<boolean>("config_import", { json });
+    importNotice.value = "配置已导入并生效";
+    await store.load(); // 刷新为后端实际落盘配置
+    if (store.cfg) {
+      // 导入可能改变主题模式/强调色:按新配置立即应用(与 setThemeMode 同路径)
+      apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
+    }
+  } catch (err) {
+    importError.value = `导入失败:${err}`;
+  } finally {
+    input.value = ""; // 清空选择:同一文件可再次触发导入
+  }
+}
+
 // ---- Phase5 5.1 自动更新(自研 updater;命令契约见 docs/Phase5-设计.md §1)----
 
 const appVersion = ref("");
@@ -480,6 +561,22 @@ const updateVersion = ref("");
 const updateNotes = ref("");
 const updateError = ref("");
 let updateListeners: UnlistenFn[] = [];
+
+/** update-progress 事件 payload(与后端 updater::UpdateProgress 契约对应;
+ * percent 为 0.0-1.0 占比;total_bytes 未知(响应无 Content-Length)时为 null) */
+interface UpdateProgress {
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  percent: number | null;
+}
+const updateProgress = ref<UpdateProgress | null>(null);
+
+/** 下载量人类可读(总大小未知时展示已下载字节数) */
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
 
 /** 手动检查更新(update_check 三态:latest/available/error) */
 async function checkUpdate() {
@@ -512,6 +609,7 @@ async function checkUpdate() {
 /** 下载并安装:update_download(进度经事件)成功后 update_install(静默安装 + 退出重启) */
 async function downloadAndInstall() {
   updateStatus.value = "downloading";
+  updateProgress.value = null; // 重置进度:等待 update-progress 事件驱动
   updateError.value = "";
   try {
     await invoke("update_download");
@@ -1409,6 +1507,31 @@ async function uiaType() {
           <div v-if="updateNotes" class="text-[var(--aurora-text-dim)] break-all leading-relaxed">
             {{ updateNotes }}
           </div>
+          <!-- 下载进度条(update-progress 事件驱动;percent 为 null = 总大小未知,只展示已下载字节数) -->
+          <div v-if="updateStatus === 'downloading'" class="space-y-1 pt-1">
+            <div
+              class="h-1.5 w-full rounded-full bg-[var(--aurora-field)] overflow-hidden"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="Math.round((updateProgress?.percent ?? 0) * 100)"
+              :aria-label="`更新下载进度 ${Math.round((updateProgress?.percent ?? 0) * 100)}%`"
+            >
+              <div
+                class="h-full rounded-full bg-[var(--aurora-accent)] transition-[width] duration-200"
+                :style="{ width: `${Math.round((updateProgress?.percent ?? 0) * 100)}%` }"
+              ></div>
+            </div>
+            <div class="text-[10px] text-[var(--aurora-text-dim)]">
+              <template v-if="updateProgress?.percent != null">
+                已下载 {{ Math.round(updateProgress.percent * 100) }}%
+                <span v-if="updateProgress?.total_bytes != null">
+                  ({{ fmtBytes(updateProgress.downloaded_bytes) }} / {{ fmtBytes(updateProgress.total_bytes) }})
+                </span>
+              </template>
+              <template v-else>已下载 {{ fmtBytes(updateProgress?.downloaded_bytes ?? 0) }}(总大小未知)</template>
+            </div>
+          </div>
           <div class="flex items-center gap-2 pt-0.5">
             <button
               v-if="updateStatus === 'available' || updateStatus === 'downloaded'"
@@ -1426,6 +1549,52 @@ async function uiaType() {
               打开下载目录
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- 配置导入导出(可维护性收尾 2026-08-13:换机迁移;导出含明文 API Key,文件请妥善保管) -->
+      <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
+        <div>
+          <div class="text-sm">配置</div>
+          <div class="text-[10px] text-[var(--aurora-text-dim)]">
+            换机迁移:导出全部设置为 JSON 文件,新电脑导入即恢复;导入前当前配置自动备份为 config.json.pre-import
+          </div>
+        </div>
+        <div
+          v-if="importError"
+          class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5"
+        >
+          {{ importError }}
+        </div>
+        <div
+          v-else-if="importNotice"
+          class="text-xs text-[var(--aurora-success)] bg-[var(--aurora-success-bg)] rounded-lg px-3 py-1.5"
+        >
+          {{ importNotice }}
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            class="text-xs px-2.5 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+            aria-label="导出全部设置"
+            @click="exportConfig"
+          >
+            导出设置
+          </button>
+          <button
+            class="text-xs px-2.5 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
+            aria-label="从文件导入设置"
+            @click="pickImportFile"
+          >
+            导入设置
+          </button>
+          <input
+            ref="importFileInput"
+            type="file"
+            accept=".json,application/json"
+            class="hidden"
+            aria-label="选择要导入的配置文件"
+            @change="onImportFileChange"
+          />
         </div>
       </div>
       </template>
