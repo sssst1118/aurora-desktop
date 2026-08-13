@@ -173,6 +173,38 @@ pub enum ToolAction {
     StopDynamicWallpaper,
 }
 
+// ---- H3 安全加固:危险工具白名单(执行前须经用户确认)----
+
+/// 危险工具集合:这些工具可对系统产生副作用(如执行任意 exe),模型返回的调用
+/// 一律先 emit ai-tool-confirm 等用户确认,拒绝/超时即跳过。
+/// 常量声明便于审计与将来扩展(如自动化类工具若接入工具循环,只需加名字)。
+pub const DANGEROUS_TOOLS: &[&str] = &["open_item"];
+
+/// 工具名是否在危险集合内(纯函数;run_tool_loop 在 route 成功后调用)
+pub fn is_dangerous_tool(name: &str) -> bool {
+    DANGEROUS_TOOLS.contains(&name)
+}
+
+/// 危险工具的参数摘要(给前端确认条展示,纯函数):
+/// open_item → 目标路径(模型可能诱导打开任意 exe,用户须看清路径再决定)。
+pub fn danger_summary(name: &str, action: &ToolAction) -> String {
+    match action {
+        ToolAction::Open { path } => path.clone(),
+        _ => name.to_string(), // 兜底:未扩展摘要分支的危险工具回退显示工具名
+    }
+}
+
+/// 危险工具确认请求(run_tool_loop 构造,命令层据此 emit 事件并等待用户决策)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DangerRequest {
+    /// 模型侧 tool_call_id(仅信息,回填排查用;确认键用命令层自生成的 confirm_id)
+    pub tool_call_id: String,
+    /// 工具名(如 open_item)
+    pub tool: String,
+    /// 参数摘要(如目标路径)
+    pub summary: String,
+}
+
 /// 纯路由:工具名 + 已解析参数 → 执行意图。
 /// 校验规则:path/dirs 必须绝对路径;缺必填 → Err;类型错误 → Err;未知工具名 → Err。
 /// (dirs 的越权白名单校验在 file_search::ai_search_files 内完成,本函数只做结构与必填校验。)
@@ -666,5 +698,39 @@ mod tests {
             .collect();
         assert!(names.contains(&"set_dynamic_wallpaper"));
         assert!(names.contains(&"stop_dynamic_wallpaper"));
+    }
+
+    // ---------- H3 安全加固:危险工具集合与摘要 ----------
+
+    #[test]
+    fn dangerous_tools_contains_only_open_item() {
+        assert!(is_dangerous_tool("open_item"));
+        // 其余白名单工具均非危险(执行前不需确认)
+        assert!(!is_dangerous_tool("search_apps"));
+        assert!(!is_dangerous_tool("search_files"));
+        assert!(!is_dangerous_tool("set_wallpaper"));
+        assert!(!is_dangerous_tool("get_system_status"));
+        assert!(!is_dangerous_tool("get_clipboard_history"));
+        assert!(!is_dangerous_tool("set_dynamic_wallpaper"));
+        assert!(!is_dangerous_tool("stop_dynamic_wallpaper"));
+        assert!(!is_dangerous_tool("exec_shell"), "未知工具名一律非危险(route 已拦)");
+        // 与工具清单同步:危险集合内每个名字必须真实存在于白名单
+        for name in DANGEROUS_TOOLS {
+            assert!(
+                ALL_TOOLS.iter().any(|t| t.name == *name),
+                "危险工具 {name} 必须同时存在于 ALL_TOOLS 白名单"
+            );
+        }
+    }
+
+    #[test]
+    fn danger_summary_returns_path_for_open_item() {
+        let action = ToolAction::Open { path: r"C:\Windows\System32\cmd.exe".into() };
+        assert_eq!(danger_summary("open_item", &action), r"C:\Windows\System32\cmd.exe");
+        // 非 open 类兜底回工具名(将来扩展危险工具时记得补摘要分支)
+        assert_eq!(
+            danger_summary("get_system_status", &ToolAction::GetSystemStatus),
+            "get_system_status"
+        );
     }
 }

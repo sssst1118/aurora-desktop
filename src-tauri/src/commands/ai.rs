@@ -13,12 +13,22 @@
 //! 回填 role:"tool"(OpenAI 回填格式含 tool_call_id)→ 再请求;超限终止并追加提示。
 //! 循环与工具执行均经 trait/闭包注入,假 client 可单测(§2.6 循环上限)。
 //!
+//! H3 安全加固(2026-08-13):
+//!   - 危险工具(open_item,见 tools::DANGEROUS_TOOLS)执行前经 confirm 闭包询问用户:
+//!     emit ai-tool-confirm → await ai_confirm_tool 回传(≤60s 超时视为拒绝);
+//!     拒绝/超时 → 跳过该工具,回填"用户已拒绝执行 xxx"继续下一轮;
+//!   - 剪贴板历史工具仅本地 Ollama 模式可用;云端(DeepSeek)模式直接回隐私提示,
+//!     剪贴板内容绝不进入发往云端的下一轮 prompt。
+//!
 //! 配置:每次请求从磁盘读(不缓存,运行中改配置下次请求生效);密钥只从配置读,
 //! 命令入参不含 key(铁律 §0.4);deepseek 模式 key 缺失在发请求前快速报错。
 //! 日志/错误信息不含密钥(仅 base_url + 状态码,见 ai/client.rs)。
 
 use crate::ai::client::{classify_error, AiErrorKind};
-use crate::ai::tools::{parse_tool_calls, route, rule_match, tools_json, ToolAction};
+use crate::ai::tools::{
+    danger_summary, is_dangerous_tool, parse_tool_calls, route, rule_match, tools_json,
+    DangerRequest, ToolAction,
+};
 use crate::commands::config::AppConfig;
 use crate::indexer::app_index::AppEntry;
 use serde::{Deserialize, Serialize};
@@ -155,9 +165,34 @@ impl ChatClient for RealClient<'_> {
 /// 要求 Send + Sync(流任务在 spawn 线程跨 await 持有 &dyn Fn)。
 type ToolExecutor<'a> = &'a (dyn Fn(ToolAction) -> BoxFuture<'static, Result<(String, String), String>> + Send + Sync);
 
+/// 危险工具确认器:H3 安全加固,危险工具执行前询问用户(返回 true 才执行)。
+/// 命令层实现 = emit ai-tool-confirm + await ai_confirm_tool(≤60s,超时/拒绝均返回 false)。
+/// 要求 Send + Sync(同 ToolExecutor)。
+type ToolConfirmer<'a> = &'a (dyn Fn(DangerRequest) -> BoxFuture<'static, bool> + Send + Sync);
+
+/// 是否本地服务商(纯函数,H3 安全加固):剪贴板历史等隐私工具仅本地可用,云端一律禁用。
+/// provider 来自 resolve_endpoint(已 trim),此处再 trim + 忽略大小写双重防御。
+fn is_local_provider(provider: &str) -> bool {
+    provider.trim().eq_ignore_ascii_case("ollama")
+}
+
+/// 云端模式剪贴板工具的统一拦截提示(隐私红线:剪贴板内容绝不进云端 prompt)
+const CLOUD_CLIPBOARD_BLOCKED: &str = "云端模式为保护隐私不读取剪贴板历史";
+
+/// 剪贴板历史工具在指定服务商下的拦截决策(纯函数,可单测两种模式):
+/// None = 本地模式,允许读取;Some(hint) = 云端模式,回填隐私提示。
+fn clipboard_block_hint(provider: &str) -> Option<&'static str> {
+    if is_local_provider(provider) {
+        None
+    } else {
+        Some(CLOUD_CLIPBOARD_BLOCKED)
+    }
+}
+
 /// 工具循环(§2.3 骨架):
 ///   每轮带 tools 请求 → parse_tool_calls → 无工具直接返回文本;
-///   有工具 → on_tool 通知(emit 动作条)→ route 路由 → exec_tool 执行 →
+///   有工具 → on_tool 通知(emit 动作条)→ route 路由 → [H3]危险工具经 confirm 确认
+///   (拒绝/超时回填"用户已拒绝执行 xxx",跳过执行)→ exec_tool 执行 →
 ///   结果 JSON 回填 role:"tool"(含 tool_call_id)→ 再请求;
 ///   超限(max_rounds 轮)终止并追加"已停止"提示;
 ///   tools_enabled=false → 不带 tools 参数,纯单轮对话。
@@ -168,6 +203,7 @@ async fn run_tool_loop(
     stream: bool,
     mut msgs: Vec<Value>,
     exec_tool: ToolExecutor<'_>,
+    confirm: ToolConfirmer<'_>,
     on_tool: &mut (dyn FnMut(&str, &str) + Send),
     on_delta: &mut (dyn FnMut(String) + Send),
 ) -> Result<String, AiErrorKind> {
@@ -186,10 +222,32 @@ async fn run_tool_loop(
         for call in calls {
             on_tool(&call.name, &call.arguments.to_string());
             let result = match route(&call.name, &call.arguments) {
-                Ok(action) => match exec_tool(action).await {
-                    Ok((name, msg)) => json!({"ok": true, "action": name, "msg": msg}),
-                    Err(e) => json!({"ok": false, "action": "none", "msg": e}),
-                },
+                Ok(action) => {
+                    // H3 安全加固:危险工具(open_item 等)执行前必须经用户确认;
+                    // 拒绝/超时 → 回填"用户已拒绝执行 xxx"给模型(记入后续上下文),不执行
+                    let approved = if is_dangerous_tool(&call.name) {
+                        confirm(DangerRequest {
+                            tool_call_id: call.id.clone(),
+                            tool: call.name.clone(),
+                            summary: danger_summary(&call.name, &action),
+                        })
+                        .await
+                    } else {
+                        true
+                    };
+                    if !approved {
+                        json!({
+                            "ok": false,
+                            "action": call.name,
+                            "msg": format!("用户已拒绝执行 {}", call.name),
+                        })
+                    } else {
+                        match exec_tool(action).await {
+                            Ok((name, msg)) => json!({"ok": true, "action": name, "msg": msg}),
+                            Err(e) => json!({"ok": false, "action": "none", "msg": e}),
+                        }
+                    }
+                }
                 Err(e) => json!({"ok": false, "action": "none", "msg": e}),
             };
             msgs.push(json!({
@@ -206,8 +264,12 @@ async fn run_tool_loop(
 
 /// 执行分支:对 ToolAction match 真实命令,结果拼回填摘要。
 /// 返回 (工具名, 结果摘要);Err = 工具执行失败(失败隔离:回填 ok:false 给模型,对话继续)。
-/// app 按 owned 传入:执行器闭包需要返回 'static future(owned 才能跨 spawn 线程持有)。
-async fn exec_tool_action(app: AppHandle, action: ToolAction) -> Result<(String, String), String> {
+/// app/provider 按 owned 传入:执行器闭包需要返回 'static future(owned 才能跨 spawn 线程持有)。
+async fn exec_tool_action(
+    app: AppHandle,
+    provider: String,
+    action: ToolAction,
+) -> Result<(String, String), String> {
     use tauri::Manager;
     match action {
         ToolAction::Open { path } => {
@@ -240,6 +302,12 @@ async fn exec_tool_action(app: AppHandle, action: ToolAction) -> Result<(String,
             Ok(("get_system_status".to_string(), fmt_sys_status(&s)))
         }
         ToolAction::GetClipboardHistory => {
+            // H3 安全加固:云端模式(DeepSeek 等)为保护隐私不读剪贴板历史——
+            // 历史(最多 200 条)会随工具结果拼入下一轮 prompt 外发云端,敏感文本外泄;
+            // 云端下直接回隐私提示(不读剪贴板),仅本地 Ollama 模式可用
+            if let Some(hint) = clipboard_block_hint(&provider) {
+                return Ok(("get_clipboard_history".to_string(), hint.to_string()));
+            }
             let items = crate::commands::clipboard::clipboard_get_history(app.clone());
             Ok(("get_clipboard_history".to_string(), fmt_clipboard_summary(&items)))
         }
@@ -379,9 +447,16 @@ pub fn ai_chat_stream(app: AppHandle, messages: Vec<ChatMessage>) -> Result<(), 
             api_key: ep.api_key.as_deref(),
         };
         let app_ref = app.clone();
+        let provider = ep.provider.clone();
         let exec = move |action: ToolAction| {
-            Box::pin(exec_tool_action(app_ref.clone(), action))
+            Box::pin(exec_tool_action(app_ref.clone(), provider.clone(), action))
                 as BoxFuture<'_, Result<(String, String), String>>
+        };
+        // H3 危险工具确认:emit ai-tool-confirm + 等待 ai_confirm_tool(≤60s 超时拒绝)
+        let confirm_app = app.clone();
+        let confirm = move |req: DangerRequest| {
+            Box::pin(crate::ai::confirm::request_confirm(confirm_app.clone(), req))
+                as BoxFuture<'_, bool>
         };
         let mut on_tool = |name: &str, args: &str| {
             let args_short: String = args.chars().take(80).collect();
@@ -390,7 +465,7 @@ pub fn ai_chat_stream(app: AppHandle, messages: Vec<ChatMessage>) -> Result<(), 
         let mut on_delta = |delta: String| {
             emit_ai(&app, json!({"kind": "chunk", "delta": delta}));
         };
-        match run_tool_loop(&client, tools_enabled, max_rounds, true, msgs, &exec, &mut on_tool, &mut on_delta).await {
+        match run_tool_loop(&client, tools_enabled, max_rounds, true, msgs, &exec, &confirm, &mut on_tool, &mut on_delta).await {
             Ok(full) => emit_ai(&app, json!({"kind": "done", "full": full})),
             Err(kind) => {
                 let msg = classify_error(&kind, &ep.provider);
@@ -424,9 +499,16 @@ pub async fn ai_chat_completion(
         api_key: ep.api_key.as_deref(),
     };
     let app_ref = app.clone();
+    let provider = ep.provider.clone();
     let exec = move |action: ToolAction| {
-        Box::pin(exec_tool_action(app_ref.clone(), action))
+        Box::pin(exec_tool_action(app_ref.clone(), provider.clone(), action))
             as BoxFuture<'_, Result<(String, String), String>>
+    };
+    // H3 危险工具确认(同 ai_chat_stream;非流式命令同样必须过确认)
+    let confirm_app = app.clone();
+    let confirm = move |req: DangerRequest| {
+        Box::pin(crate::ai::confirm::request_confirm(confirm_app.clone(), req))
+            as BoxFuture<'_, bool>
     };
     let mut noop_tool = |_: &str, _: &str| {};
     let mut noop_delta = |_: String| {};
@@ -437,6 +519,7 @@ pub async fn ai_chat_completion(
         false,
         msgs,
         &exec,
+        &confirm,
         &mut noop_tool,
         &mut noop_delta,
     )
@@ -482,15 +565,36 @@ pub async fn ai_execute_tool(app: AppHandle, instruction: String) -> AiToolResul
                 // 执行第一个工具调用
                 let call = &calls[0];
                 match route(&call.name, &call.arguments) {
-                    Ok(action) => match exec_tool_action(app.clone(), action).await {
-                        Ok((action_name, msg)) => AiToolResult { ok: true, action: action_name, msg },
-                        Err(e) => AiToolResult { ok: false, action: "none".to_string(), msg: e },
-                    },
+                    Ok(action) => {
+                        // H3 安全加固:危险工具同样须经用户确认(与工具循环同一机制)
+                        if is_dangerous_tool(&call.name)
+                            && !crate::ai::confirm::request_confirm(
+                                app.clone(),
+                                DangerRequest {
+                                    tool_call_id: call.id.clone(),
+                                    tool: call.name.clone(),
+                                    summary: danger_summary(&call.name, &action),
+                                },
+                            )
+                            .await
+                        {
+                            return AiToolResult {
+                                ok: false,
+                                action: call.name.clone(),
+                                msg: format!("用户已拒绝执行 {}", call.name),
+                            };
+                        }
+                        match exec_tool_action(app.clone(), ep.provider.clone(), action).await {
+                            Ok((action_name, msg)) => AiToolResult { ok: true, action: action_name, msg },
+                            Err(e) => AiToolResult { ok: false, action: "none".to_string(), msg: e },
+                        }
+                    }
                     Err(e) => AiToolResult { ok: false, action: "none".to_string(), msg: e },
                 }
             } else if let Some(action) = rule_match(&instruction) {
-                // 规则兜底(模型不支持 tools 时保住打开/查找两类指令)
-                match exec_tool_action(app.clone(), action).await {
+                // 规则兜底(模型不支持 tools 时保住打开/查找两类指令;
+                // 兜底动作不含危险工具,无需确认)
+                match exec_tool_action(app.clone(), ep.provider.clone(), action).await {
                     Ok((action_name, msg)) => AiToolResult { ok: true, action: action_name, msg },
                     Err(e) => AiToolResult { ok: false, action: "none".to_string(), msg: e },
                 }
@@ -504,6 +608,23 @@ pub async fn ai_execute_tool(app: AppHandle, instruction: String) -> AiToolResul
             action: "none".to_string(),
             msg: classify_error(&kind, &ep.provider),
         },
+    }
+}
+
+/// 前端回传危险工具确认决策(H3 安全加固;注册名 ai_confirm_tool,待 lib.rs 接线)。
+/// 返回语义:approve=true 且发信成功 → "已确认";approve=false 且发信成功 → "已拒绝";
+/// 条目不存在(60s 超时已清理/从未注册)→ "不存在或已超时"。
+#[tauri::command]
+pub fn ai_confirm_tool(app: AppHandle, confirm_id: String, approve: bool) -> String {
+    let state = crate::ai::confirm::confirm_state(&app);
+    if state.resolve(&confirm_id, approve) {
+        if approve {
+            "已确认".to_string()
+        } else {
+            "已拒绝".to_string()
+        }
+    } else {
+        "不存在或已超时".to_string()
     }
 }
 
@@ -631,17 +752,18 @@ mod tests {
 
     // ---------- 工具循环(§2.6:假 client 注入) ----------
 
-    /// 假 client:按 replies 轮转回复,记录请求数与最近一次 tools 参数
+    /// 假 client:按 replies 轮转回复,记录请求数、最近一次 tools 参数与最近一次消息数组
     struct FakeClient {
         replies: Vec<String>,
         requests: Mutex<usize>,
         last_tools: Mutex<Option<Value>>,
+        last_messages: Mutex<Option<Vec<Value>>>,
     }
 
     impl ChatClient for FakeClient {
         fn chat<'a>(
             &'a self,
-            _messages: Vec<Value>,
+            messages: Vec<Value>,
             tools: Option<Value>,
             _stream: bool,
             _on_delta: &'a mut (dyn FnMut(String) + Send),
@@ -650,6 +772,7 @@ mod tests {
             let i = *n;
             *n += 1;
             *self.last_tools.lock().unwrap() = tools;
+            *self.last_messages.lock().unwrap() = Some(messages);
             let reply = self.replies[i.min(self.replies.len() - 1)].clone();
             Box::pin(async move { Ok(reply) })
         }
@@ -671,11 +794,26 @@ mod tests {
         .to_string()
     }
 
+    /// 假 client 构造器:回复轮转,其余观测字段清零
+    fn fake_client(replies: Vec<String>) -> FakeClient {
+        FakeClient {
+            replies,
+            requests: Mutex::new(0),
+            last_tools: Mutex::new(None),
+            last_messages: Mutex::new(None),
+        }
+    }
+
     /// 假工具执行器:恒成功(绑定为具名变量避免临时值借用;返回类型显式标注供 coerce)
     fn fake_exec() -> impl Fn(ToolAction) -> BoxFuture<'static, Result<(String, String), String>> {
         |_action: ToolAction| -> BoxFuture<'static, Result<(String, String), String>> {
             Box::pin(async { Ok::<(String, String), String>(("fake".to_string(), "已执行".to_string())) })
         }
+    }
+
+    /// 假确认器:恒批准(H3 确认流测试外的既有用例默认放行)
+    fn auto_approve() -> impl Fn(DangerRequest) -> BoxFuture<'static, bool> {
+        |_req: DangerRequest| -> BoxFuture<'static, bool> { Box::pin(async { true }) }
     }
 
     fn block_on<F: Future>(f: F) -> F::Output {
@@ -684,17 +822,14 @@ mod tests {
 
     #[test]
     fn tool_loop_returns_text_without_tool_calls() {
-        let client = FakeClient {
-            replies: vec!["你好,我是助手".to_string()],
-            requests: Mutex::new(0),
-            last_tools: Mutex::new(None),
-        };
+        let client = fake_client(vec!["你好,我是助手".to_string()]);
         let msgs = vec![json!({"role": "user", "content": "hi"})];
         let mut tools_log: Vec<(String, String)> = Vec::new();
         let mut delta_log: Vec<String> = Vec::new();
         let exec = fake_exec();
+        let confirm = auto_approve();
         let r = block_on(run_tool_loop(
-            &client, true, 3, false, msgs, &exec,
+            &client, true, 3, false, msgs, &exec, &confirm,
             &mut |n, a| tools_log.push((n.to_string(), a.to_string())),
             &mut |d| delta_log.push(d),
         ))
@@ -708,16 +843,13 @@ mod tests {
     #[test]
     fn tool_loop_stops_after_max_rounds_with_hint() {
         // 模型每轮都回工具调用 → 3 轮上限后终止并带"已停止"提示(§2.6)
-        let client = FakeClient {
-            replies: vec![tool_reply("get_system_status", "{}")],
-            requests: Mutex::new(0),
-            last_tools: Mutex::new(None),
-        };
+        let client = fake_client(vec![tool_reply("get_system_status", "{}")]);
         let msgs = vec![json!({"role": "user", "content": "查状态"})];
         let mut tools_log: Vec<(String, String)> = Vec::new();
         let exec = fake_exec();
+        let confirm = auto_approve();
         let r = block_on(run_tool_loop(
-            &client, true, 3, false, msgs, &exec,
+            &client, true, 3, false, msgs, &exec, &confirm,
             &mut |n, a| tools_log.push((n.to_string(), a.to_string())),
             &mut |_d| {},
         ))
@@ -729,15 +861,12 @@ mod tests {
 
     #[test]
     fn tool_loop_disabled_tools_skips_loop() {
-        let client = FakeClient {
-            replies: vec!["纯对话回复".to_string()],
-            requests: Mutex::new(0),
-            last_tools: Mutex::new(None),
-        };
+        let client = fake_client(vec!["纯对话回复".to_string()]);
         let msgs = vec![json!({"role": "user", "content": "hi"})];
         let exec = fake_exec();
+        let confirm = auto_approve();
         let r = block_on(run_tool_loop(
-            &client, false, 3, false, msgs, &exec,
+            &client, false, 3, false, msgs, &exec, &confirm,
             &mut |_, _| panic!("tools 关闭不应触发工具"),
             &mut |_| {},
         ))
@@ -750,17 +879,17 @@ mod tests {
     #[test]
     fn tool_loop_exec_failure_isolation_feeds_back_false() {
         // 工具执行失败 → 失败隔离:回填 ok:false 继续下一轮,不中断对话
-        let client = FakeClient {
-            replies: vec![tool_reply("open_item", r#"{"path":"C:\\x"}"#), "工具执行失败但对话继续".to_string()],
-            requests: Mutex::new(0),
-            last_tools: Mutex::new(None),
-        };
+        let client = fake_client(vec![
+            tool_reply("open_item", r#"{"path":"C:\\x"}"#),
+            "工具执行失败但对话继续".to_string(),
+        ]);
         let exec = |_action: ToolAction| -> BoxFuture<'static, Result<(String, String), String>> {
             Box::pin(async { Err::<(String, String), String>("打开失败".to_string()) })
         };
+        let confirm = auto_approve();
         let msgs = vec![json!({"role": "user", "content": "打开 x"})];
         let r = block_on(run_tool_loop(
-            &client, true, 3, false, msgs, &exec,
+            &client, true, 3, false, msgs, &exec, &confirm,
             &mut |_, _| {},
             &mut |_| {},
         ))
@@ -778,5 +907,163 @@ mod tests {
             serde_json::to_string(&r).unwrap(),
             r#"{"ok":true,"action":"open_item","msg":"已打开 记事本"}"#
         );
+    }
+
+    // ---------- H3 安全加固:危险工具确认流 ----------
+
+    /// 记录调用次数的执行器(H3 确认流断言"拒绝则绝不执行")
+    fn counting_exec(
+        calls: &std::sync::Mutex<Vec<ToolAction>>,
+    ) -> impl Fn(ToolAction) -> BoxFuture<'static, Result<(String, String), String>> + '_ {
+        |action: ToolAction| -> BoxFuture<'static, Result<(String, String), String>> {
+            calls.lock().unwrap().push(action);
+            Box::pin(async { Ok::<(String, String), String>(("fake".to_string(), "已执行".to_string())) })
+        }
+    }
+
+    /// 恒拒绝的确认器(等价前端取消 / 60s 超时)
+    fn deny_all() -> impl Fn(DangerRequest) -> BoxFuture<'static, bool> {
+        |_req: DangerRequest| -> BoxFuture<'static, bool> { Box::pin(async { false }) }
+    }
+
+    #[test]
+    fn tool_loop_dangerous_tool_rejected_skips_execution() {
+        // open_item 属危险工具:确认返回 false → 不执行,回填"用户已拒绝执行 open_item"
+        // 记入下一轮上下文(模型可解释/换招),对话继续
+        let client = fake_client(vec![
+            tool_reply("open_item", r#"{"path":"C:\\Windows\\System32\\cmd.exe"}"#),
+            "已拒绝,对话继续".to_string(),
+        ]);
+        let calls = std::sync::Mutex::new(Vec::new());
+        let exec = counting_exec(&calls);
+        let confirm = deny_all();
+        let msgs = vec![json!({"role": "user", "content": "打开 cmd"})];
+        let r = block_on(run_tool_loop(
+            &client, true, 3, false, msgs, &exec, &confirm,
+            &mut |_, _| {},
+            &mut |_| {},
+        ))
+        .unwrap();
+        assert_eq!(r, "已拒绝,对话继续", "拒绝后仍进入下一轮对话");
+        assert!(calls.lock().unwrap().is_empty(), "被拒的危险工具绝不能执行");
+        // 拒绝提示已作为 tool 结果记入下一轮请求上下文
+        let last = client.last_messages.lock().unwrap().clone().unwrap();
+        let tool_msg = last.iter().find(|m| m["role"] == "tool").expect("应有 tool 回填");
+        let content = tool_msg["content"].as_str().unwrap();
+        assert!(content.contains("用户已拒绝执行 open_item"), "实际: {content}");
+        assert!(content.contains("ok"), "回填结果应带 ok 字段");
+    }
+
+    #[test]
+    fn tool_loop_dangerous_tool_approved_executes() {
+        // 确认返回 true → 正常执行;确认器收到的请求应带正确工具名与摘要
+        let client = fake_client(vec![
+            tool_reply("open_item", r#"{"path":"C:\\Windows\\System32\\notepad.exe"}"#),
+            "已完成".to_string(),
+        ]);
+        let calls = std::sync::Mutex::new(Vec::new());
+        let exec = counting_exec(&calls);
+        let seen = std::sync::Mutex::new(Vec::new());
+        // 注意不加 move:按引用捕获 seen(闭包仍为 Fn),循环结束后还能断言
+        let confirm = |req: DangerRequest| -> BoxFuture<'static, bool> {
+            seen.lock().unwrap().push((req.tool.clone(), req.summary.clone()));
+            Box::pin(async { true })
+        };
+        let msgs = vec![json!({"role": "user", "content": "打开记事本"})];
+        let r = block_on(run_tool_loop(
+            &client, true, 3, false, msgs, &exec, &confirm,
+            &mut |_, _| {},
+            &mut |_| {},
+        ))
+        .unwrap();
+        assert_eq!(r, "已完成");
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "批准后执行一次"
+        );
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "危险工具确认器只被询问一次");
+        assert_eq!(seen[0].0, "open_item");
+        assert_eq!(seen[0].1, r"C:\Windows\System32\notepad.exe", "摘要应为目标路径");
+    }
+
+    #[test]
+    fn tool_loop_non_dangerous_tool_skips_confirm() {
+        // 非危险工具(get_system_status)不应触发确认器(触发即 panic)
+        let client = fake_client(vec![tool_reply("get_system_status", "{}"), "状态已返回".to_string()]);
+        let exec = fake_exec();
+        let confirm = |_req: DangerRequest| -> BoxFuture<'static, bool> {
+            Box::pin(async { panic!("非危险工具不应触发确认") })
+        };
+        let msgs = vec![json!({"role": "user", "content": "查状态"})];
+        let r = block_on(run_tool_loop(
+            &client, true, 3, false, msgs, &exec, &confirm,
+            &mut |_, _| {},
+            &mut |_| {},
+        ))
+        .unwrap();
+        assert_eq!(r, "状态已返回");
+    }
+
+    #[test]
+    fn tool_loop_dangerous_tool_rejected_within_multiple_calls() {
+        // 一轮内多个工具调用:危险工具被拒只跳过自身,其余照常执行
+        let client = fake_client(vec![
+            // open_item(拒) + get_system_status(放行)
+            json!({
+                "choices": [{
+                    "message": {
+                        "content": null,
+                        "tool_calls": [
+                            {"id": "c1", "type": "function", "function": {"name": "open_item", "arguments": "{\"path\":\"C:\\\\a.exe\"}"}},
+                            {"id": "c2", "type": "function", "function": {"name": "get_system_status", "arguments": "{}"}}
+                        ]
+                    }
+                }]
+            })
+            .to_string(),
+            "第二轮".to_string(),
+        ]);
+        let calls = std::sync::Mutex::new(Vec::new());
+        let exec = counting_exec(&calls);
+        // 只拒 open_item
+        let confirm = |req: DangerRequest| -> BoxFuture<'static, bool> {
+            Box::pin(async move { req.tool != "open_item" })
+        };
+        let msgs = vec![json!({"role": "user", "content": "hi"})];
+        let r = block_on(run_tool_loop(
+            &client, true, 3, false, msgs, &exec, &confirm,
+            &mut |_, _| {},
+            &mut |_| {},
+        ))
+        .unwrap();
+        assert_eq!(r, "第二轮");
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "只执行了未被拒的工具");
+        assert!(matches!(&calls[0], ToolAction::GetSystemStatus));
+    }
+
+    // ---------- H3 安全加固:剪贴板云端禁用(两种模式) ----------
+
+    #[test]
+    fn is_local_provider_recognizes_ollama_only() {
+        assert!(is_local_provider("ollama"));
+        assert!(is_local_provider("  ollama  "), "容忍首尾空白");
+        assert!(is_local_provider("OLLAMA"), "忽略大小写");
+        assert!(!is_local_provider("deepseek"));
+        assert!(!is_local_provider("openai"));
+        assert!(!is_local_provider(""));
+    }
+
+    #[test]
+    fn clipboard_blocked_in_cloud_allowed_local() {
+        // 云端模式(DeepSeek 等)→ 拦截并回隐私提示,剪贴板内容不进下一轮 prompt
+        assert_eq!(clipboard_block_hint("deepseek"), Some("云端模式为保护隐私不读取剪贴板历史"));
+        assert_eq!(clipboard_block_hint("openai"), Some("云端模式为保护隐私不读取剪贴板历史"));
+        assert_eq!(clipboard_block_hint(""), Some("云端模式为保护隐私不读取剪贴板历史"), "未知/空服务商按云端处理(默认拒绝)");
+        // 本地模式(Ollama)→ 放行
+        assert_eq!(clipboard_block_hint("ollama"), None);
+        assert_eq!(clipboard_block_hint("  Ollama "), None);
     }
 }

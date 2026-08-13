@@ -19,6 +19,7 @@ pub fn run() {
         // 2.3 剪贴板历史:事件驱动监听/读写插件(模块完成后由 commands/clipboard.rs 使用)
         .plugin(tauri_plugin_clipboard::init())
         .manage(Mutex::new(crate::indexer::build_index()))
+        .manage(crate::ai::confirm::ToolConfirmState::default())
         .setup(|app| {
             let handle = app.handle().clone();
             crate::tray::setup_tray(&handle)?;
@@ -176,8 +177,11 @@ pub fn run() {
             commands::ai::ai_chat_stream,
             commands::ai::ai_chat_completion,
             commands::ai::ai_execute_tool,
+            commands::ai::ai_confirm_tool,
             // ---- Phase3 3.3 自然语言文件搜索(前端/AI 工具双入口) ----
             commands::file_search::ai_search_files,
+            // ---- 自主迭代:H3 危险工具确认 + 搜索框直接搜文件 ----
+            commands::file_search::search_files,
             // ---- Phase4 4.2 键鼠模拟自动化(SendInput;入口校验在命令内)----
             commands::automation::automation_sim_click,
             commands::automation::automation_sim_move,

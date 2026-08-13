@@ -38,6 +38,7 @@ futures-util = "0.3"
 # 5.1 自动更新:下载产物 SHA-256 校验(自研 updater,不引需签名的官方插件)
 sha2 = "0.10"
 # SSE idle 超时(30s 无增量视为断线)用 tokio::time::timeout;tauri 依赖树已含 tokio,这里显式声明以免 3.1 模块编译报未声明依赖
-tokio = { version = "1", features = ["time"] }
+# H3 安全加固:危险工具确认等待用 tokio::sync::oneshot(需 sync feature)
+tokio = { version = "1", features = ["time", "sync"] }
 image = "0.25.10"
 base64 = "0.23.1"

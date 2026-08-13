@@ -9,6 +9,11 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
  * 流式走单事件 `ai-event`(契约 §0.3):chunk 增量追加 / tool 记录工具动作 /
  * done 完整回复落地 / error 置错误条。
  *
+ * H3 安全加固(2026-08-13):危险工具(open_item)执行前,后端 emit `ai-tool-confirm`
+ * 并 await ≤60s;本模块订阅该事件、用 Set 按 id 管理待确认项(实际同一时刻最多
+ * 一个),AIPanel 在输入区上方渲染确认条,点击后 invoke ai_confirm_tool 回传。
+ * 确认状态为模块级单例:面板卸载重挂不丢待确认项,后端 60s 超时兜底。
+ *
  * 契约说明:ai_tools_enabled 开关由后端决定是否带 tools 参数(每请求读配置),
  * 前端只按配置/事件决定是否展示工具动作 chip,不注入任何 tools 数据。
  */
@@ -39,7 +44,47 @@ export interface AiEvent {
 /** 发往后端消息数组上限(§1.4 会话管理;后端 truncate_messages 兜底) */
 const MAX_MESSAGES = 40;
 
+// ==================== H3 危险工具确认(模块级单例) ====================
+
+/** ai-tool-confirm payload(后端契约:confirm.rs ConfirmPayload;字段勿单方面改) */
+export interface ToolConfirmEvent {
+  /** 确认 id(回传 ai_confirm_tool 的 confirmId 参数) */
+  id: string;
+  /** 模型侧 tool_call_id(仅信息,当前未展示) */
+  tool_call_id: string;
+  /** 工具名(如 open_item) */
+  tool: string;
+  /** 参数摘要(如目标路径) */
+  summary: string;
+}
+
+/** 确认条数据(由 ai-tool-confirm 事件产生;与 Set 同步增删) */
+export interface ConfirmReq {
+  id: string;
+  tool: string;
+  summary: string;
+}
+
+/** 待确认 id 集合(Set 管理,去重/幂等:事件重复到达只保留一条) */
+const pendingConfirmIds = new Set<string>();
+/** 确认条列表(响应式,驱动 AIPanel 确认条 UI;Set 为去重源,列表为渲染源) */
+const confirmReqs = ref<ConfirmReq[]>([]);
+let confirmSetup = false;
+
+/** 订阅 ai-tool-confirm(幂等,模块级单例;面板重挂不丢待确认项,监听常驻不注销) */
+function setupConfirmListener() {
+  if (confirmSetup) return;
+  confirmSetup = true;
+  void listen<ToolConfirmEvent>("ai-tool-confirm", (e) => {
+    const p = e.payload;
+    if (pendingConfirmIds.has(p.id)) return; // 重复事件去重
+    pendingConfirmIds.add(p.id);
+    confirmReqs.value.push({ id: p.id, tool: p.tool, summary: p.summary });
+  });
+}
+
 export function useAiChat() {
+  setupConfirmListener();
   const messages = ref<UiMessage[]>([]);
   const streaming = ref(false);
   const error = ref<string | null>(null);
@@ -147,7 +192,25 @@ export function useAiChat() {
     error.value = null;
   }
 
-  return { messages, streaming, error, send, stop, clear };
+  /** 回传危险工具确认决策(H3):先移确认条再 invoke;
+   * 后端返回"不存在或已超时"(60s 已过)时静默,后端已按拒绝处理 */
+  async function confirmTool(id: string, approve: boolean) {
+    if (!pendingConfirmIds.has(id)) return;
+    const i = confirmReqs.value.findIndex((r) => r.id === id);
+    if (i >= 0) confirmReqs.value.splice(i, 1);
+    pendingConfirmIds.delete(id);
+    try {
+      const res = await invoke<string>("ai_confirm_tool", { confirmId: id, approve });
+      if (res !== "已确认" && res !== "已拒绝") {
+        // "不存在或已超时":后端已按超时拒绝,确认条已移除,无需再提示
+        console.warn(`[ai] 确认回传 ${id} 未生效: ${res}`);
+      }
+    } catch (e) {
+      console.error("ai_confirm_tool failed", e);
+    }
+  }
+
+  return { messages, streaming, error, send, stop, clear, confirmReqs, confirmTool };
 }
 
 /** 工具名 → 动作条中文动词(§2.4 展示层自定义,不进事件契约) */
@@ -160,6 +223,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_clipboard_history: "查看剪贴板",
 };
 
-function toolLabel(tool: string): string {
+/** 工具名 → 中文动词(确认条"AI 请求打开:xx"复用同一映射;导出供 AIPanel 使用) */
+export function toolLabel(tool: string): string {
   return TOOL_LABELS[tool] ?? tool;
 }

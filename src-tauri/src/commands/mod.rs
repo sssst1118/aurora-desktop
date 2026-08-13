@@ -1,4 +1,4 @@
-pub mod ai;
+pub mod ai; // 含 H3 新命令 ai_confirm_tool(危险工具确认回传;注册名 ai_confirm_tool,待 lib.rs invoke_handler 接线)
 pub mod automation;
 pub mod classify;
 pub mod clipboard;

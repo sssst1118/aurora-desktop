@@ -6,6 +6,9 @@
  *   流式期间光标 `▋`;工具动作 chip(如"🔧 正在打开 记事本");
  * - 输入框:Enter 发送 / Shift+Enter 换行;streaming 时回车改为停止;
  * - 错误条:error 事件红色提示,可关闭;
+ * - H3 安全加固:危险工具(open_item)执行前,输入区上方弹确认条
+ *   「AI 请求打开:<路径>」+ 执行/取消,点击 invoke ai_confirm_tool 回传后端;
+ *   等待确认期间消息区显示轻提示"等待确认操作…";
  * - 样式:深色卡片风(bg-gray-950/95 + 边框),不透明窗口,与 Phase2 面板视觉一致。
  * 挂载:App.vue 的 ai_panel 分支(集成 agent 接线),本文件只写组件。
  */
@@ -13,9 +16,9 @@ import { ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { writeText } from "tauri-plugin-clipboard-api";
-import { useAiChat } from "../../composables/useAiChat";
+import { useAiChat, toolLabel } from "../../composables/useAiChat";
 
-const { messages, streaming, error, send, stop, clear } = useAiChat();
+const { messages, streaming, error, send, stop, clear, confirmReqs, confirmTool } = useAiChat();
 
 const input = ref("");
 const inputEl = ref<HTMLTextAreaElement | null>(null);
@@ -249,6 +252,39 @@ function splitBlocks(text: string): Block[] {
           </button>
         </div>
       </template>
+
+      <!-- H3 等待确认期间轻提示(确认条弹出后到用户决策前;列表尾部跟随滚动) -->
+      <div v-if="confirmReqs.length > 0" class="flex justify-center pt-1">
+        <div class="px-2.5 py-1 rounded-full ai-confirm-hint text-[11px]">
+          等待确认操作…
+        </div>
+      </div>
+    </div>
+
+    <!-- H3 危险工具确认条:输入区上方;后端 await 最多 60s,期间不执行;
+         执行/取消回传 ai_confirm_tool,确认条随即移除 -->
+    <div
+      v-for="req in confirmReqs"
+      :key="req.id"
+      class="mx-3 mb-2 px-3 py-2 rounded-lg ai-confirm flex items-center gap-2 shrink-0"
+    >
+      <span class="text-xs flex-1 truncate" :title="req.summary">
+        AI 请求{{ toolLabel(req.tool) }}:<span class="font-medium">{{ req.summary }}</span>
+      </span>
+      <button
+        class="ai-confirm-ok text-xs px-2.5 py-1 rounded-md shrink-0"
+        title="批准执行该操作"
+        @click="confirmTool(req.id, true)"
+      >
+        执行
+      </button>
+      <button
+        class="ai-confirm-cancel text-xs px-2.5 py-1 rounded-md shrink-0"
+        title="拒绝执行该操作"
+        @click="confirmTool(req.id, false)"
+      >
+        取消
+      </button>
     </div>
 
     <!-- 输入区 -->
@@ -301,5 +337,46 @@ function splitBlocks(text: string): Block[] {
 }
 .ai-btn-stop:hover {
   background: color-mix(in srgb, var(--aurora-danger) 80%, transparent);
+}
+/* H3 危险工具确认条:warn 色系(与工具 chip 同源,表"待决策");
+ * 透明底/边框一律 color-mix(Tailwind 3.4 对 var() 任意值 + /opacity 不生成样式) */
+.ai-confirm {
+  background: color-mix(in srgb, var(--aurora-warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aurora-warn) 35%, transparent);
+}
+.ai-confirm .font-medium {
+  color: var(--aurora-warn);
+}
+/* 执行按钮:与发送按钮同强调色(文字色继承面板文本,与发送按钮一致);
+ * 取消按钮:幽灵样式,悬停回默认文本色 */
+.ai-confirm-ok {
+  background: var(--aurora-accent);
+}
+.ai-confirm-ok:hover {
+  filter: brightness(1.12);
+}
+.ai-confirm-cancel {
+  background: color-mix(in srgb, var(--aurora-text-dim) 12%, transparent);
+  color: var(--aurora-text-dim);
+  border: 1px solid color-mix(in srgb, var(--aurora-text-dim) 25%, transparent);
+}
+.ai-confirm-cancel:hover {
+  color: var(--aurora-text);
+}
+/* 等待确认轻提示:与 chip 同 warn 系 */
+.ai-confirm-hint {
+  background: color-mix(in srgb, var(--aurora-warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aurora-warn) 30%, transparent);
+  color: var(--aurora-warn);
+  animation: aurora-pulse-soft 1.6s ease-in-out infinite;
+}
+@keyframes aurora-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 </style>
