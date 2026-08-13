@@ -307,8 +307,11 @@ fn detach_if_attached(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 从 WorkerW 撤下并隐藏壁纸窗口
+/// 从 WorkerW 撤下并隐藏壁纸窗口。
+/// M10 并发修复:单屏 "wallpaper" 窗口即主屏,与 multi_apply 的 wallpaper_0 是
+/// 同一窗口——set/clear 与探针线程并发时会对同 hwnd 并发 SetParent,注入锁串行
 fn detach(app: &AppHandle) -> Result<(), String> {
+    let _guard = wallpaper_dynamic::inject_lock().lock().unwrap_or_else(|p| p.into_inner());
     let Some(win) = app.get_webview_window("wallpaper") else {
         return Err("壁纸窗口不存在".to_string());
     };
@@ -321,8 +324,10 @@ fn detach(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 把壁纸窗口注入 WorkerW:先按主屏尺寸 set_size + show + 关置顶,再 SetParent(设计 §1.3)
+/// 把壁纸窗口注入 WorkerW:先按主屏尺寸 set_size + show + 关置顶,再 SetParent(设计 §1.3)。
+/// M10 并发修复:注入段持锁(与 multi_apply / 探针线程互斥;素材读取不在此处,无 IO 放大)
 fn attach(app: &AppHandle, _st: &WallpaperState) -> Result<(), String> {
+    let _guard = wallpaper_dynamic::inject_lock().lock().unwrap_or_else(|p| p.into_inner());
     let Some(win) = app.get_webview_window("wallpaper") else {
         return Err("壁纸窗口不存在".to_string());
     };

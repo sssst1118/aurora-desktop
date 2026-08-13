@@ -55,7 +55,7 @@ pub fn build_index() -> AppIndex {
 /// 可注入目录的主逻辑(便于单测)。目录 mtime 与上次一致时复用缓存结果。
 pub fn build_index_from(dirs: &[PathBuf]) -> AppIndex {
     let cache = INDEX_CACHE.get_or_init(|| Mutex::new(CacheState::default()));
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock().unwrap_or_else(|p| p.into_inner());
     let changed = dirs.iter().any(|d| match dir_mtime(d) {
         Some(t) => guard.mt.get(d).copied() != Some(t),
         None => true,
@@ -88,7 +88,7 @@ pub fn build_index_from(dirs: &[PathBuf]) -> AppIndex {
 pub fn refresh_if_stale() -> Option<Vec<app_index::AppEntry>> {
     let stale = {
         let cache = INDEX_CACHE.get_or_init(|| Mutex::new(CacheState::default()));
-        cache.lock().unwrap().built_at.elapsed() >= RESCAN_INTERVAL
+        cache.lock().unwrap_or_else(|p| p.into_inner()).built_at.elapsed() >= RESCAN_INTERVAL
     };
     if stale {
         Some(build_index_from(&default_start_menu_dirs()).entries)

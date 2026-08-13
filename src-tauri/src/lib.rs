@@ -168,6 +168,7 @@ pub fn run() {
             commands::clipboard::clipboard_get_history,
             commands::clipboard::clipboard_clear_history,
             commands::clipboard::clipboard_copy_back,
+            commands::clipboard::clipboard_delete_item,
             // ---- Phase2 2.4 壁纸(函数名带 _cmd 后缀,tauri::command(rename) 保持外部命令名) ----
             commands::wallpaper::wallpaper_set_static_cmd,
             commands::wallpaper::wallpaper_list_local_cmd,

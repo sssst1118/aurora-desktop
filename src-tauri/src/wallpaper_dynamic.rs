@@ -53,6 +53,25 @@ const MAX_DYNAMIC_LIST: usize = 100;
 /// 目录外素材走 data URL 的体积上限(50MB,与视频壁纸素材量级匹配)
 const MAX_DATA_URL_BYTES: u64 = 50 * 1024 * 1024;
 
+/// 注入互斥锁(并发修复 2026-08-13,M10)。
+///
+/// 竞态场景:`apply_monitor` / `multi_apply` / set 命令的注入路径与 lib.rs 的
+/// 多屏热插拔探针线程(每 2s 检查布局签名,变化即调 `multi_apply`)三者并发执行。
+/// 每条注入路径都是"先查窗口是否存在、不存在则创建",检查与创建之间是竞态窗口:
+/// 两个线程可能同时创建同一 label 的窗口(tauri 窗口创建非原子,后建者报错或
+/// 出现双窗口),或对同一 hwnd 并发 SetParent / SetWindowPos(父子关系与几何错乱)。
+/// 本锁把"查窗口 → 创建/复用 → 注入"串行为一个原子整体。
+///
+/// 锁粒度约定:只锁注入/重建段,不锁素材读取(scan / resolve_material_url 等 IO
+/// 一律在锁外);`attach_to_workerw[_at]` / `detach_from_workerw` 是原始 Win32
+/// 封装,自身不取锁,调用方必须已持有本锁。
+static INJECT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// 获取进程内全局注入锁(探针线程与命令线程共用,天然跨线程互斥)
+pub fn inject_lock() -> &'static Mutex<()> {
+    INJECT_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 // ---------------------------------------------------------------------------
 // 素材目录与列表
 // ---------------------------------------------------------------------------
@@ -254,7 +273,9 @@ pub fn find_workerw(progman: HWND) -> Option<HWND> {
 }
 
 /// 把 webview 窗口注入 WorkerW 壁纸层并铺满主屏(仅主屏,Phase4 不做多屏)。
-/// 注入失败返回错误,窗口保持原样(不残留半注入状态)
+/// 注入失败返回错误,窗口保持原样(不残留半注入状态)。
+/// ⚠️ 调用方必须已持有 [inject_lock](M10 并发修复):SetParent 是全局桌面状态,
+/// 与探针线程/多屏重建并发时父子关系会错乱
 pub fn attach_to_workerw(hwnd: HWND, width: i32, height: i32) -> Result<(), String> {
     // 1) 拿桌面窗口 Progman(Windows 桌面宿主,自 Vista 起稳定存在)
     let progman = unsafe { FindWindowW(windows_sys::core::w!("Progman"), std::ptr::null()) };
@@ -285,6 +306,7 @@ pub fn attach_to_workerw(hwnd: HWND, width: i32, height: i32) -> Result<(), Stri
 
 /// 从 WorkerW 撤下:SetParent 回 null(恢复为独立顶层窗口)+ 隐藏。
 /// 不碰系统壁纸——WorkerW 只是"盖在图标后面的一层",撤掉即恢复原壁纸显示(设计 §1.3)
+/// ⚠️ 调用方必须已持有 [inject_lock](M10 并发修复):与注入同锁串行,防并发父子切换
 pub fn detach_from_workerw(hwnd: HWND) {
     unsafe {
         SetParent(hwnd, std::ptr::null_mut());
@@ -357,6 +379,7 @@ pub fn layout_signature(monitors: &[MonitorInfo]) -> String {
 /// 把 webview 窗口注入 WorkerW 并定位到虚拟桌面指定 rect(x/y 为虚拟桌面坐标)。
 /// 与 attach_to_workerw 同三步,仅 SetWindowPos 坐标化(多屏场景每屏窗口各自定位)。
 /// 注入失败返回错误,窗口保持原样
+/// ⚠️ 调用方必须已持有 [inject_lock](M10 并发修复)
 pub fn attach_to_workerw_at(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
     let progman = unsafe { FindWindowW(windows_sys::core::w!("Progman"), std::ptr::null()) };
     if progman.is_null() {
@@ -408,12 +431,20 @@ pub fn clear_monitor_states() {
     }
 }
 
-/// 创建/复用指定屏的壁纸窗口并注入:
+/// 创建/复用指定屏的壁纸窗口并注入(公开入口,自取注入锁):
 /// 窗口不存在 → WebviewWindowBuilder 创建(label = wallpaper_<index>,加载 index.html,
 /// 前端按 window label 分流渲染,与主屏 wallpaper 窗口同配置:无边框/不透明/不置顶/
 /// 不可缩放/skipTaskbar/不抢焦点);
 /// 窗口存在 → 直接 set_size(该屏物理尺寸)+ set_position(虚拟坐标)+ show + attach
 pub fn apply_monitor(app: &tauri::AppHandle, index: u32) -> Result<(), String> {
+    // M10 并发修复:整段注入持锁,防与 multi_apply / 探针线程同 label 双创建、
+    // 同 hwnd 并发 SetParent(竞态场景详见 inject_lock 注释)
+    let _guard = inject_lock().lock().unwrap_or_else(|p| p.into_inner());
+    apply_monitor_locked(app, index)
+}
+
+/// 同上,但要求调用方已持有注入锁(multi_apply 整体持锁时走这里,避免重入死锁)
+fn apply_monitor_locked(app: &tauri::AppHandle, index: u32) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let label = crate::commands::wallpaper_dynamic::monitor_window_label(index);
     let mons = enum_monitors(app);
@@ -445,8 +476,13 @@ pub fn apply_monitor(app: &tauri::AppHandle, index: u32) -> Result<(), String> {
 /// 多屏关 → 撤下并销毁全部副屏窗口(主屏保持现状);
 /// 多屏开 → 有素材的屏逐个注入;主屏无素材 → 撤下主屏注入(系统壁纸可见)
 pub fn multi_apply(app: &tauri::AppHandle) -> Result<(), String> {
+    // M10 并发修复:配置与显示器枚举是只读操作留在锁外;撤下/销毁/注入整段持锁。
+    // 本函数是探针线程(2s 轮询)与 set/clear/热生效命令的共同入口,锁把
+    // "查窗口→创建/复用→SetParent"串行为原子整体;内部改走 apply_monitor_locked
+    // (重入会死锁,见 inject_lock 注释)。
     let cfg = crate::commands::config::load_from(&crate::commands::config::config_path(app));
     let mons = enum_monitors(app);
+    let _guard = inject_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut errors: Vec<String> = Vec::new();
     if !cfg.wallpaper_multi_monitor {
         for m in mons.iter().filter(|m| m.index > 0) {
@@ -465,7 +501,7 @@ pub fn multi_apply(app: &tauri::AppHandle) -> Result<(), String> {
         let st = states.get(m.index as usize).and_then(|s| s.clone());
         match st {
             Some(st) if st.kind == "video" || st.kind == "html" => {
-                if let Err(e) = apply_monitor(app, m.index) {
+                if let Err(e) = apply_monitor_locked(app, m.index) {
                     errors.push(format!("屏 {} 注入失败: {e}", m.index));
                 }
             }

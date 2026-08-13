@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
 use super::config::{config_path, load_from};
@@ -76,6 +77,18 @@ impl History {
         }
         true
     }
+
+    /// 删除指定索引条目(纯函数,便于单测);越界返回错误,成功后返回删除后的条数。
+    /// 删掉的恰是最近一条(索引 0)时,去重基准退到新的头部——保证"删掉最近一条后
+    /// 立刻再复制同内容"不会被误去重;删空时基准归零。
+    fn remove(&mut self, index: usize) -> Result<usize, String> {
+        if index >= self.items.len() {
+            return Err(format!("剪贴板历史索引 {index} 越界"));
+        }
+        self.items.remove(index);
+        self.last_hash = self.items.first().map(|i| content_hash(&i.payload)).unwrap_or(0);
+        Ok(self.items.len())
+    }
 }
 
 /// 内容哈希(去重用;进程内与最近一条比较即可,无需密码学哈希)
@@ -96,6 +109,140 @@ fn now_secs() -> u64 {
 fn history() -> &'static Mutex<History> {
     static HISTORY: OnceLock<Mutex<History>> = OnceLock::new();
     HISTORY.get_or_init(|| Mutex::new(History::default()))
+}
+
+// ---------------------------------------------------------------------------
+// 落盘节流(并发修复 2026-08-13):
+// 原实现每次剪贴板更新都在监听回调线程里同步全量重写 JSON(200 条×64KB≈12.8MB),
+// 高频复制时 IO 随复制频率线性放大,还阻塞复制回调。改为:监听线程只置脏
+// (seq 自增,窗口内的多次变更自动合并),实际落盘由"距上次写已超窗 → 当前线程
+// 立即写"或"窗内 → 独立 flush 线程睡满窗口后写"承担。
+// 取舍:窗口(2s)内的增量在进程被强杀时可能不落盘;正常退出由 teardown 收尾补写。
+// 序号方案(seq/saved_seq)代替 bool 脏标记:并发写盘与置脏不会互相踩掉脏位
+// (bool 会漏写"写盘期间到达的新变更"),seq 单调追赶保证最终一致。
+// ---------------------------------------------------------------------------
+
+/// 落盘合并窗口:距上次成功落盘 2s 内的新变更只置脏,合并到下一次落盘
+const FLUSH_WINDOW: Duration = Duration::from_secs(2);
+
+/// 落盘节流状态(进程级单例;与 history 锁分工:history 锁管数据,本锁管落盘调度)
+struct PersistState {
+    /// 最新一次入队变更的序号(每次入队 +1);与 saved_seq 不等即"有脏数据待落盘"
+    seq: u64,
+    /// 已成功落盘覆盖到的序号(单调追赶 seq)
+    saved_seq: u64,
+    /// 是否有 flush 线程在跑(睡窗合并或写盘途中);有则新变更只置脏不另起线程
+    flusher_pending: bool,
+    /// 最近一次成功落盘时刻(节流决策基准)
+    last_flush: Option<Instant>,
+}
+
+fn persist() -> &'static Mutex<PersistState> {
+    static PERSIST: OnceLock<Mutex<PersistState>> = OnceLock::new();
+    PERSIST.get_or_init(|| {
+        Mutex::new(PersistState {
+            seq: 0,
+            saved_seq: 0,
+            flusher_pending: false,
+            last_flush: None,
+        })
+    })
+}
+
+/// 变更到达时的落盘决策(纯函数,便于单测;now = 决策时刻)
+enum FlushAction {
+    /// 已有 flush 线程在跑:只置脏,等它合并(不另起线程)
+    Wait,
+    /// 距上次写已超窗(或从未写过):在当前线程立即写——变更稀疏时最新数据零延迟落地
+    Now,
+    /// 窗内:起独立 flush 线程睡满窗口后写,期间新变更全部合并为一次写
+    Spawn,
+}
+
+fn flush_action(st: &PersistState, now: Instant) -> FlushAction {
+    if st.flusher_pending {
+        return FlushAction::Wait;
+    }
+    match st.last_flush {
+        None => FlushAction::Now,
+        Some(t) if now.saturating_duration_since(t) >= FLUSH_WINDOW => FlushAction::Now,
+        Some(_) => FlushAction::Spawn,
+    }
+}
+
+/// 变更落盘调度(监听线程调用):只置脏 + 决策,IO 不阻塞复制回调
+fn mark_dirty_and_flush(path: &Path) {
+    let (action, target) = {
+        let mut st = persist().lock().unwrap_or_else(|p| p.into_inner());
+        st.seq += 1;
+        let a = flush_action(&st, Instant::now());
+        if matches!(a, FlushAction::Spawn) {
+            st.flusher_pending = true;
+        }
+        (a, st.seq)
+    };
+    match action {
+        FlushAction::Now => {
+            flush_now(path, target);
+        }
+        FlushAction::Spawn => {
+            let p = path.to_path_buf();
+            if let Err(e) = std::thread::Builder::new()
+                .name("clipboard-flush".to_string())
+                .spawn(move || flush_delayed(&p))
+            {
+                eprintln!("[aurora] 启动剪贴板落盘线程失败: {e}");
+                // 兜底:线程起不来就同步写,数据不丢(下次变更重新走决策)
+                persist().lock().unwrap_or_else(|p| p.into_inner()).flusher_pending = false;
+                flush_now(path, target);
+            }
+        }
+        FlushAction::Wait => {}
+    }
+}
+
+/// 立即写当前内存态(快照与写盘同在 history 锁内,与 clear/delete 等命令串行,
+/// 不会出现"清空后又把旧快照写回"的复活竞态);成功后推进 saved_seq 与 last_flush,
+/// 失败仅告警(下次变更会重新决策重试)
+fn flush_now(path: &Path, target: u64) -> bool {
+    let ok = {
+        let hist = history().lock().unwrap_or_else(|p| p.into_inner());
+        save_to_file(path, &hist.items)
+    };
+    let mut st = persist().lock().unwrap_or_else(|p| p.into_inner());
+    if ok {
+        st.saved_seq = st.saved_seq.max(target);
+        st.last_flush = Some(Instant::now());
+    }
+    ok
+}
+
+/// flush 线程主体:睡满窗口 → 认领待写序号 → 落盘;写盘期间又来了新变更则立即
+/// 再写一轮(不再睡窗)直到追平,保证不丢尾变更;写失败且无新变更则退出
+/// (等下次变更重试,防磁盘故障时空转)
+fn flush_delayed(path: &Path) {
+    std::thread::sleep(FLUSH_WINDOW);
+    loop {
+        // 认领:拿当前待写序号;已干净(被其他写覆盖或本就没有)则退出
+        let target = {
+            let mut st = persist().lock().unwrap_or_else(|p| p.into_inner());
+            if st.seq == st.saved_seq {
+                st.flusher_pending = false;
+                return;
+            }
+            st.seq
+        };
+        let prev_saved = persist().lock().unwrap_or_else(|p| p.into_inner()).saved_seq;
+        flush_now(path, target);
+        // 判脏与清 pending 同锁,无间隙:要么有新脏数据(继续写),要么干净退出
+        let mut st = persist().lock().unwrap_or_else(|p| p.into_inner());
+        let progressed = st.saved_seq > prev_saved;
+        if st.seq == st.saved_seq || !progressed {
+            st.flusher_pending = false;
+            return;
+        }
+        // seq 有新增且本轮写成功:立即再写一轮追平
+    }
 }
 
 fn monitor_started() -> &'static AtomicBool {
@@ -159,13 +306,23 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
 
 /// 停止监听(托盘退出流程调用;不留后台线程)。幂等。
 pub fn teardown(app: &AppHandle) {
+    // 收尾:退出前把节流窗口内未落盘的脏历史补写一次(正常退出不丢最后 <2s
+    // 的复制,与 PersistState 的取舍注释呼应)。与在跑的 flush 线程并发也无害:
+    // 两处写都持 history 锁串行,且 saved_seq 单调推进不会回退。
+    let (dirty, target) = {
+        let st = persist().lock().unwrap_or_else(|p| p.into_inner());
+        (st.seq != st.saved_seq, st.seq)
+    };
+    if dirty {
+        flush_now(&history_path(app), target);
+    }
     stop_monitor_if_needed(app);
 }
 
 /// 惰性初始化(幂等):历史装载 + 配置上限 + 按开关启动监听
 fn ensure_ready(app: &AppHandle) {
     let cfg = load_from(&config_path(app));
-    let mut hist = history().lock().unwrap();
+    let mut hist = history().lock().unwrap_or_else(|p| p.into_inner());
     if hist.items.is_empty() {
         hist.items = load_from_file(&history_path(app));
         hist.last_hash = hist.items.first().map(|i| content_hash(&i.payload)).unwrap_or(0);
@@ -188,15 +345,22 @@ fn ensure_listener(app: &AppHandle) {
     }
 }
 
-/// 启动插件 monitor(幂等;插件内部同样防重复启动)
+/// 启动插件 monitor(幂等;插件内部同样防重复启动)。
+/// 并发修复 2026-08-13:原实现先 swap(true) 再启动,启动失败标志不回退,后续触发
+/// (设置开关/新命令)都不会再重试,监听永久停摆。改为 CAS:false→true 成功才启动,
+/// 启动失败立刻回退 false,下次触发自动重试。
 fn start_monitor_if_needed(app: &AppHandle) {
     ensure_listener(app);
-    if !monitor_started().swap(true, Ordering::SeqCst) {
+    if monitor_started()
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
         if let Err(e) = app
             .state::<tauri_plugin_clipboard::Clipboard>()
             .start_monitor(app.clone())
         {
             eprintln!("[aurora] 剪贴板监听启动失败: {e}");
+            monitor_started().store(false, Ordering::SeqCst);
         }
     }
 }
@@ -221,23 +385,22 @@ pub fn apply_config(app: &AppHandle, cfg: &super::config::AppConfig) {
     }
 }
 
-/// 剪贴板更新处理(在插件 watcher 线程上执行):读取 → 校验 → 去重 → 入队 → 裁剪 → 落盘 → 广播
+/// 剪贴板更新处理(在插件 watcher 线程上执行):读取 → 校验 → 去重 → 入队 → 裁剪 → 置脏 → 广播
 fn handle_clipboard_update(app: &AppHandle) {
     let clipboard = app.state::<tauri_plugin_clipboard::Clipboard>();
     let Some(item) = read_latest_item(&clipboard) else {
         return;
     };
     let inserted = {
-        let mut hist = history().lock().unwrap();
+        let mut hist = history().lock().unwrap_or_else(|p| p.into_inner());
         hist.push(item.clone())
     };
     if !inserted {
         return;
     }
-    {
-        let hist = history().lock().unwrap();
-        save_to_file(&history_path(app), &hist.items);
-    }
+    // 落盘节流:只置脏 + 决策(窗内合并/超窗即写),全量 JSON 不再每次复制同步写
+    // (12.8MB 级 IO 放大问题,详见 PersistState 注释)
+    mark_dirty_and_flush(&history_path(app));
     let _ = app.emit(EVENT_CLIPBOARD_UPDATED, &item);
 }
 
@@ -280,17 +443,31 @@ fn pick_item(text: Option<String>, files: Vec<String>, ts: u64) -> Option<Clipbo
 #[tauri::command]
 pub fn clipboard_get_history(app: tauri::AppHandle) -> Vec<ClipboardItem> {
     ensure_ready(&app);
-    history().lock().unwrap().items.clone()
+    history().lock().unwrap_or_else(|p| p.into_inner()).items.clone()
 }
 
 /// 清空剪贴板历史(清内存 + 删除历史文件)
 #[tauri::command]
 pub fn clipboard_clear_history(app: tauri::AppHandle) {
-    let mut hist = history().lock().unwrap();
+    let mut hist = history().lock().unwrap_or_else(|p| p.into_inner());
     hist.items.clear();
     hist.last_hash = 0;
     drop(hist);
     let _ = std::fs::remove_file(history_path(&app));
+}
+
+/// 删除指定索引条历史(索引越界报错);删除后立即落盘,返回删除后的条数。
+/// 注:删除是低频显式操作,不走落盘节流(节流为高频复制的合并而设计);
+/// 在跑的 flush 线程即使多写一轮也只会写出同样内容,无害。
+#[tauri::command]
+pub fn clipboard_delete_item(app: tauri::AppHandle, index: usize) -> Result<usize, String> {
+    let remaining = {
+        let mut hist = history().lock().unwrap_or_else(|p| p.into_inner());
+        hist.remove(index)?
+    };
+    let target = persist().lock().unwrap_or_else(|p| p.into_inner()).seq;
+    flush_now(&history_path(&app), target);
+    Ok(remaining)
 }
 
 /// 回贴第 index 条到系统剪贴板(文本 → writeText;图片文件路径 → 还原"复制文件"场景);
@@ -299,7 +476,7 @@ pub fn clipboard_clear_history(app: tauri::AppHandle) {
 pub fn clipboard_copy_back(app: tauri::AppHandle, index: usize) -> Result<(), String> {
     let item = history()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|p| p.into_inner())
         .items
         .get(index)
         .cloned()
@@ -459,5 +636,88 @@ mod tests {
         assert!(pick_item(None, vec![], ts).is_none());
         assert!(pick_item(Some("   ".to_string()), vec![], ts).is_none());
         assert!(pick_item(None, vec!["   ".to_string()], ts).is_none());
+    }
+
+    // ---- 删除命令(2026-08-13):中间/首/尾/越界 + 去重基准复位 ----
+
+    #[test]
+    fn remove_middle_first_last_and_out_of_bounds() {
+        let mut h = History {
+            max_items: 10,
+            ..Default::default()
+        };
+        for i in 0..4u64 {
+            assert!(h.push(text_item(&format!("item{i}"), i)));
+        }
+        // 头 = 最新:[item3, item2, item1, item0]
+        assert_eq!(h.remove(1).unwrap(), 3); // 删中间 item2 → [item3, item1, item0]
+        assert_eq!(h.items.iter().map(|i| i.payload.as_str()).collect::<Vec<_>>(),
+                   vec!["item3", "item1", "item0"]);
+        assert_eq!(h.remove(0).unwrap(), 2); // 删首(最近一条)item3 → [item1, item0]
+        assert_eq!(h.items[0].payload, "item1");
+        assert_eq!(h.remove(h.items.len() - 1).unwrap(), 1); // 删尾 item0 → [item1]
+        assert_eq!(h.items[0].payload, "item1");
+        assert_eq!(h.remove(0).unwrap(), 0); // 删光
+        assert!(h.remove(0).is_err()); // 空表越界
+        assert!(h.remove(5).is_err()); // 非空越界
+        assert!(h.remove(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn remove_recalcs_dedup_baseline() {
+        let mut h = History {
+            max_items: 10,
+            ..Default::default()
+        };
+        h.push(text_item("a", 1));
+        h.push(text_item("b", 2));
+        // [b, a]:删掉最近一条 b 后,基准退到 a,再复制 b 必须能重新入队
+        h.remove(0).unwrap();
+        assert!(h.push(text_item("b", 3)), "删掉最近一条后复制同内容不得被误去重");
+        assert_eq!(h.items.len(), 2);
+        // 删光后基准归零:同内容可再次入队
+        h.remove(0).unwrap();
+        h.remove(0).unwrap();
+        assert!(h.push(text_item("b", 4)));
+        assert_eq!(h.items.len(), 1);
+    }
+
+    // ---- 落盘节流决策(2026-08-13,纯函数;窗口语义:距上次写 2s 内合并) ----
+
+    fn persist_state(pending: bool, last_flush: Option<Instant>) -> PersistState {
+        PersistState { seq: 0, saved_seq: 0, flusher_pending: pending, last_flush }
+    }
+
+    #[test]
+    fn flush_action_first_change_writes_now() {
+        // 从未写过 → 立即写(变更稀疏零延迟)
+        let st = persist_state(false, None);
+        assert!(matches!(flush_action(&st, Instant::now()), FlushAction::Now));
+    }
+
+    #[test]
+    fn flush_action_within_window_spawns_merger() {
+        let t0 = Instant::now();
+        // 窗内(<2s)→ 起 flush 线程合并
+        let st = persist_state(false, Some(t0));
+        assert!(matches!(flush_action(&st, t0 + FLUSH_WINDOW - Duration::from_millis(1)), FlushAction::Spawn));
+        assert!(matches!(flush_action(&st, t0 + Duration::from_millis(1)), FlushAction::Spawn));
+    }
+
+    #[test]
+    fn flush_action_after_window_writes_now() {
+        let t0 = Instant::now();
+        let st = persist_state(false, Some(t0));
+        // 恰满窗(边界)与超窗 → 立即写
+        assert!(matches!(flush_action(&st, t0 + FLUSH_WINDOW), FlushAction::Now));
+        assert!(matches!(flush_action(&st, t0 + FLUSH_WINDOW + Duration::from_secs(1)), FlushAction::Now));
+    }
+
+    #[test]
+    fn flush_action_pending_thread_merges_into_it() {
+        // flush 线程在跑:即使距上次写已超窗也只置脏等待合并,不另起线程
+        let t0 = Instant::now();
+        let st = persist_state(true, Some(t0));
+        assert!(matches!(flush_action(&st, t0 + Duration::from_secs(60)), FlushAction::Wait));
     }
 }

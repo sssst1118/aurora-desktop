@@ -153,8 +153,64 @@ pub fn config_load(app: tauri::AppHandle) -> AppConfig {
     cfg
 }
 
+// ---- H1 供应链加固:更新源域名白名单(2026-08-13)----
+
+/// `update_feed_url` 允许的 host 白名单(全部为 GitHub 官方域名及其文件/API/CDN 域)。
+///
+/// 加固背景:config_save 对 update_feed_url 全盘接受,配合可写的 config.json 构成
+/// 供应链攻击面——自研 updater 下载产物后 SHA-256 校验通过即静默升级安装,
+/// 恶意内容可把更新源指到任意服务器。故保存时强制 host 精确命中本表。
+/// ⚠️ 用户自有静态服务器分发场景需扩展此表(设计权衡:白名单优先,不开放任意域)。
+const UPDATE_FEED_HOST_WHITELIST: [&str; 6] = [
+    "github.com",
+    "raw.githubusercontent.com",
+    "api.github.com",
+    "objects.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+    "releases.github.com",
+];
+
+/// 校验更新源 URL(纯函数,便于单测)。
+/// 规则:必须 https 开头 + host 精确命中白名单(大小写不敏感);解析失败一律拒绝
+/// (白名单是安全边界,收紧方向,失败即拒不宽容)。
+/// 注:只在 config_save 拦截,load_from 不校验——启动时不因老配置里的历史 URL 误拒。
+pub fn validate_update_feed_url(url: &str) -> Result<(), String> {
+    let s = url.trim();
+    let (scheme, rest) = s
+        .split_once("://")
+        .ok_or_else(|| "更新源不是合法 URL".to_string())?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err("更新源必须是 https 地址".to_string());
+    }
+    // authority = 首个 / ? # 之前的部分
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // 用户信息段攻击面(https://github.com@evil.com/):host 取最后一个 @ 之后
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    // 端口剥离(https://host:443/ 与无端口等价);IPv6 字面量等奇形输入因
+    // 无法精确命中白名单自然被拒
+    let host = host_port.split(':').next().unwrap_or("");
+    if UPDATE_FEED_HOST_WHITELIST.iter().any(|w| w.eq_ignore_ascii_case(host)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "更新源域名 {host} 不在白名单内(仅允许 GitHub 官方域名;自有服务器分发场景请联系维护者扩展白名单)"
+        ))
+    }
+}
+
+/// 保存时更新源 URL 校验(纯函数,便于单测):
+/// 与磁盘旧值相同(忽略大小写)→ 放行——老用户配置里可能已有白名单外 URL
+/// (旧版本全盘接受写入),未改动时不得因保存无关设置而误拒;
+/// 有改动 → 严格校验(必须 https + host 在白名单)。
+fn validate_feed_url_change(prev: &str, incoming: &str) -> Result<(), String> {
+    if prev.eq_ignore_ascii_case(incoming) {
+        return Ok(());
+    }
+    validate_update_feed_url(incoming)
+}
+
 #[tauri::command]
-pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
+pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> Result<bool, String> {
     let path = config_path(&app);
     // 并发修复:与 search_save_geometry / dock::save_items 共用配置锁,
     // "读全量(prev)→改字段→写全量"整体串行化,防并发保存互相覆盖。
@@ -162,6 +218,9 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
     let prev = load_from(&path);
     // 密钥脱敏契约:前端传回掩码 "******" = 未修改,保留磁盘旧值;新值或 None/空串直接生效
     cfg.ai_api_key = resolve_key_save(&prev.ai_api_key, &cfg.ai_api_key);
+    // H1 供应链加固:更新源 URL 白名单校验(只拦 save 不拦 load_from,避免启动误拒)。
+    // 校验失败返回 Err 拒绝保存(前端 saveSafe 已有捕获链路:提示 + 回滚本地值)
+    validate_feed_url_change(&prev.update_feed_url, &cfg.update_feed_url)?;
     let ok = save_to(&path, &cfg);
     // 落盘完成即可放锁:热生效只读配置(见 runtime::apply),不参与读-改-写,留在锁外缩小临界区
     drop(guard);
@@ -170,7 +229,7 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
     if ok {
         crate::runtime::apply(&app, &cfg);
     }
-    ok
+    Ok(ok)
 }
 
 /// 搜索框拖动/缩放后记忆几何(前端 onMoved/onResized 防抖后调用)。
@@ -502,5 +561,69 @@ mod tests {
         assert!(loaded.wallpaper_multi_monitor);
         assert!(!loaded.wallpaper_span_mode);
         let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- H1 更新源白名单(2026-08-13):save 校验 / load 不校验 ----
+
+    #[test]
+    fn feed_url_whitelist_allows_github_domains() {
+        for u in [
+            "https://github.com/sssst1118/aurora-desktop/releases/latest.json",
+            "https://raw.githubusercontent.com/sssst1118/aurora-desktop/main/latest.json",
+            "https://api.github.com/repos/sssst1118/aurora-desktop/releases/latest",
+            "https://objects.githubusercontent.com/abc/def.bin",
+            "https://github-releases.githubusercontent.com/123/abc",
+            "https://releases.github.com/download/abc",
+            "https://github.com", // 无路径也放行(host 合法)
+            "https://github.com:443/latest.json", // 默认端口等价
+            "https://GITHUB.com/x",                // host 大小写不敏感
+            "HTTPS://Raw.GitHubusercontent.com/x", // 协议大小写不敏感
+        ] {
+            assert!(validate_update_feed_url(u).is_ok(), "应放行: {u}");
+        }
+    }
+
+    #[test]
+    fn feed_url_whitelist_rejects_outside_hosts() {
+        for u in [
+            "https://example.com/aurora/latest.json",
+            "https://evilgithub.com/x",      // 前缀撞名不算命中(精确 host 匹配)
+            "https://github.com.evil.com/x", // 子域伪装
+            "https://raw.githubusercontent.com.evil.com/x",
+            "https://github.com@evil.com/x", // 用户信息段攻击
+            "https://user:pass@evil.com/x",
+            "https://github.com\\evil.com/x", // 反斜杠混淆
+            "https://github.com.evil.com",    // 尾缀撞名
+        ] {
+            assert!(validate_update_feed_url(u).is_err(), "应拒绝: {u}");
+        }
+    }
+
+    #[test]
+    fn feed_url_rejects_http_and_non_urls() {
+        // http 明文拒绝
+        assert!(validate_update_feed_url("http://github.com/x").is_err());
+        assert!(validate_update_feed_url("HTTP://github.com/x").is_err());
+        // 其他协议拒绝
+        assert!(validate_update_feed_url("ftp://github.com/x").is_err());
+        assert!(validate_update_feed_url("file:///etc/passwd").is_err());
+        // 非 URL 拒绝
+        assert!(validate_update_feed_url("not a url").is_err());
+        assert!(validate_update_feed_url("").is_err());
+        assert!(validate_update_feed_url("   ").is_err());
+        assert!(validate_update_feed_url("https://").is_err());
+    }
+
+    #[test]
+    fn feed_url_change_unchanged_passthrough_changed_validated() {
+        // 老配置历史值(白名单外)未改动 → 放行:保存无关设置不因历史 URL 误拒
+        let legacy = "https://example.com/legacy.json";
+        assert!(validate_feed_url_change(legacy, legacy).is_ok());
+        assert!(validate_feed_url_change(legacy, &legacy.to_uppercase()).is_ok()); // 忽略大小写
+        // 改为白名单内 → 放行
+        assert!(validate_feed_url_change(legacy, "https://github.com/x/latest.json").is_ok());
+        // 改为白名单外 → 拒绝
+        assert!(validate_feed_url_change(legacy, "https://evil.com/x").is_err());
+        assert!(validate_feed_url_change("https://github.com/x", "http://github.com/x").is_err());
     }
 }
