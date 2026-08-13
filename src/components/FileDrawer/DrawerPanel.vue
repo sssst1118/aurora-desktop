@@ -126,6 +126,13 @@ onUnmounted(() => {
         仅显示前 {{ MAX_FILES }} 项
       </span>
       <div class="ml-auto flex items-center gap-1">
+        <span
+          class="aurora-drag-hint text-xs px-1 cursor-grab"
+          data-tauri-drag-region
+          title="拖动窗口移动(标题栏空白处也可拖)"
+        >
+          ⠿
+        </span>
         <button
           class="w-7 h-7 rounded-lg text-sm text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors"
           title="刷新"

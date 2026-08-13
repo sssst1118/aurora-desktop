@@ -139,8 +139,9 @@ function splitBlocks(text: string): Block[] {
 <template>
   <div
     class="h-full w-full flex flex-col bg-[var(--aurora-panel-solid)] border border-[var(--aurora-border)] rounded-xl overflow-hidden text-[var(--aurora-text)] select-none"
+    data-tauri-drag-region="true"
   >
-    <!-- 顶部栏 -->
+    <!-- 顶部栏(空白处可拖窗口,按钮自动豁免) -->
     <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)] shrink-0">
       <span class="text-sm">✨ AI 助手</span>
       <div class="flex-1" />
@@ -158,6 +159,7 @@ function splitBlocks(text: string): Block[] {
       >
         清空
       </button>
+      <span class="aurora-drag-hint text-xs px-1 cursor-grab" title="拖动窗口移动(按钮除外)">⠿</span>
     </div>
 
     <!-- 错误条(可关闭;语义色令牌 ai-error 见下方 style) -->
@@ -175,8 +177,8 @@ function splitBlocks(text: string): Block[] {
       </button>
     </div>
 
-    <!-- 消息列表 -->
-    <div ref="listEl" class="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+    <!-- 消息列表(禁拖:保护滚动与文本选择) -->
+    <div ref="listEl" class="flex-1 overflow-y-auto px-4 py-3 space-y-2.5" data-tauri-drag-region="false">
       <div
         v-if="messages.length === 0"
         class="h-full flex items-center justify-center text-xs text-[var(--aurora-text-dim)] leading-relaxed text-center px-6"

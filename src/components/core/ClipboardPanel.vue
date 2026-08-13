@@ -140,8 +140,9 @@ let unlistenShow: UnlistenFn | undefined;
 <template>
   <div
     class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)] select-none"
+    data-tauri-drag-region="true"
   >
-    <!-- 标题栏:图标 + 搜索框 + 清空 -->
+    <!-- 标题栏:图标 + 搜索框 + 清空(标题栏空白处可拖窗口,输入框/按钮自动豁免) -->
     <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)]">
       <span class="text-sm">📋</span>
       <input
@@ -165,9 +166,11 @@ let unlistenShow: UnlistenFn | undefined;
       >
         {{ cleared ? "已清空" : confirming ? "确认清空?" : "清空" }}
       </button>
+      <!-- 拖拽把手(与搜索框一致的窗口拖动提示) -->
+      <span class="aurora-drag-hint text-xs px-1 cursor-grab" title="拖动窗口移动(输入框/按钮除外)">⠿</span>
     </div>
-    <!-- 历史列表 -->
-    <div class="flex-1 overflow-y-auto py-1">
+    <!-- 历史列表(禁拖:保护滚动条与条目点击) -->
+    <div class="flex-1 overflow-y-auto py-1" data-tauri-drag-region="false">
       <!-- 单条删除失败提示(3s 自动消失) -->
       <div
         v-if="deleteError"
@@ -204,8 +207,11 @@ let unlistenShow: UnlistenFn | undefined;
         </button>
       </div>
     </div>
-    <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">
-      ↑↓ 选择 · Enter 回贴 · Esc 关闭
+    <div
+      class="px-4 py-2 flex items-center justify-between text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]"
+    >
+      <span>↑↓ 选择 · Enter 回贴 · Esc 关闭</span>
+      <span class="aurora-drag-hint flex items-center gap-0.5" title="底部空白处拖动窗口移动">⠿ 拖动窗口</span>
     </div>
   </div>
 </template>
