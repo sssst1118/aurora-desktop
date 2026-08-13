@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
 
 /// Dock 快捷方式条目(AppConfig.dock_items 元素;2.1 模块命令直接复用本类型)
@@ -129,6 +130,21 @@ pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("aurora_config.json"))
 }
 
+/// 配置读-改-写全局互斥锁(并发修复 2026-08-13)。
+///
+/// config_save / search_save_geometry 与 dock::save_items 都是"读全量→改字段→写全量"
+/// 模式,无互斥时并发执行会互相覆盖(后写丢掉先写的字段,设置/窗口位置随机丢失)。
+/// 所有配置读-改-写路径必须先持有本锁,把"读→改→写"串行为一个原子整体。
+/// Dock 条目存在 config.json 的 dock_items 字段、与配置同文件,故共用本锁。
+///
+/// 纯读取(load_from)不取锁:[save_to] 的 tmp+rename 原子写保证读者要么见完整旧文件、
+/// 要么见完整新文件,绝不会读到半写内容。
+static CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub fn config_lock() -> &'static Mutex<()> {
+    CONFIG_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 #[tauri::command]
 pub fn config_load(app: tauri::AppHandle) -> AppConfig {
     let mut cfg = load_from(&config_path(&app));
@@ -140,10 +156,15 @@ pub fn config_load(app: tauri::AppHandle) -> AppConfig {
 #[tauri::command]
 pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
     let path = config_path(&app);
+    // 并发修复:与 search_save_geometry / dock::save_items 共用配置锁,
+    // "读全量(prev)→改字段→写全量"整体串行化,防并发保存互相覆盖。
+    let guard = config_lock().lock().unwrap_or_else(|p| p.into_inner());
     let prev = load_from(&path);
     // 密钥脱敏契约:前端传回掩码 "******" = 未修改,保留磁盘旧值;新值或 None/空串直接生效
     cfg.ai_api_key = resolve_key_save(&prev.ai_api_key, &cfg.ai_api_key);
     let ok = save_to(&path, &cfg);
+    // 落盘完成即可放锁:热生效只读配置(见 runtime::apply),不参与读-改-写,留在锁外缩小临界区
+    drop(guard);
     // 热生效(2026-08-12 用户要求:所有功能不重启即生效):落盘成功后按新配置
     // 同步运行中状态(热键/监听/watcher/采样线程/窗口显隐)。失败不阻断保存。
     if ok {
@@ -158,6 +179,9 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> bool {
 #[tauri::command]
 pub fn search_save_geometry(app: tauri::AppHandle, x: i32, y: i32, w: f64, h: f64) -> bool {
     let path = config_path(&app);
+    // 并发修复:几何记忆的读-改-写同样取配置锁,与 config_save / dock_set_items 串行,
+    // 否则窗口拖动与设置保存并发时互相覆盖(位置/大小随机丢失)
+    let _guard = config_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut cfg = load_from(&path);
     cfg.search_x = Some(x);
     cfg.search_y = Some(y);
@@ -193,7 +217,11 @@ pub fn load_from(path: &Path) -> AppConfig {
     }
 }
 
-/// 保存配置(自动创建父目录);成功返回 true
+/// 保存配置(自动创建父目录);成功返回 true。
+///
+/// 并发修复 2026-08-13:落盘走 [atomic_write](tmp+rename),不再直接 fs::write——
+/// 崩溃瞬间只会留下完整的旧文件或完整的新文件,不会出现半写 config.json
+/// (半写文件下次启动 JSON 解析失败,全部配置回退默认)。
 pub fn save_to(path: &Path, cfg: &AppConfig) -> bool {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -202,15 +230,32 @@ pub fn save_to(path: &Path, cfg: &AppConfig) -> bool {
         }
     }
     match serde_json::to_string_pretty(cfg) {
-        Ok(text) => match std::fs::write(path, text) {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("[aurora] 写配置失败: {e}");
-                false
-            }
-        },
+        Ok(text) => atomic_write(path, text.as_bytes()),
         Err(e) => {
             eprintln!("[aurora] 序列化配置失败: {e}");
+            false
+        }
+    }
+}
+
+/// 原子写文件:先写同目录 `<文件名>.tmp` 临时文件,成功后 rename 覆盖目标
+/// (同目录 rename 原子,Windows 上 std::fs::rename 等价 MoveFileExW(REPLACE_EXISTING))。
+/// 任何失败路径都清理 tmp,不留垃圾。写 tmp 的并发安全由调用方保证
+/// (config 写路径持配置锁,clipboard 写路径持 history 锁)。
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> bool {
+    let mut tmp_os = path.as_os_str().to_os_string();
+    tmp_os.push(".tmp");
+    let tmp = PathBuf::from(tmp_os);
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        eprintln!("[aurora] 写临时文件失败({}): {e}", tmp.display());
+        return false;
+    }
+    match std::fs::rename(&tmp, path) {
+        Ok(_) => true,
+        Err(e) => {
+            // 失败路径清理 tmp:半写临时文件对读取无影响(读只认正式文件名),但会残留垃圾
+            let _ = std::fs::remove_file(&tmp);
+            eprintln!("[aurora] 原子替换文件失败({}): {e}", path.display());
             false
         }
     }
@@ -223,6 +268,9 @@ mod tests {
     fn tmp_cfg(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("aurora_cfg_test_{tag}.json"));
         let _ = std::fs::remove_file(&p);
+        // 同时清掉可能的 tmp 残留(原子写测试断言无 tmp,需从干净状态开始)
+        let tmp = PathBuf::from(format!("{}.tmp", p.display()));
+        let _ = std::fs::remove_file(&tmp);
         p
     }
 
@@ -240,6 +288,53 @@ mod tests {
         assert!(!loaded.enable_island);
         assert!(!loaded.enable_dock);
         let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- 原子写(并发修复 2026-08-13):tmp+rename,写入后文件存在且内容完整 ----
+
+    #[test]
+    fn atomic_write_leaves_complete_file_and_no_tmp() {
+        let p = tmp_cfg("atomic");
+        let cfg = AppConfig {
+            theme_mode: "dark".to_string(),
+            search_x: Some(120),
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &cfg), "原子写应成功");
+        // 文件存在且内容完整可反序列化(半写会解析失败)
+        let loaded = load_from(&p);
+        assert_eq!(loaded.theme_mode, "dark");
+        assert_eq!(loaded.search_x, Some(120));
+        // 不残留 tmp 临时文件
+        let tmp = PathBuf::from(format!("{}.tmp", p.display()));
+        assert!(!tmp.exists(), "成功路径不应残留 tmp: {}", tmp.display());
+        // 二次保存覆盖旧内容(rename 覆盖已有目标)
+        let cfg2 = AppConfig {
+            theme_mode: "light".to_string(),
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &cfg2));
+        let loaded2 = load_from(&p);
+        assert_eq!(loaded2.theme_mode, "light");
+        assert_eq!(loaded2.search_x, None);
+        assert!(!tmp.exists(), "覆盖后仍不应残留 tmp: {}", tmp.display());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn atomic_write_failure_cleans_tmp() {
+        // 目标路径指向已存在的目录 → rename 失败 → 走失败路径,应清理 tmp
+        let dir = std::env::temp_dir().join(format!("aurora_cfg_test_atomic_dir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 构造一个"目标是目录"的路径:atomic_write 写到 dir 本身不行,这里用一个
+        // 子路径,让 tmp 可写但 rename 目标已被目录占位
+        let target = dir.join("sub.json");
+        std::fs::create_dir_all(&target).unwrap(); // target 是目录,rename 文件→目录必失败
+        assert!(!atomic_write(&target, b"{}"));
+        let tmp = PathBuf::from(format!("{}.tmp", target.display()));
+        assert!(!tmp.exists(), "失败路径应清理 tmp: {}", tmp.display());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

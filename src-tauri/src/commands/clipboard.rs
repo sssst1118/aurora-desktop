@@ -129,7 +129,11 @@ fn load_from_file(path: &Path) -> Vec<ClipboardItem> {
     }
 }
 
-/// 落盘(自动创建父目录);失败仅告警,不阻断复制流程
+/// 落盘(自动创建父目录);失败仅告警,不阻断复制流程。
+///
+/// 并发修复 2026-08-13:与 config.json 同款原子写(tmp+rename),崩溃瞬间
+/// 只会留下完整旧文件或完整新文件,不会半写 clipboard.json(半写会导致
+/// 下次启动历史解析失败整体置空)。写 tmp 的并发安全由 history 锁保证。
 fn save_to_file(path: &Path, items: &[ClipboardItem]) -> bool {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -138,13 +142,7 @@ fn save_to_file(path: &Path, items: &[ClipboardItem]) -> bool {
         }
     }
     match serde_json::to_string_pretty(items) {
-        Ok(text) => match std::fs::write(path, text) {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("[aurora] 写剪贴板历史失败: {e}");
-                false
-            }
-        },
+        Ok(text) => super::config::atomic_write(path, text.as_bytes()),
         Err(e) => {
             eprintln!("[aurora] 序列化剪贴板历史失败: {e}");
             false
@@ -322,6 +320,9 @@ mod tests {
     fn tmp_file(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("aurora_clipboard_test_{tag}.json"));
         let _ = std::fs::remove_file(&p);
+        // 同时清掉可能的 tmp 残留(原子写测试断言无 tmp,需从干净状态开始)
+        let tmp = PathBuf::from(format!("{}.tmp", p.display()));
+        let _ = std::fs::remove_file(&tmp);
         p
     }
 
@@ -409,6 +410,9 @@ mod tests {
         assert_eq!(loaded[0].payload, "你好");
         assert_eq!(loaded[1].tp, "image");
         assert_eq!(loaded[1].ts, 9);
+        // 原子写(2026-08-13):写入后文件存在且内容完整,不残留 tmp
+        let tmp = PathBuf::from(format!("{}.tmp", p.display()));
+        assert!(!tmp.exists(), "成功路径不应残留 tmp: {}", tmp.display());
         let _ = std::fs::remove_file(&p);
     }
 

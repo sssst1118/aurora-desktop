@@ -39,7 +39,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     ShowWindow, SW_RESTORE,
 };
 
-use super::config::{config_path, load_from, save_to, DockItem};
+use super::config::{config_lock, config_path, load_from, save_to, DockItem};
 
 // ==================== 运行检测(纯函数 + 系统枚举) ====================
 
@@ -322,11 +322,17 @@ pub fn load_items(cfg_path: &Path) -> Vec<DockItem> {
 
 /// 写 Dock 条目:更新内存缓存并写回 config(保留其余字段);成功返回 true
 pub fn save_items(cfg_path: &Path, items: &[DockItem]) -> bool {
+    // 并发修复(2026-08-13):Dock 条目与设置同存 config.json(dock_items 字段),
+    // 本条目的"读全量→改字段→写全量"与 config_save / search_save_geometry 是同一份
+    // 文件的竞态写,必须共用配置锁——否则条目保存与设置保存并发时后写覆盖先写,
+    // 条目或设置随机丢失。
+    let _guard = config_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut cfg = load_from(cfg_path);
     cfg.dock_items = items.to_vec();
     if !save_to(cfg_path, &cfg) {
         return false;
     }
+    // 缓存更新留在锁内:保证"落盘内容 == 内存缓存内容"不撕裂
     let mut g = item_cache().lock().unwrap_or_else(|p| p.into_inner());
     *g = Some((cfg_path.to_path_buf(), items.to_vec()));
     true

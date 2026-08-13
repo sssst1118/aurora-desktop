@@ -254,15 +254,41 @@ static WATCHER_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// 同时后台预热一次缓存(打开抽屉即出数据,无需等首次同步扫描)。
 /// watcher 放入 managed state 保活;热生效时 [stop_watcher] 可停止并重建。
 /// 幂等:已启动时不重复创建。
+///
+/// 并发修复(2026-08-13):入口的"检查 WATCHER_ACTIVE → 置位"原为 load+store 两步,
+/// 并发调用时两线程都能通过检查、都走到 app.manage —— tauri 对同类型重复 manage
+/// 会 panic。现改为 compare_exchange 一步原子置位:抢到位的线程负责创建,抢不到的
+/// 直接返回。抢到位后若失败(桌面目录缺失等)或开关关闭未启动,必须回滚标志,
+/// 否则后续重试被短路、watcher 永远起不来。
 pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
-    if WATCHER_ACTIVE.load(Ordering::SeqCst) {
-        return Ok(());
+    if WATCHER_ACTIVE
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(()); // 已有线程在创建(或已创建),本调用直接返回
     }
+    // 实际创建逻辑拆到内层,返回是否真正启动:false(开关关闭跳过)或 Err 都需回滚标志
+    match init_watcher_inner(&app) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            WATCHER_ACTIVE.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+        Err(e) => {
+            WATCHER_ACTIVE.store(false, Ordering::SeqCst);
+            Err(e)
+        }
+    }
+}
+
+/// [init_watcher] 的内层实现(调用方已通过 CAS 拿到启动权)。
+/// 返回 Ok(true)=watcher 已启动;Ok(false)=开关关闭,未启动。
+fn init_watcher_inner(app: &tauri::AppHandle) -> notify::Result<bool> {
     // 设置开关关闭时不启动 watcher(不注册监听、不留句柄)
-    let cfg_path = crate::commands::config::config_path(&app);
+    let cfg_path = crate::commands::config::config_path(app);
     let cfg = crate::commands::config::load_from(&cfg_path);
     if !cfg.enable_file_drawer {
-        return Ok(());
+        return Ok(false);
     }
     let Some(desktop) = desktop_dir() else {
         return Err(notify::Error::generic("无法获取用户桌面目录,watcher 未启动"));
@@ -287,9 +313,17 @@ pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
     if let Some(public) = public_desktop_dir() {
         let _ = watcher.watch(&public, notify::RecursiveMode::NonRecursive);
     }
-    // 保活 watcher(不 drop 即持续监听;热生效停止时替换回 None)
-    app.manage(Mutex::new(Some(watcher)));
-    WATCHER_ACTIVE.store(true, Ordering::SeqCst);
+    // 保活 watcher(不 drop 即持续监听;热生效停止时替换回 None)。
+    // 并发修复:热生效 stop→start 时 state 仍被 manage(stop_watcher 只 take 掉 watcher
+    // 并不卸载 state),直接 manage 会因同类型重复注册 panic;先 try_state 探测,
+    // 已存在则复用 state 放回新 watcher。
+    if let Some(state) = app.try_state::<Mutex<Option<notify::RecommendedWatcher>>>() {
+        if let Ok(mut g) = state.lock() {
+            *g = Some(watcher);
+        }
+    } else {
+        app.manage(Mutex::new(Some(watcher)));
+    }
 
     // 后台预热缓存:首次打开抽屉即出数据,不用等同步扫描(失败无碍,首次打开兜底重扫)
     std::thread::spawn(|| {
@@ -306,7 +340,7 @@ pub fn init_watcher(app: tauri::AppHandle) -> notify::Result<()> {
             let _ = app2.emit("drawer-updated", ());
         }
     });
-    Ok(())
+    Ok(true)
 }
 
 /// 停止桌面目录 watcher(热生效:开关关闭时调用)。
