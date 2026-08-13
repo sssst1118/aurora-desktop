@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import Settings from "./Settings.vue";
 import Dock from "./Dock.vue";
+import { useRecentApps, type RecentApp } from "../../composables/useRecentApps";
 
 interface AppEntry {
   name: string;
   path: string;
+  /**
+   * 后端预留图标字段(约定为 base64 data URI)。
+   * 注:当前后端 AppEntry 尚未返回该字段(2026-08-13 核对 indexer/app_index.rs 仅有
+   * name/path),因此非 data URI / 缺失时统一走 dock_get_icon 取真实图标,再无才回退 emoji。
+   */
+  icon?: string | null;
 }
 
 const query = ref("");
@@ -21,15 +28,86 @@ const showSettings = ref(false);
 const enableDock = ref(false);
 // 显示方式:"glass" 毛玻璃(默认) | "solid" 不透明(2026-08-12 用户要求可选)
 const searchStyle = ref("glass");
+// 搜索进行中指示(invoke 期间;配合下方 150ms 防抖,只在真正发起搜索后亮起)
+const searching = ref(false);
+// 搜索错误态:invoke 失败时给明确提示,避免误导成"无匹配结果"
+const searchError = ref("");
+// 最近打开(空 query 时展示;localStorage 持久化,上限 10 条)
+const { recents, loadRecents, saveRecent } = useRecentApps();
+// 结果项真实图标 data URL 缓存(path → url;后端 dock_get_icon 自带内存+磁盘双缓存)
+const icons = ref<Map<string, string>>(new Map());
+// 结果项 DOM 引用(键盘选中后 scrollIntoView 用)
+const itemEls: (HTMLElement | null)[] = [];
+
 let debounceTimer: number | undefined;
+let searchSeq = 0; // 请求序号:快速输入时丢弃过期响应,防旧结果覆盖新结果
 
 const win = getCurrentWindow();
+
+/** 当前展示列表:有输入 → 搜索结果;无输入 → 最近打开 */
+const displayItems = computed<AppEntry[] | RecentApp[]>(() =>
+  query.value.trim() ? results.value : recents.value,
+);
+
+// 展示列表变化(新搜索结果/回到最近打开)后:选中项回滚进视口 + 补齐图标
+watch(
+  displayItems,
+  () => {
+    void scrollSelectedIntoView();
+    refreshIcons();
+  },
+  { immediate: true },
+);
+
+/** 选中项跟随滚动:block nearest 最小滚动,消除"选中项滚出视口看不见" */
+async function scrollSelectedIntoView() {
+  await nextTick();
+  itemEls[selected.value]?.scrollIntoView({ block: "nearest" });
+}
+
+/** v-for 条目 ref 收集(函数 ref 每次渲染都会回调,卸载时 el 为 null) */
+function setItemEl(el: unknown, i: number) {
+  itemEls[i] = el instanceof HTMLElement ? el : null;
+}
+
+/** 条目图标:自带 data URI 直接用;否则取缓存图标;再无 → 模板回退 emoji */
+function iconFor(item: AppEntry | RecentApp): string | undefined {
+  const ic = (item as AppEntry).icon;
+  if (ic && ic.startsWith("data:")) return ic;
+  return icons.value.get(item.path);
+}
+
+/** 经后端 dock_get_icon 取真实图标 data URL(与 Dock.vue 同款);失败返回 undefined */
+async function iconOf(path: string): Promise<string | undefined> {
+  const hit = icons.value.get(path);
+  if (hit) return hit;
+  try {
+    const url = await invoke<string | null>("dock_get_icon", { path });
+    if (url) {
+      icons.value.set(path, url);
+      return url;
+    }
+  } catch (e) {
+    console.error("dock_get_icon failed", e);
+  }
+  return undefined;
+}
+
+/** 为当前可见条目补齐图标(命中缓存即跳过;图标未就绪期间显示 emoji 占位) */
+function refreshIcons() {
+  for (const it of displayItems.value) {
+    const ic = (it as AppEntry).icon;
+    if (ic && ic.startsWith("data:")) continue;
+    if (!icons.value.has(it.path)) void iconOf(it.path);
+  }
+}
 
 // Dock 开关立即读取(不等 onShown):Dock 组件在应用启动时即挂载并后台提取图标,
 // 用户呼出搜索栏时图标已就绪(否则首次呼出才挂载,COM 初始化的 ~1.9s 成本
 // 会压在"打开搜索栏之后"——实测首 lnk 图标提取独占 1.85s)
 void loadDockFlag();
 void loadStyleFlag();
+loadRecents(); // 最近打开列表(空 query 态展示)
 
 // 热生效:设置页保存成功 → 立即重读 Dock 开关与显示方式(无需重启/下次呼出)
 window.addEventListener("aurora:config-saved", () => {
@@ -64,16 +142,29 @@ const panelClass = computed(() =>
 
 async function doSearch() {
   const q = query.value.trim();
+  const seq = ++searchSeq;
   if (!q) {
+    // 空输入回到最近打开列表(结果清空,进行中指示熄灭)
     results.value = [];
+    selected.value = 0;
+    searching.value = false;
+    searchError.value = "";
     return;
   }
+  searching.value = true;
+  searchError.value = "";
   try {
-    results.value = (await invoke<AppEntry[]>("search_apps", { query: q })) ?? [];
+    const list = (await invoke<AppEntry[]>("search_apps", { query: q })) ?? [];
+    if (seq !== searchSeq) return; // 已有更新的请求,丢弃过期结果
+    results.value = list;
     selected.value = 0;
   } catch (e) {
-    results.value = [];
     console.error(e);
+    if (seq !== searchSeq) return;
+    results.value = [];
+    searchError.value = "搜索失败,请稍后重试";
+  } finally {
+    if (seq === searchSeq) searching.value = false;
   }
 }
 
@@ -83,23 +174,60 @@ function onInput() {
 }
 
 function selectNext() {
-  if (results.value.length === 0) return;
-  selected.value = (selected.value + 1) % results.value.length;
+  if (displayItems.value.length === 0) return;
+  selected.value = (selected.value + 1) % displayItems.value.length;
+  void scrollSelectedIntoView();
 }
 
 function selectPrev() {
-  if (results.value.length === 0) return;
-  selected.value = (selected.value - 1 + results.value.length) % results.value.length;
+  if (displayItems.value.length === 0) return;
+  selected.value =
+    (selected.value - 1 + displayItems.value.length) % displayItems.value.length;
+  void scrollSelectedIntoView();
 }
 
 async function openSelected() {
-  const item = results.value[selected.value];
+  const item = displayItems.value[selected.value];
   if (!item) return;
-  await invoke("open_item", { path: item.path });
+  // 打开成功即写入最近使用(置顶去重);失败也照旧关窗,与既有行为一致
+  const ok = await invoke<boolean>("open_item", { path: item.path });
+  if (ok) saveRecent(item);
   await win.hide();
 }
 
-function onKeydown(e: KeyboardEvent) {
+/** 清空输入:取消挂起的防抖,并让进行中的搜索结果过期,回到最近打开列表 */
+function clearQuery() {
+  if (debounceTimer) {
+    window.clearTimeout(debounceTimer);
+    debounceTimer = undefined;
+  }
+  query.value = "";
+  void doSearch();
+}
+
+/**
+ * 窗口级 keydown(原绑定在 input 上,切到设置页 input 卸载后 Esc 断流,故移到这里兜底全态):
+ * - 设置态:Esc 先关设置页返回搜索态,其余按键交给设置页内部处理;
+ * - 搜索态:↑↓ 选择 / Enter 打开 / 二级 Esc(有输入先清空,再按才关窗,对标 Raycast);
+ * - IME 组合输入中不劫持方向键(中文输入法选词不误触)。
+ */
+function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (showSettings.value) {
+      showSettings.value = false;
+      void nextTick().then(() => inputEl.value?.focus());
+    } else if (query.value) {
+      clearQuery();
+    } else {
+      void win.hide();
+    }
+    return;
+  }
+  if (showSettings.value) return;
+  if (e.isComposing) return;
+  // 焦点在按钮上(如 ⚙ 设置按钮)时放行,让按钮原生响应 Enter/方向键
+  if (e.target instanceof HTMLButtonElement) return;
   if (e.key === "ArrowDown") {
     e.preventDefault();
     selectNext();
@@ -108,9 +236,7 @@ function onKeydown(e: KeyboardEvent) {
     selectPrev();
   } else if (e.key === "Enter") {
     e.preventDefault();
-    openSelected();
-  } else if (e.key === "Escape") {
-    win.hide();
+    void openSelected();
   }
 }
 
@@ -120,6 +246,8 @@ function onShown() {
   query.value = "";
   results.value = [];
   selected.value = 0;
+  searching.value = false;
+  searchError.value = "";
   void loadDockFlag();
   void nextTick().then(() => inputEl.value?.focus());
 }
@@ -226,13 +354,17 @@ onMounted(async () => {
   unResized = await win.onResized(() => scheduleSaveGeometry());
   // 窗口显示(呼出)时重置面板状态(见上方 onShown 说明,不绑焦点事件)
   unlistenShow = await listen("tauri://show", () => onShown());
+  // 窗口级键盘:搜索态方向键/回车/二级 Esc,设置态 Esc 关设置返回搜索态
+  window.addEventListener("keydown", onWindowKeydown);
 });
 
 onUnmounted(() => {
   unMoved?.();
   unResized?.();
   unlistenShow?.();
+  window.removeEventListener("keydown", onWindowKeydown);
   if (geometryTimer) window.clearTimeout(geometryTimer);
+  if (debounceTimer) window.clearTimeout(debounceTimer);
 });
 </script>
 
@@ -255,7 +387,6 @@ onUnmounted(() => {
           class="flex-1 bg-transparent outline-none text-sm placeholder:text-[var(--aurora-text-dim)]"
           placeholder="搜索应用…"
           @input="onInput"
-          @keydown="onKeydown"
         />
         <button
           class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm"
@@ -267,23 +398,54 @@ onUnmounted(() => {
       </div>
       <!-- 结果列表禁拖:滚动条拖动/列表项点击放行 -->
       <div class="flex-1 overflow-y-auto py-1" data-tauri-drag-region="false">
-        <div v-if="query.trim() && results.length === 0" class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]">
+        <!-- 进行中指示(150ms 防抖后真正发起搜索期间) -->
+        <div
+          v-if="searching"
+          class="px-4 py-3 flex items-center gap-2 text-xs text-[var(--aurora-text-dim)]"
+        >
+          <span
+            class="aurora-spin inline-block h-3 w-3 rounded-full border border-[var(--aurora-text-dim)] border-t-transparent"
+          ></span>
+          搜索中…
+        </div>
+        <!-- 错误态:invoke 失败与"无匹配结果"区分开,避免误导 -->
+        <div v-else-if="searchError" class="px-4 py-3 text-xs text-red-400">
+          {{ searchError }}
+        </div>
+        <!-- 有输入且无结果:空态 -->
+        <div
+          v-else-if="query.trim() && displayItems.length === 0"
+          class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]"
+        >
           无匹配结果
         </div>
+        <!-- 空 query:引导文案,下方展示最近打开 -->
+        <div v-else-if="!query.trim()" class="px-4 py-3 text-xs text-[var(--aurora-text-dim)]">
+          输入关键词搜索应用
+        </div>
         <div
-          v-for="(item, i) in results"
+          v-for="(item, i) in displayItems"
           :key="item.path"
+          :ref="(el) => setItemEl(el, i)"
           class="px-4 py-2 flex items-center gap-3 text-sm cursor-pointer"
           :class="i === selected ? 'bg-[var(--aurora-field)]' : ''"
           @mouseenter="selected = i"
           @click="openSelected"
         >
-          <span class="text-base">🖥️</span>
+          <!-- 真实图标:后端 icon 字段(data URI)或 dock_get_icon 提取;未就绪回退 emoji -->
+          <img
+            v-if="iconFor(item)"
+            :src="iconFor(item)"
+            class="h-5 w-5 object-contain pointer-events-none"
+            draggable="false"
+            alt=""
+          />
+          <span v-else class="text-base">🖥️</span>
           <span>{{ item.name }}</span>
         </div>
       </div>
       <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">
-        ↑↓ 选择 · Enter 打开 · Esc 关闭
+        ↑↓ 选择 · Enter 打开 · Esc 清空/关闭
       </div>
     </template>
     <Settings v-else @close="toggleSettings" />
@@ -301,3 +463,15 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 搜索进行中指示:旋转小圆环 */
+@keyframes aurora-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.aurora-spin {
+  animation: aurora-spin 0.8s linear infinite;
+}
+</style>
