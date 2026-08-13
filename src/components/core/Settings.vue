@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -31,9 +31,10 @@ async function saveSafe(): Promise<boolean> {
   }
 }
 
+// 设置页被 SearchBar 用 KeepAlive 缓存(2026-08-13 状态保持改造):
+// onMounted 只跑一次(事件订阅/版本号),配置与显示器数据拉取移到 onActivated,
+// 每次打开设置页都刷新,保证"重新打开即最新",与旧版每次重建重新拉数据行为一致
 onMounted(async () => {
-  void store.load();
-  void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
   try {
     appVersion.value = await getVersion();
   } catch {
@@ -77,7 +78,18 @@ onMounted(async () => {
   updateListeners = unlisteners;
 });
 
+onActivated(() => {
+  void store.load();
+  void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
+});
+
+// 离开设置页(KeepAlive 停用/销毁):结束热键录制,防止残留窗口级监听
+onDeactivated(() => {
+  stopRecord();
+});
+
 onUnmounted(() => {
+  stopRecord();
   updateListeners.forEach((u) => u());
   updateListeners = [];
 });
@@ -121,6 +133,103 @@ async function setProvider(p: "deepseek" | "ollama") {
 /** Phase3 文本输入保存(失焦/回车时提交,避免逐键保存) */
 async function saveText() {
   await saveSafe();
+}
+
+// ---- 热键录制输入(2026-08-13):裸文本框改点击录制,生成与后端解析一致的小写格式) ----
+// 后端 hotkey.rs 用 Shortcut::from_str(tauri-plugin-global-shortcut)解析,规范格式为
+// "ctrl+alt+d" 全小写加号分隔(与 config.rs 默认值一致);三个热键输入共用一套录制逻辑,
+// 一次只录一个(recordingKey 记录当前录制项)
+const recordingKey = ref<string | null>(null);
+
+/** 录制项 → 配置字段映射 */
+const HOTKEY_FIELDS: Record<string, "drawer_hotkey" | "hotkey_clipboard" | "ai_hotkey"> = {
+  drawer: "drawer_hotkey",
+  clipboard: "hotkey_clipboard",
+  ai: "ai_hotkey",
+};
+
+/** 输入框显示文本:录制中显示提示,否则显示当前配置值 */
+function hotkeyText(key: string): string {
+  const cfg = store.cfg;
+  if (!cfg) return "";
+  return recordingKey.value === key ? "按下组合键…" : cfg[HOTKEY_FIELDS[key]];
+}
+
+/** 修饰键判定(纯修饰键按下不生成组合,继续等主键) */
+function isModifierKey(key: string): boolean {
+  return key === "Control" || key === "Alt" || key === "Shift" || key === "Meta";
+}
+
+/** 主键名规范化成后端可解析 token(global-hotkey Code 格式);不支持返回 null(忽略继续) */
+function normalizeHotkeyKey(key: string): string | null {
+  if (key.length === 1) {
+    const c = key.toLowerCase();
+    return /^[a-z0-9]$/.test(c) ? c : null;
+  }
+  const special: Record<string, string> = {
+    Space: "space",
+    Enter: "enter",
+    Tab: "tab",
+    Backspace: "backspace",
+    Delete: "delete",
+    Insert: "insert",
+    Home: "home",
+    End: "end",
+    PageUp: "pageup",
+    PageDown: "pagedown",
+    ArrowUp: "up",
+    ArrowDown: "down",
+    ArrowLeft: "left",
+    ArrowRight: "right",
+  };
+  if (special[key]) return special[key];
+  const m = /^F([1-9]|1[0-9]|2[0-4])$/.exec(key);
+  return m ? "f" + m[1].toLowerCase() : null;
+}
+
+/** 进入录制:窗口捕获阶段接管后续按键(capture 先于 SearchBar 冒泡阶段 handler) */
+function startRecord(key: string) {
+  if (!store.cfg) return;
+  recordingKey.value = key;
+  window.removeEventListener("keydown", onRecordKeydown, true); // 防重复注册
+  window.addEventListener("keydown", onRecordKeydown, true);
+}
+
+/** 结束录制(未写入任何值,Esc/失焦取消时显示自动恢复原配置值) */
+function stopRecord() {
+  if (recordingKey.value === null) return;
+  recordingKey.value = null;
+  window.removeEventListener("keydown", onRecordKeydown, true);
+}
+
+/**
+ * 录制中按键:Esc 取消;纯修饰键/无修饰键/不支持主键一律忽略继续;
+ * 修饰键 + 主键 → 生成 "ctrl+alt+d" 格式写入配置并自动保存(复用 saveText 入口)。
+ * stopPropagation 防 SearchBar 窗口级 handler 收到(否则 Esc 会直接关掉设置页)
+ */
+function onRecordKeydown(e: KeyboardEvent) {
+  const key = recordingKey.value;
+  const cfg = store.cfg;
+  if (!key || !cfg) return;
+  e.stopPropagation();
+  e.preventDefault();
+  if (e.key === "Escape") {
+    stopRecord();
+    return;
+  }
+  if (isModifierKey(e.key)) return;
+  if (!(e.ctrlKey || e.altKey || e.shiftKey || e.metaKey)) return; // 必须含至少一个修饰键
+  const main = normalizeHotkeyKey(e.key);
+  if (!main) return;
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push("ctrl");
+  if (e.altKey) parts.push("alt");
+  if (e.shiftKey) parts.push("shift");
+  if (e.metaKey) parts.push("super");
+  parts.push(main);
+  cfg[HOTKEY_FIELDS[key]] = parts.join("+");
+  stopRecord();
+  void saveText(); // 录制完成自动保存(失败红字提示 + 回滚,走统一保存入口)
 }
 
 /** Phase3 工具调用总开关(热生效:命令内每次请求实时读配置) */
@@ -599,9 +708,14 @@ async function uiaType() {
         <div v-if="store.cfg" class="flex items-center gap-1.5">
           <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">抽屉热键</span>
           <input
-            v-model="store.cfg.drawer_hotkey"
-            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
-            @change="saveText"
+            :value="hotkeyText('drawer')"
+            readonly
+            placeholder="点击后按下组合键"
+            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 font-mono cursor-pointer"
+            :class="recordingKey === 'drawer' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
+            :title="recordingKey === 'drawer' ? '按下 Esc 取消录制' : '点击进入录制模式'"
+            @click="startRecord('drawer')"
+            @blur="stopRecord"
           />
           <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
@@ -621,9 +735,14 @@ async function uiaType() {
         <div v-if="store.cfg" class="flex items-center gap-1.5">
           <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">剪贴板热键</span>
           <input
-            v-model="store.cfg.hotkey_clipboard"
-            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
-            @change="saveText"
+            :value="hotkeyText('clipboard')"
+            readonly
+            placeholder="点击后按下组合键"
+            class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 font-mono cursor-pointer"
+            :class="recordingKey === 'clipboard' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
+            :title="recordingKey === 'clipboard' ? '按下 Esc 取消录制' : '点击进入录制模式'"
+            @click="startRecord('clipboard')"
+            @blur="stopRecord"
           />
           <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
@@ -762,9 +881,14 @@ async function uiaType() {
           <div class="flex items-center gap-1.5">
             <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">AI 热键</span>
             <input
-              v-model="store.cfg.ai_hotkey"
-              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] font-mono"
-              @change="saveText"
+              :value="hotkeyText('ai')"
+              readonly
+              placeholder="点击后按下组合键"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 font-mono cursor-pointer"
+              :class="recordingKey === 'ai' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
+              :title="recordingKey === 'ai' ? '按下 Esc 取消录制' : '点击进入录制模式'"
+              @click="startRecord('ai')"
+              @blur="stopRecord"
             />
             <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
           </div>

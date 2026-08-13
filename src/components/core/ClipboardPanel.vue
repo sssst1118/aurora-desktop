@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useClipboardStore, type ClipboardItem } from "../../stores/clipboard";
+import { useClipboardStore, type ClipboardItem, type HistoryEntry } from "../../stores/clipboard";
 import { useClipboardHistory } from "../../composables/useClipboardHistory";
 
 const store = useClipboardStore();
@@ -34,6 +35,29 @@ async function copyBack(index: number) {
     await win.hide();
   } catch (e) {
     console.error("copy back failed", e);
+  }
+}
+
+// 单条删除(悬停 ✕):不弹确认(单条误删代价小,与全量清空的两层确认区分);
+// 契约 clipboard_delete_item { index: 全量列表下标 },index 越界后端返回 Err,成功返回删除后条数
+const deleteError = ref("");
+let deleteErrorTimer: number | undefined;
+
+async function deleteItem(entry: HistoryEntry) {
+  try {
+    await invoke<number>("clipboard_delete_item", { index: entry.index });
+    // 后端删除成功,本地列表同步移除(index 口径与 copyBack 一致 = 全量列表下标)
+    store.items.splice(entry.index, 1);
+    if (store.selected >= list.value.length) {
+      store.selected = Math.max(0, list.value.length - 1);
+    }
+    deleteError.value = "";
+  } catch (e) {
+    deleteError.value = `删除失败:${e}`;
+    if (deleteErrorTimer) window.clearTimeout(deleteErrorTimer);
+    deleteErrorTimer = window.setTimeout(() => {
+      deleteError.value = "";
+    }, 3000);
   }
 }
 
@@ -105,6 +129,7 @@ onUnmounted(() => {
   unlistenShow?.();
   if (confirmTimer) window.clearTimeout(confirmTimer);
   if (clearedTimer) window.clearTimeout(clearedTimer);
+  if (deleteErrorTimer) window.clearTimeout(deleteErrorTimer);
 });
 
 // 窗口真正显示时(tauri://show)拉最新历史并聚焦搜索框;不绑焦点事件——
@@ -143,6 +168,13 @@ let unlistenShow: UnlistenFn | undefined;
     </div>
     <!-- 历史列表 -->
     <div class="flex-1 overflow-y-auto py-1">
+      <!-- 单条删除失败提示(3s 自动消失) -->
+      <div
+        v-if="deleteError"
+        class="mx-4 mt-1 rounded-lg bg-[var(--aurora-danger-bg)] px-3 py-1 text-xs text-[var(--aurora-danger)]"
+      >
+        {{ deleteError }}
+      </div>
       <div v-if="store.items.length === 0" class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]">
         暂无历史,复制文本后自动记录
       </div>
@@ -152,7 +184,7 @@ let unlistenShow: UnlistenFn | undefined;
       <div
         v-for="(entry, i) in list"
         :key="`${entry.item.ts}-${i}`"
-        class="px-4 py-2 flex items-center gap-3 cursor-pointer"
+        class="group px-4 py-2 flex items-center gap-3 cursor-pointer"
         :class="i === store.selected ? 'bg-[var(--aurora-field)]' : ''"
         @mouseenter="store.selected = i"
         @click="copyBack(entry.index)"
@@ -162,6 +194,14 @@ let unlistenShow: UnlistenFn | undefined;
           {{ entry.item.tp === "image" ? entry.item.payload : summary(entry.item) }}
         </span>
         <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">{{ fmtTime(entry.item.ts) }}</span>
+        <!-- 悬停 ✕ 单条删除(对标 Win+V;stop 阻止冒泡触发回贴) -->
+        <button
+          class="hidden h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] leading-none text-[var(--aurora-text-dim)] group-hover:flex hover:bg-[var(--aurora-danger)] hover:text-white"
+          title="删除该条"
+          @click.stop="deleteItem(entry)"
+        >
+          ✕
+        </button>
       </div>
     </div>
     <div class="px-4 py-2 text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]">

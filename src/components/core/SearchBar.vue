@@ -532,7 +532,10 @@ onUnmounted(() => {
         ↑↓ 选择 · Enter 打开 · Esc 清空/关闭
       </div>
     </template>
-    <Settings v-else @close="toggleSettings" />
+    <!-- KeepAlive 缓存设置页(2026-08-13):关闭再开保持滚动位置与组件状态,避免每次重建重复拉取 -->
+    <KeepAlive>
+      <Settings v-if="showSettings" @close="toggleSettings" />
+    </KeepAlive>
     <!-- 2.1 Dock 并入搜索窗口:底部图标排(开关在设置页,下次呼出生效) -->
     <Dock v-if="enableDock" />
     <!-- 右下角缩放手柄(自绘;无边框窗口无系统 resize 边框) -->

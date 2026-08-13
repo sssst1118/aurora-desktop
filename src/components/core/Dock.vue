@@ -18,6 +18,17 @@ const icons = ref<Map<string, string>>(new Map());
 const running = ref<Set<string>>(new Set());
 // 文件拖入窗口悬停(高亮投放区;仅拖到 Dock 区内才点亮)
 const fileDragOver = ref(false);
+// "+" 占位点击轻提示(3s 自动消失;添加仍走文件拖入)
+const addHint = ref(false);
+let addHintTimer: number | undefined;
+
+function showAddHint() {
+  addHint.value = true;
+  if (addHintTimer) window.clearTimeout(addHintTimer);
+  addHintTimer = window.setTimeout(() => {
+    addHint.value = false;
+  }, 3000);
+}
 // 内部 DnD 排序:拖拽源下标 + 悬停目标下标(用于高亮)
 const dragIdx = ref(-1);
 const overIdx = ref(-1);
@@ -221,6 +232,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (runningTimer) window.clearInterval(runningTimer);
   if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
+  if (addHintTimer) window.clearTimeout(addHintTimer);
   unlistenHide?.();
   unlistenShow?.();
 });
@@ -284,6 +296,24 @@ onUnmounted(() => {
         class="absolute bottom-0.5 h-1.5 w-1.5 rounded-full bg-[var(--aurora-success)]"
       ></span>
     </div>
+
+    <!-- "+" 占位点击轻提示(添加只能走拖入,点击仅提示操作路径) -->
+    <div
+      v-if="addHint"
+      class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-[var(--aurora-panel)] border border-[var(--aurora-border)] px-3 py-1 text-xs text-[var(--aurora-text)] shadow-lg"
+    >
+      从资源管理器拖拽 exe/快捷方式到这里即可添加
+    </div>
+
+    <!-- 末尾固定 "+" 占位:有图标时可见,半透明提示可继续添加 -->
+    <button
+      v-if="items.length > 0"
+      class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-[var(--aurora-border)] text-lg text-[var(--aurora-text-dim)]/50 transition-colors hover:border-[var(--aurora-accent)] hover:text-[var(--aurora-accent)]/70"
+      title="从资源管理器拖拽 exe/快捷方式到这里即可添加"
+      @click="showAddHint"
+    >
+      +
+    </button>
 
     <div
       v-if="items.length === 0"
