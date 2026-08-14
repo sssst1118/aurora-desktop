@@ -11,7 +11,7 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
@@ -177,6 +177,11 @@ struct SamplerState {
 
 /// 采样线程运行门控(热生效:enable_island 关闭时 [stop] 置 false,线程自然退出)
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// 线程代次(2026-08-14 审计 F2-4):stop() 递增代次,在途旧线程(尚在 sleep 中,
+/// 最长多活一个采样周期 2s)醒来发现代次不匹配立即退出——否则 stop→ensure_started
+/// 快速切换期间,旧线程会因 RUNNING 已被 swap(true) 而"复活",与新线程并存
+/// 双线程重复 emit sys-status。
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// 幂等启动常驻采样线程(懒启动):
 /// 1. 首轮同步采样一次(CPU 用 120ms 双采样差商,网络速率为 0),立即写快照并 emit,
@@ -188,6 +193,9 @@ pub fn ensure_started(app: &AppHandle) {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
+    // 领取新代次:旧线程(若尚在 sleep 未退出)醒来后因代次不匹配直接退出,
+    // 不会因 RUNNING=true 而复活——双线程竞态消除(2026-08-14 审计 F2-4)
+    let gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     // 首轮同步采样
     let cpu_a = read_cpu_times();
     std::thread::sleep(Duration::from_millis(120));
@@ -208,7 +216,7 @@ pub fn ensure_started(app: &AppHandle) {
     let state = SamplerState { cpu: cpu_b, net, last: Instant::now() };
     if let Err(e) = std::thread::Builder::new()
         .name("sys-sampler".to_string())
-        .spawn(move || sampler_loop(handle, state))
+        .spawn(move || sampler_loop(handle, state, gen))
     {
         eprintln!("[aurora] 启动 sys-sampler 采样线程失败: {e}");
         RUNNING.store(false, Ordering::SeqCst);
@@ -218,12 +226,20 @@ pub fn ensure_started(app: &AppHandle) {
 /// 停止采样线程(热生效;幂等)。线程在下一轮采样前退出;最后快照保留(命令仍可读)。
 pub fn stop() {
     RUNNING.store(false, Ordering::SeqCst);
+    // 递增代次:使在途旧线程(尚在 sleep 的循环体)醒来立即退出,
+    // 不等下一轮 while 判断——配合 ensure_started 的代次领取防双线程并存
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// 循环继续条件(纯判断,便于单测):RUNNING 为 true 且代次仍是本线程的一代
+fn sampler_should_run(gen: u64) -> bool {
+    RUNNING.load(Ordering::SeqCst) && gen == GENERATION.load(Ordering::SeqCst)
 }
 
 /// 常驻循环:每 2s 采样一次,差商计算 CPU/网络速率后写快照并广播事件;
-/// RUNNING 置 false 后线程在下一次醒来退出(最长多等一个采样周期)
-fn sampler_loop(app: AppHandle, mut state: SamplerState) {
-    while RUNNING.load(Ordering::SeqCst) {
+/// RUNNING 置 false 或代次被顶掉(新线程已启动)后线程在下一次醒来退出
+fn sampler_loop(app: AppHandle, mut state: SamplerState, gen: u64) {
+    while sampler_should_run(gen) {
         std::thread::sleep(SAMPLING_INTERVAL);
         let now = Instant::now();
         let cpu_cur = read_cpu_times();
@@ -239,5 +255,41 @@ fn sampler_loop(app: AppHandle, mut state: SamplerState) {
         set_snapshot(status.clone());
         // 广播给灵动岛/Dock/后续模块;托盘 tooltip 更新由集成 agent 在 tray.rs 收尾接线
         let _ = app.emit("sys-status", &status);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 双线程竞态回归(2026-08-14 审计 F2-4):stop 后旧代次线程即使遇到 RUNNING
+    /// 被新 ensure_started swap(true) 也不得复活;只有持最新代次的线程可运行。
+    /// 注意:本用例是唯一读写 RUNNING/GENERATION 的测试,避免并行互踩;
+    /// 结尾复位 RUNNING,保证不影响后续用例。
+    #[test]
+    fn stale_generation_thread_cannot_resume() {
+        // 线程 A(代次 1)运行中
+        RUNNING.store(true, Ordering::SeqCst);
+        GENERATION.store(1, Ordering::SeqCst);
+        assert!(sampler_should_run(1), "运行中且代次匹配 → 继续");
+
+        // stop():RUNNING=false 且代次递增 → 旧代次线程立即判定退出
+        stop();
+        assert!(!sampler_should_run(1), "stop 后旧代次线程必须退出");
+
+        // ensure_started 路径:swap(true) 拿到旧值 false → 领取新代次 → 新线程
+        let swapped = RUNNING.swap(true, Ordering::SeqCst);
+        assert!(!swapped, "stop 后 swap 应拿到 false(旧线程已不在运行)");
+        let new_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(new_gen > 1, "新线程必须持有更新的代次");
+        assert!(sampler_should_run(new_gen), "新代次线程可运行");
+        // 关键断言:即使 RUNNING 为 true,旧代次(仍可能在途 sleep)不得恢复循环
+        assert!(
+            !sampler_should_run(1),
+            "旧代次线程不得因 RUNNING=true 复活——否则与新线程并存双 emit"
+        );
+
+        // 复位:避免影响其他用例(本测试进程中无其他用例读,复位是防御性)
+        RUNNING.store(false, Ordering::SeqCst);
     }
 }

@@ -348,8 +348,16 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> Result<bool, St
 /// 搜索框拖动/缩放后记忆几何(前端 onMoved/onResized 防抖后调用)。
 /// 只写配置文件、不触发热生效:几何是纯展示状态,无运行时逻辑需要同步;
 /// 下次启动由 setup 恢复。
+/// 入参校验(2026-08-14 审计 F2-2):尺寸非有限值(NaN/Inf)拒绝落盘,并 clamp
+/// 到合理范围(下限 360×260 与前端缩放手柄一致,上限 = 显示器两倍)——否则
+/// 配置损坏(如 w=1e30 或负值)会让恢复侧 set_size 出 4G 像素窗口或 0 尺寸窗口。
 #[tauri::command]
 pub fn search_save_geometry(app: tauri::AppHandle, x: i32, y: i32, w: f64, h: f64) -> bool {
+    let Some((w, h)) =
+        crate::win_utils::clamp_search_size(w, h, &crate::win_utils::logical_monitors(&app))
+    else {
+        return false; // 非有限尺寸:拒绝落盘
+    };
     let path = config_path(&app);
     // 并发修复:几何记忆的读-改-写同样取配置锁,与 config_save / dock_set_items 串行,
     // 否则窗口拖动与设置保存并发时互相覆盖(位置/大小随机丢失)

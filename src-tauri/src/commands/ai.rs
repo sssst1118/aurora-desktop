@@ -58,6 +58,11 @@ pub struct AiToolResult {
 /// 发往后端消息数组截断上限(§1.4 会话管理:前端主截断 + 后端兜底)
 const MAX_MESSAGES: usize = 40;
 
+/// 单条消息 content 字节上限(2026-08-14 审计 F2-6):与剪贴板 64KB 上限对齐。
+/// 前端 UI 输入框天然受限,但 IPC 入参可被任意构造(纵深防御),超长 content
+/// 会在构造 SSE 请求体前被截断,防超长请求体/远端接口滥用。
+const MAX_MESSAGE_CONTENT_BYTES: usize = 64 * 1024;
+
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 // ==================== 事件与配置 ====================
@@ -73,14 +78,33 @@ fn load_cfg(app: &AppHandle) -> AppConfig {
     crate::commands::config::load_from(&path)
 }
 
-/// 消息截断:保留最近 40 条(纯函数,可单测;前端主截断,后端兜底防超长请求体)
+/// 单条消息 content 按字节截断到上限(UTF-8 边界安全,纯函数,可单测):
+/// String::truncate 不保证停在字符边界,断在多字节序列中间会产生非法 UTF-8,
+/// 序列化进请求体即为坏 JSON——截断后回退到最近字符边界
+fn truncate_message_content(content: &mut String, max_bytes: usize) {
+    if content.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content.truncate(end);
+}
+
+/// 消息截断:保留最近 40 条 + 单条 content 不超过 64KB(纯函数,可单测;
+/// 前端主截断,后端兜底防超长请求体)
 fn truncate_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let n = messages.len();
-    if n <= MAX_MESSAGES {
+    let mut kept = if n <= MAX_MESSAGES {
         messages
     } else {
         messages[n - MAX_MESSAGES..].to_vec()
+    };
+    for m in &mut kept {
+        truncate_message_content(&mut m.content, MAX_MESSAGE_CONTENT_BYTES);
     }
+    kept
 }
 
 /// 解析后的连接目标(双模式差异已收敛;密钥在此解析,之后只注入 client)
@@ -647,6 +671,44 @@ mod tests {
         assert_eq!(kept.len(), 40);
         assert_eq!(kept.first().unwrap().content, "m10", "保留最近 40 条(m10..m49)");
         assert_eq!(kept.last().unwrap().content, "m49");
+    }
+
+    // ---- 单条消息长度上限(2026-08-14 审计 F2-6)----
+
+    #[test]
+    fn truncate_content_caps_at_64k() {
+        let mut s = "x".repeat(MAX_MESSAGE_CONTENT_BYTES + 100);
+        truncate_message_content(&mut s, MAX_MESSAGE_CONTENT_BYTES);
+        assert_eq!(s.len(), MAX_MESSAGE_CONTENT_BYTES);
+        // 上限内不动
+        let mut ok = "短消息".to_string();
+        truncate_message_content(&mut ok, MAX_MESSAGE_CONTENT_BYTES);
+        assert_eq!(ok, "短消息");
+    }
+
+    #[test]
+    fn truncate_content_keeps_utf8_boundary() {
+        // 中文 3 字节/字:截断点落在多字节序列中间时,必须回退到完整字符,
+        // 不得产出非法 UTF-8(否则序列化进请求体即坏 JSON)
+        let mut s = "汉".repeat(1000);
+        let cut = 1001; // 落在第 334 个"汉"(1002 字节)的中间
+        assert!(!s.is_char_boundary(cut), "前置条件:1001 非字符边界");
+        truncate_message_content(&mut s, cut);
+        assert_eq!(s.len(), 999, "回退到最近字符边界");
+        assert!(s.is_char_boundary(s.len()));
+        assert!(s.chars().all(|c| c == '汉'));
+    }
+
+    #[test]
+    fn truncate_messages_applies_per_message_cap() {
+        // 条数截断与单条截断组合生效
+        let long = "长".repeat(MAX_MESSAGE_CONTENT_BYTES + 1);
+        let msgs: Vec<ChatMessage> = (0..45)
+            .map(|i| ChatMessage { role: "user".into(), content: format!("{i}-{long}") })
+            .collect();
+        let kept = truncate_messages(msgs);
+        assert_eq!(kept.len(), 40, "条数上限仍生效");
+        assert!(kept.iter().all(|m| m.content.len() <= MAX_MESSAGE_CONTENT_BYTES));
     }
 
     // ---------- 双模式端点解析 ----------

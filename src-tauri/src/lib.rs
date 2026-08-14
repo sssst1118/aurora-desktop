@@ -48,9 +48,18 @@ pub fn run() {
             crate::commands::drawer::init_watcher(handle.clone())?;
             // 主面板几何记忆:只恢复记住的尺寸(Phase6 起位置不再恢复——呼出时由
             // show_search_window 绑定岛下方;无记忆尺寸时跟随 tauri.conf.json 680x520)
+            // 尺寸恢复与位置同级 clamp(2026-08-14 审计 F2-2):配置损坏/手改导致
+            // 1e30/负值/NaN 时,clamp 到 [360x260, 显示器两倍],失败回退默认值——
+            // 否则 set_size 直接吃出 4G 像素窗口或 0 尺寸窗口
             if let Some(win) = app.get_webview_window("search") {
                 let w = cfg.search_width.unwrap_or(680.0);
                 let h = cfg.search_height.unwrap_or(520.0);
+                let (w, h) = crate::win_utils::clamp_search_size(
+                    w,
+                    h,
+                    &crate::win_utils::logical_monitors(&handle),
+                )
+                .unwrap_or((680.0, 520.0));
                 let _ = win.set_size(tauri::LogicalSize::new(w, h));
             }
             // Phase6:灵动岛位置恢复(拖动记忆;越界回退顶部居中)

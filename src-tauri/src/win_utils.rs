@@ -42,6 +42,14 @@ pub fn show_search_window(app: &AppHandle) {
                     let py = (iy + ih + 12.0).round() as i32;
                     if let Some((cx, cy)) = clamp_to_visible(px, py, w as i32, h as i32, &monitors) {
                         let _ = win.set_position(tauri::LogicalPosition::new(cx, cy));
+                    } else {
+                        // 完全越界(窗口与所有显示器无交集,如岛被拖出屏或显示器
+                        // 热插拔):回退主显示器顶部居中,保证窗口呼出必可见。
+                        // 此前 None 分支不做任何事 = "越界不动",窗口可能留在
+                        // 屏外完全不可见(2026-08-14 审计 F2-3 修复)
+                        if let Some((fx, fy)) = fallback_position(w as i32, h as i32, &monitors) {
+                            let _ = win.set_position(tauri::LogicalPosition::new(fx, fy));
+                        }
                     }
                 }
             }
@@ -151,7 +159,10 @@ pub fn toggle_all_windows(app: &AppHandle) {
 
 /// 记忆窗口位置恢复时的越界保护(纯函数,便于单测):
 /// 窗口矩形与任一显示器工作区相交 → 保留原位置;完全在屏幕外
-/// (显示器拔掉/分辨率变化)或没有显示器信息 → None,调用方应回退居中。
+/// (显示器拔掉/分辨率变化)或没有显示器信息 → None,调用方应回退
+/// [fallback_position] 兜底可见位置——注意:None 分支不做任何事等于
+/// "越界不动"(窗口可能留在屏外完全不可见),语义与"越界 clamp"不符,
+/// 调用方必须处理 None(2026-08-14 审计 F2-3)。
 /// 入参 monitors 为 (x, y, width, height) 逻辑像素四元组。
 pub fn clamp_to_visible(
     x: i32,
@@ -169,9 +180,59 @@ pub fn clamp_to_visible(
     visible.then_some((x, y))
 }
 
+/// 完全越界时的兜底可见位置(纯函数,与 [clamp_to_visible] 配套):
+/// 主显示器(虚拟桌面坐标中包含原点的那个;找不到则取第一个)顶部居中,
+/// y 留 8px 视觉边距。没有显示器信息 → None(调用方放弃定位)。
+pub fn fallback_position(
+    w: i32,
+    _h: i32,
+    monitors: &[(i32, i32, i32, i32)],
+) -> Option<(i32, i32)> {
+    let primary = monitors
+        .iter()
+        .find(|&&(x, y, mw, mh)| x <= 0 && 0 < x + mw && y <= 0 && 0 < y + mh)
+        .or_else(|| monitors.first())?;
+    Some((primary.0 + (primary.2 - w) / 2, primary.1 + 8))
+}
+
+/// 搜索框尺寸下限(逻辑像素):与前端缩放手柄下限一致(MainPanel.vue
+/// applyResize:Math.max(360, w)/Math.max(260, h))——后端 clamp 不得放行
+/// 前端手柄都达不到的尺寸
+pub const MIN_SEARCH_W: f64 = 360.0;
+pub const MIN_SEARCH_H: f64 = 260.0;
+
+/// 搜索框尺寸落盘/恢复共用 clamp(纯函数,2026-08-14 审计 F2-2):
+/// - 非有限值(NaN/Inf)返回 None,拒绝落盘——配置损坏(如 w=1e30)或手改
+///   可致 4G 像素窗口;负值可致 0 尺寸窗口;
+/// - 下限 360×260(前端缩放手柄下限),上限 = 最大显示器逻辑尺寸 × 2
+///   (窗口允许跨屏放大,但两倍单屏足够宽松地拒绝荒谬值);
+/// - 无显示器信息时上限兜底 4096×4096。
+/// 入参 monitors 为 (x, y, width, height) 逻辑像素四元组(同 logical_monitors)。
+pub fn clamp_search_size(
+    w: f64,
+    h: f64,
+    monitors: &[(i32, i32, i32, i32)],
+) -> Option<(f64, f64)> {
+    if !w.is_finite() || !h.is_finite() {
+        return None;
+    }
+    let (max_w, max_h) = monitors
+        .iter()
+        .fold((0i32, 0i32), |(mw, mh), &(_, _, mw2, mh2)| (mw.max(mw2), mh.max(mh2)));
+    let (max_w, max_h) = if max_w > 0 && max_h > 0 {
+        (max_w as f64 * 2.0, max_h as f64 * 2.0)
+    } else {
+        (4096.0, 4096.0)
+    };
+    Some((
+        w.clamp(MIN_SEARCH_W, max_w.max(MIN_SEARCH_W)),
+        h.clamp(MIN_SEARCH_H, max_h.max(MIN_SEARCH_H)),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::clamp_to_visible;
+    use super::{clamp_search_size, clamp_to_visible, fallback_position};
 
     /// 单显示器工作区 1920x1080
     fn mono() -> Vec<(i32, i32, i32, i32)> {
@@ -204,5 +265,52 @@ mod tests {
     #[test]
     fn placeholder_compiles() {
         assert!(true);
+    }
+
+    // ---- 越界兜底位置(2026-08-14 审计 F2-3)----
+
+    #[test]
+    fn fallback_centers_top_on_primary_monitor() {
+        let mons = mono();
+        // 680x520 窗口在主屏(1920x1080)顶部居中:y=0+8
+        assert_eq!(fallback_position(680, 520, &mons), Some((620, 8)));
+    }
+
+    #[test]
+    fn fallback_picks_monitor_containing_origin() {
+        // 双屏:主屏在右侧(坐标含原点),副屏在左侧(负坐标)
+        let mons = vec![(-1920, 0, 1920, 1080), (0, 0, 1920, 1080)];
+        assert_eq!(fallback_position(680, 520, &mons), Some((620, 8)));
+        // 无显示器信息 → None(调用方放弃定位)
+        assert_eq!(fallback_position(680, 520, &[]), None);
+    }
+
+    // ---- 搜索框尺寸 clamp(2026-08-14 审计 F2-2)----
+
+    #[test]
+    fn search_size_rejects_non_finite() {
+        let mons = mono();
+        assert_eq!(clamp_search_size(f64::NAN, 400.0, &mons), None);
+        assert_eq!(clamp_search_size(400.0, f64::INFINITY, &mons), None);
+        assert_eq!(clamp_search_size(f64::NEG_INFINITY, -3.0, &mons), None);
+    }
+
+    #[test]
+    fn search_size_clamped_to_sane_range() {
+        let mons = mono(); // 1920x1080 → 上限 3840x2160
+        // 超大值(配置损坏:1e30)→ 上限
+        assert_eq!(clamp_search_size(1e30, 1e30, &mons), Some((3840.0, 2160.0)));
+        // 负值/过小 → 下限 360x260(前端缩放手柄下限)
+        assert_eq!(clamp_search_size(-5.0, 10.0, &mons), Some((360.0, 260.0)));
+        // 正常值原样返回
+        assert_eq!(clamp_search_size(680.0, 520.0, &mons), Some((680.0, 520.0)));
+        // 单维越界单维 clamp
+        assert_eq!(clamp_search_size(680.0, 1e9, &mons), Some((680.0, 2160.0)));
+    }
+
+    #[test]
+    fn search_size_no_monitors_uses_fallback_cap() {
+        assert_eq!(clamp_search_size(1e30, 1e30, &[]), Some((4096.0, 4096.0)));
+        assert_eq!(clamp_search_size(300.0, 200.0, &[]), Some((360.0, 260.0)));
     }
 }

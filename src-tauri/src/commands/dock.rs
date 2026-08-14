@@ -361,6 +361,27 @@ fn launching() -> &'static Mutex<HashSet<String>> {
     LAUNCHING.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// 标记条目"启动中"(检查 + 标记在同一锁区间内完成,TOCTOU 修复 2026-08-14):
+/// 返回 false 表示该条目已在启动中,调用方应短路返回。
+/// 若检查(contains)与标记(insert)分处两次独立锁获取,两个并发请求可同时
+/// 通过检查并各自 opener 启动(慢启动 lnk 解析 ~1.3s 期间双击,或并发 IPC)→
+/// 双实例。同一锁区间内先查后插,竞态窗口被消除。
+fn mark_launching(path: &str) -> bool {
+    let mut g = launching().lock().unwrap_or_else(|p| p.into_inner());
+    if g.contains(path) {
+        return false;
+    }
+    g.insert(path.to_string());
+    true
+}
+
+/// 解除"启动中"标记(启动失败回滚 / 后台轮询到窗口出现或超时)
+fn unmark_launching(path: &str) {
+    if let Ok(mut g) = launching().lock() {
+        g.remove(path);
+    }
+}
+
 /// 启动或聚焦 Dock 项:运行中 → 恢复最小化并置前台;未运行 → opener 启动
 #[tauri::command]
 pub fn dock_launch(item: DockItem) -> bool {
@@ -375,12 +396,9 @@ pub fn dock_launch(item: DockItem) -> bool {
         }
         return true;
     }
-    // 上次点击的启动还在进行中(窗口未出现)→ 直接返回,防排队重复启动
-    if launching()
-        .lock()
-        .map(|g| g.contains(&item.path))
-        .unwrap_or(false)
-    {
+    // 检查+标记同一锁区间(TOCTOU 修复):并发重复点击/IPC 只有第一个能通过,
+    // 第二个立即短路,不会各自 opener 启动双实例
+    if !mark_launching(&item.path) {
         return true;
     }
     // 直接打开解析出的目标 exe:实测 lnk 经 Shell 启动要 ~1.3s,直开 exe 仅 ~17ms。
@@ -393,11 +411,10 @@ pub fn dock_launch(item: DockItem) -> bool {
         &item.path
     };
     if !opener::open(launch_path).is_ok() {
+        // 启动失败:回滚标记,允许后续重试(与"启动中短路"不冲突——标记在
+        // opener 之前就位,失败必须立即解除,否则该条目永远无法再启动)
+        unmark_launching(&item.path);
         return false;
-    }
-    // 标记启动中,后台轮询到窗口出现(或超时)后解除
-    if let Ok(mut g) = launching().lock() {
-        g.insert(item.path.clone());
     }
     let (path, target) = (item.path.clone(), target);
     std::thread::spawn(move || {
@@ -414,9 +431,7 @@ pub fn dock_launch(item: DockItem) -> bool {
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
-        if let Ok(mut g) = launching().lock() {
-            g.remove(&path);
-        }
+        unmark_launching(&path);
     });
     true
 }
@@ -675,6 +690,19 @@ mod tests {
         let item = DockItem { name: "x".into(), path: r"C:\definitely\not\exists_aurora_b.exe".into() };
         assert!(!dock_launch(item.clone()));
         assert!(!launching().lock().unwrap().contains(&item.path));
+    }
+
+    #[test]
+    fn mark_launching_deduplicates_same_path() {
+        // TOCTOU 回归(2026-08-14):检查与标记必须在同一锁区间,并发第二次请求
+        // 必须被拒绝。专用路径避免与并行测试互踩 LAUNCHING 集合
+        let p = r"C:\definitely\not\exists_aurora_c.exe";
+        assert!(mark_launching(p), "首次标记应成功");
+        assert!(!mark_launching(p), "标记未解除期间重复请求必须被拒绝");
+        unmark_launching(p);
+        assert!(mark_launching(p), "解除后可再次启动");
+        unmark_launching(p);
+        assert!(!launching().lock().unwrap().contains(p), "最终应清干净");
     }
 
     #[test]

@@ -504,7 +504,10 @@ pub fn multi_apply(app: &tauri::AppHandle) -> Result<(), String> {
     for m in &mons {
         let st = states.get(m.index as usize).and_then(|s| s.clone());
         match st {
-            Some(st) if st.kind == "video" || st.kind == "html" => {
+            // 历史遗留:kind == "html" 曾是分支之一(html 曾属壁纸白名单),2026-08-13
+            // 安全加固已把 html 移出白名单(material_kind 只返回 image/video/other),
+            // 状态机不可能写入 "html" —— 只保留 video 可注入,其余(图片/other)走系统壁纸
+            Some(st) if st.kind == "video" => {
                 if let Err(e) = apply_monitor_locked(app, m.index) {
                     errors.push(format!("屏 {} 注入失败: {e}", m.index));
                 }
