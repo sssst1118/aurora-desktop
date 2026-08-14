@@ -301,9 +301,13 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
     // 包装脚本(固定文案,不含任何路径):等静默安装完成 → 启动新版本
     // (独立 cmd 进程,与 app 生命周期解耦)。
     // 安全加固:路径经环境变量 %AURORA_SETUP_EXE% / %AURORA_NEW_EXE% 注入,
-    // 不拼进命令行——直接 format 拼接时路径含 %VAR% 会被 cmd 环境变量展开误伤,
-    // 含 & 等特殊字符还会被注入额外命令;cmd 的变量展开先于特殊字符解析且
-    // 不二次展开,env 注入后路径原样作为参数使用
+    // 不拼进命令行——直接 format 拼接时路径含空格会拆参、含 & 会被注入命令。
+    // 风险闭环由两层共同保证:① 注入值在脚本中被双引号包裹,cmd 展开 %VAR%
+    // 后,插入的文本不再重新按空格/& 等元字符解析(变量替换是纯文本替换,
+    // 替换结果不二次展开),路径作为整体参数传给 start;② 唯一的残余风险是
+    // 值内含双引号破坏引号配对,但注入值来自程序内部路径(updates 目录内
+    // Aurora_setup_<version>.exe,选包时剥离前后缀,安装前再经 SHA-256 复验),
+    // 双引号是 Windows 文件名字符集中的非法字符,该风险天然排除。
     const INSTALL_SCRIPT: &str =
         "start /wait \"\" \"%AURORA_SETUP_EXE%\" /S && start \"\" \"%AURORA_NEW_EXE%\"";
     let _ = std::process::Command::new("cmd")

@@ -301,6 +301,12 @@ pub fn resolve_lnk_target(path: &Path) -> Option<String> {
 
 // ==================== 条目状态(内存缓存 + config 落盘) ====================
 
+/// Dock 条目数上限(2026-08-14 审计 F3-3):此前前端可传任意长度 Vec<DockItem>
+/// 直接写 config.json——条目无上限时异常/恶意输入会让配置文件无限膨胀,
+/// 且每次读-改-写全量序列化的配置链路随之拖慢。50 条远超正常用法
+/// (常用 Dock 不过十来个),超限拒绝。
+pub const MAX_DOCK_ITEMS: usize = 50;
+
 static ITEM_CACHE: OnceLock<Mutex<Option<(PathBuf, Vec<DockItem>)>>> = OnceLock::new();
 
 fn item_cache() -> &'static Mutex<Option<(PathBuf, Vec<DockItem>)>> {
@@ -320,8 +326,16 @@ pub fn load_items(cfg_path: &Path) -> Vec<DockItem> {
     }
 }
 
-/// 写 Dock 条目:更新内存缓存并写回 config(保留其余字段);成功返回 true
+/// 写 Dock 条目:更新内存缓存并写回 config(保留其余字段);成功返回 true。
+/// 条目数超 [MAX_DOCK_ITEMS] 上限拒绝(返回 false,不动磁盘与内存缓存)
 pub fn save_items(cfg_path: &Path, items: &[DockItem]) -> bool {
+    if items.len() > MAX_DOCK_ITEMS {
+        eprintln!(
+            "[aurora] dock 条目数超上限({} > {MAX_DOCK_ITEMS}),拒绝保存",
+            items.len()
+        );
+        return false;
+    }
     // 并发修复(2026-08-13):Dock 条目与设置同存 config.json(dock_items 字段),
     // 本条目的"读全量→改字段→写全量"与 config_save / search_save_geometry 是同一份
     // 文件的竞态写,必须共用配置锁——否则条目保存与设置保存并发时后写覆盖先写,
@@ -346,10 +360,16 @@ pub fn dock_get_items(app: tauri::AppHandle) -> Vec<DockItem> {
     load_items(&config_path(&app))
 }
 
-/// 写回 Dock 条目(内存缓存 + config 落盘)
+/// 写回 Dock 条目(内存缓存 + config 落盘);条目数超 [MAX_DOCK_ITEMS] 上限
+/// 返回 Err(前端据此提示用户移除部分条目,而非静默失败)
 #[tauri::command]
-pub fn dock_set_items(app: tauri::AppHandle, items: Vec<DockItem>) -> bool {
-    save_items(&config_path(&app), &items)
+pub fn dock_set_items(app: tauri::AppHandle, items: Vec<DockItem>) -> Result<bool, String> {
+    if items.len() > MAX_DOCK_ITEMS {
+        return Err(format!(
+            "Dock 条目数超过上限({MAX_DOCK_ITEMS} 条),请先移除部分条目"
+        ));
+    }
+    Ok(save_items(&config_path(&app), &items))
 }
 
 /// "启动中"集合:防连点排队重复启动。窗口出现前 running_windows 匹配不到该应用,
@@ -631,6 +651,33 @@ mod tests {
         assert!(save_items(&cfg_path, &items));
         assert!(save_items(&cfg_path, &[]));
         assert!(load_items(&cfg_path).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- 条目数上限(2026-08-14 审计 F3-3)----
+
+    #[test]
+    fn items_over_limit_rejected_and_old_state_kept() {
+        let dir = tmp_dir("items_limit");
+        let cfg_path = dir.join("config.json");
+        // 先正常写入 1 条(旧状态)
+        let items = vec![DockItem { name: "a".into(), path: r"C:\a.exe".into() }];
+        assert!(save_items(&cfg_path, &items));
+        // 51 条超上限:拒绝写盘,磁盘与内存缓存均保持旧值
+        let over: Vec<DockItem> = (0..=(MAX_DOCK_ITEMS as i32))
+            .map(|i| DockItem { name: format!("o{i}"), path: format!(r"C:\o{i}.exe") })
+            .collect();
+        assert!(!save_items(&cfg_path, &over), "超限应拒绝落盘");
+        let kept = load_items(&cfg_path);
+        assert_eq!(kept.len(), 1, "拒绝后内存缓存保持旧值");
+        assert_eq!(kept[0].name, "a");
+        assert_eq!(load_from(&cfg_path).dock_items.len(), 1, "拒绝后磁盘保持旧值");
+        // 恰好 50 条:放行
+        let exact: Vec<DockItem> = (0..MAX_DOCK_ITEMS)
+            .map(|i| DockItem { name: format!("e{i}"), path: format!(r"C:\e{i}.exe") })
+            .collect();
+        assert!(save_items(&cfg_path, &exact), "恰好 50 条应放行");
+        assert_eq!(load_items(&cfg_path).len(), MAX_DOCK_ITEMS);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

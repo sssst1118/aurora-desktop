@@ -372,13 +372,28 @@ pub fn search_save_geometry(app: tauri::AppHandle, x: i32, y: i32, w: f64, h: f6
 
 /// 灵动岛拖动后记忆位置(前端 onMoved 防抖后调用;None 语义=居中,由前端判断)。
 /// 只写配置文件、不触发热生效:位置是纯展示状态,下次启动由 setup 恢复。
+/// 入参校验(2026-08-14 审计 F3-1,与 search_save_geometry 对齐):落盘前把坐标
+/// 裁决到可见位置——与任一显示器相交保留原值;完全越界(显示器拔掉/分辨率
+/// 变化)写主屏顶部居中兜底。此前直接落盘任意 i32:越界坐标落盘后,恢复侧
+/// clamp_to_visible 返回 None 且不做事,岛会停在 tauri.conf 初始位置如
+/// (0,0) 左上角。没有显示器信息时拒绝落盘(裁决不出合理位置)。
 #[tauri::command]
 pub fn island_save_geometry(app: tauri::AppHandle, x: i32, y: i32) -> bool {
+    let monitors = crate::win_utils::logical_monitors(&app);
+    let Some((cx, cy)) = crate::win_utils::clamp_or_fallback_position(
+        x,
+        y,
+        crate::win_utils::ISLAND_W,
+        crate::win_utils::ISLAND_H,
+        &monitors,
+    ) else {
+        return false; // 无显示器信息:裁决不出合理位置,拒绝落盘
+    };
     let path = config_path(&app);
     let _guard = config_lock().lock().unwrap_or_else(|p| p.into_inner());
     let mut cfg = load_from(&path);
-    cfg.island_x = Some(x);
-    cfg.island_y = Some(y);
+    cfg.island_x = Some(cx);
+    cfg.island_y = Some(cy);
     save_to(&path, &cfg)
 }
 

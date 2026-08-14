@@ -62,13 +62,20 @@ pub fn run() {
                 .unwrap_or((680.0, 520.0));
                 let _ = win.set_size(tauri::LogicalSize::new(w, h));
             }
-            // Phase6:灵动岛位置恢复(拖动记忆;越界回退顶部居中)
+            // Phase6:灵动岛位置恢复(拖动记忆;完全越界回退主屏顶部居中)。
+            // 2026-08-14 审计 F3-1:此前 clamp_to_visible 返回 None 时不做任何事,
+            // 越界坐标(显示器拔掉/分辨率变化)会让岛停在 tauri.conf 初始位置
+            // 如 (0,0) 左上角——现 None 分支改走 fallback 兜底可见位置
             if let Some(win) = app.get_webview_window("island") {
                 if let (Some(x), Some(y)) = (cfg.island_x, cfg.island_y) {
                     let monitors = crate::win_utils::logical_monitors(&handle);
-                    if let Some((cx, cy)) =
-                        crate::win_utils::clamp_to_visible(x, y, 378, 46, &monitors)
-                    {
+                    if let Some((cx, cy)) = crate::win_utils::clamp_or_fallback_position(
+                        x,
+                        y,
+                        crate::win_utils::ISLAND_W,
+                        crate::win_utils::ISLAND_H,
+                        &monitors,
+                    ) {
                         let _ = win.set_position(tauri::LogicalPosition::new(cx, cy));
                     }
                 }
@@ -76,40 +83,48 @@ pub fn run() {
             // Phase4 4.1 电池降载:常驻检测线程,内部每轮重读配置
             // (热生效:总开关/降载开关/阈值/周期运行时改配置即时生效,不重启)
             crate::wallpaper_dynamic::spawn_battery_watcher(handle.clone(), &cfg);
-            // 5.1 自动更新:启动 15s 后 + 每 6h 静默检查;发现新版 emit update-available
-            if crate::commands::config::load_from(&crate::commands::config::config_path(&handle))
-                .update_enabled
-            {
-                let upd_app = handle.clone();
-                std::thread::Builder::new()
-                    .name("updater-watch".to_string())
-                    .spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_secs(15));
-                        loop {
-                            // 热生效:每轮重读 update_enabled,运行时关开关即停止检查(开恢复)
-                            let cfg = crate::commands::config::load_from(
-                                &crate::commands::config::config_path(&upd_app),
-                            );
-                            if cfg.update_enabled {
-                                // 注意:app2 由 async 块独占(move),emit 也在块内用 app2,
-                                // 外层循环只持有 upd_app 用于 clone,避免 use-after-move
-                                let app2 = upd_app.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    let r = crate::commands::updater_cmd::update_check(app2.clone())
-                                        .await;
-                                    if r.status == "available" {
-                                        let _ = app2.emit(
-                                            "update-available",
-                                            &serde_json::json!({ "version": r.version, "notes": r.notes }),
-                                        );
-                                    }
-                                });
-                            }
-                            std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
+            // 5.1 自动更新:启动 15s 后 + 每 6h 静默检查;发现新版 emit update-available。
+            // 2026-08-14 审计 F3-2:线程改为常驻 + 60s 轮询重读配置,检测到
+            // update_enabled false→true 跳变立即触发一轮检查。此前两处缺陷:
+            // ① 关闭期间照睡 6h,重新开启后最长 6h 才首查;② 线程只在启动时
+            // 开关为 true 才 spawn,启动时 false 则之后开启永不检查。
+            let upd_app = handle.clone();
+            std::thread::Builder::new()
+                .name("updater-watch".to_string())
+                .spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(15));
+                    let mut prev_enabled = false; // 首轮视为 false→true 跳变:启动即查一次(与旧行为一致)
+                    let mut last_check: Option<std::time::Instant> = None;
+                    loop {
+                        // 热生效:每轮重读 update_enabled,运行时关开关即停止检查(开立即恢复)
+                        let cfg = crate::commands::config::load_from(
+                            &crate::commands::config::config_path(&upd_app),
+                        );
+                        let turned_on = cfg.update_enabled && !prev_enabled;
+                        prev_enabled = cfg.update_enabled;
+                        let due = last_check.map_or(true, |t| {
+                            t.elapsed() >= std::time::Duration::from_secs(6 * 3600)
+                        });
+                        if cfg.update_enabled && (turned_on || due) {
+                            last_check = Some(std::time::Instant::now());
+                            // 注意:app2 由 async 块独占(move),emit 也在块内用 app2,
+                            // 外层循环只持有 upd_app 用于 clone,避免 use-after-move
+                            let app2 = upd_app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let r = crate::commands::updater_cmd::update_check(app2.clone())
+                                    .await;
+                                if r.status == "available" {
+                                    let _ = app2.emit(
+                                        "update-available",
+                                        &serde_json::json!({ "version": r.version, "notes": r.notes }),
+                                    );
+                                }
+                            });
                         }
-                    })
-                    .ok();
-            }
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                    }
+                })
+                .ok();
             // Phase5 多屏热插拔:2s 轮询显示器布局签名(数量/坐标/尺寸/主屏),变化即重建多屏 attach;
             // 常驻线程内部自行判开关(热生效:运行中开/关动态壁纸与多屏都响应),
             // 总开关或多屏关时不做事只重置基线

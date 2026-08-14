@@ -195,6 +195,25 @@ pub fn fallback_position(
     Some((primary.0 + (primary.2 - w) / 2, primary.1 + 8))
 }
 
+/// 灵动岛窗口固定逻辑尺寸(Phase6 定稿):lib.rs 位置恢复与 config.rs 落盘
+/// 共用,免两处魔法数漂移
+pub const ISLAND_W: i32 = 378;
+pub const ISLAND_H: i32 = 46;
+
+/// 可见位置裁决(纯函数,[clamp_to_visible] 与 [fallback_position] 的组合):
+/// 与任一显示器相交 → 保留原位置;完全越界(显示器拔掉/分辨率变化)→
+/// 主屏顶部居中兜底;没有显示器信息 → None(调用方放弃定位)。
+/// 岛位置恢复与落盘共用,保证"落盘的位置下次启动必可见"。
+pub fn clamp_or_fallback_position(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    monitors: &[(i32, i32, i32, i32)],
+) -> Option<(i32, i32)> {
+    clamp_to_visible(x, y, w, h, monitors).or_else(|| fallback_position(w, h, monitors))
+}
+
 /// 搜索框尺寸下限(逻辑像素):与前端缩放手柄下限一致(MainPanel.vue
 /// applyResize:Math.max(360, w)/Math.max(260, h))——后端 clamp 不得放行
 /// 前端手柄都达不到的尺寸
@@ -232,7 +251,7 @@ pub fn clamp_search_size(
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_search_size, clamp_to_visible, fallback_position};
+    use super::{clamp_or_fallback_position, clamp_search_size, clamp_to_visible, fallback_position};
 
     /// 单显示器工作区 1920x1080
     fn mono() -> Vec<(i32, i32, i32, i32)> {
@@ -283,6 +302,21 @@ mod tests {
         assert_eq!(fallback_position(680, 520, &mons), Some((620, 8)));
         // 无显示器信息 → None(调用方放弃定位)
         assert_eq!(fallback_position(680, 520, &[]), None);
+    }
+
+    // ---- 可见位置裁决(2026-08-14 审计 F3-1:clamp 与 fallback 串联)----
+
+    #[test]
+    fn clamp_or_fallback_keeps_visible_and_falls_back_off_screen() {
+        let mons = mono();
+        // 屏内/部分可见 → 保留原值
+        assert_eq!(clamp_or_fallback_position(100, 50, 378, 46, &mons), Some((100, 50)));
+        assert_eq!(clamp_or_fallback_position(1900, 50, 378, 46, &mons), Some((1900, 50)));
+        // 完全越界 → 主屏顶部居中兜底(378 宽:(1920-378)/2=771;y=8)
+        assert_eq!(clamp_or_fallback_position(3000, 3000, 378, 46, &mons), Some((771, 8)));
+        assert_eq!(clamp_or_fallback_position(-800, 0, 378, 46, &mons), Some((771, 8)));
+        // 无显示器信息 → None(调用方放弃定位)
+        assert_eq!(clamp_or_fallback_position(10, 10, 378, 46, &[]), None);
     }
 
     // ---- 搜索框尺寸 clamp(2026-08-14 审计 F2-2)----

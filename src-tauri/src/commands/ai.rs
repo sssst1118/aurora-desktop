@@ -441,6 +441,13 @@ fn fmt_clipboard_summary(items: &[crate::commands::clipboard::ClipboardItem]) ->
 
 // ==================== 命令 ====================
 
+/// 工具循环上限裁决(纯函数,2026-08-14 审计 F3-4):clamp 到 [1, 10]。
+/// 此前只有 max(1) 无上界——配置手改/异常值(如 1e6)会放行几乎无限轮工具
+/// 循环,对话挂死 + 烧 API 配额;上限 10 轮已远超正常任务所需。
+pub fn clamp_max_tool_rounds(n: u32) -> u32 {
+    n.clamp(1, 10)
+}
+
 /// 流式对话(SSE):spawn 异步任务,逐行 emit `ai-event`(chunk/tool/done/error)。
 /// 返回 Err 仅代表"任务未能启动"(消息为空/参数配置类错误,已 emit error)。
 /// 安全加固:model/base_url 不再作为入参(只信任配置),防 base_url 可覆盖而
@@ -457,7 +464,7 @@ pub fn ai_chat_stream(app: AppHandle, messages: Vec<ChatMessage>) -> Result<(), 
         Err(kind) => return Err(classify_error(&kind, &cfg.ai_provider)),
     };
     let tools_enabled = cfg.ai_tools_enabled;
-    let max_rounds = cfg.ai_max_tool_rounds.max(1);
+    let max_rounds = clamp_max_tool_rounds(cfg.ai_max_tool_rounds);
 
     tauri::async_runtime::spawn(async move {
         let msgs: Vec<Value> = truncate_messages(messages)
@@ -539,7 +546,7 @@ pub async fn ai_chat_completion(
     match run_tool_loop(
         &client,
         cfg.ai_tools_enabled,
-        cfg.ai_max_tool_rounds.max(1),
+        clamp_max_tool_rounds(cfg.ai_max_tool_rounds),
         false,
         msgs,
         &exec,
@@ -931,6 +938,18 @@ mod tests {
         assert!(r.contains("已停止:工具调用超过 3 轮上限"), "超限终止并提示,实际: {r}");
         assert_eq!(*client.requests.lock().unwrap(), 3, "3 轮上限 = 恰好 3 次请求,不死循环");
         assert_eq!(tools_log.len(), 3, "每轮 1 个工具调用 → 3 次 on_tool");
+    }
+
+    // ---- 工具轮次上限裁决(2026-08-14 审计 F3-4) ----
+
+    #[test]
+    fn max_tool_rounds_clamped_to_1_to_10() {
+        assert_eq!(clamp_max_tool_rounds(0), 1, "0 轮视为 1(与原 max(1) 语义一致)");
+        assert_eq!(clamp_max_tool_rounds(1), 1);
+        assert_eq!(clamp_max_tool_rounds(3), 3, "默认值在区间内原样保留");
+        assert_eq!(clamp_max_tool_rounds(10), 10, "上限边界放行");
+        assert_eq!(clamp_max_tool_rounds(11), 10);
+        assert_eq!(clamp_max_tool_rounds(1_000_000), 10, "异常大值封顶,防无限工具循环");
     }
 
     #[test]
