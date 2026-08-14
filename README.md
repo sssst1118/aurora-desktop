@@ -34,7 +34,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11. The Island 
 
 ## 🚀 Quick Start
 
-1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.2.1_x64-setup.exe` recommended, or `Aurora_0.2.1_x64_en-US.msi`)
+1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.2.2_x64-setup.exe` recommended, or `Aurora_0.2.2_x64_en-US.msi`)
 2. Install and launch Aurora
 3. Press `Ctrl+Shift+Space` (or double-click the Island) to summon the main panel and start
 
