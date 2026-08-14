@@ -214,6 +214,7 @@ onUnmounted(() => {
 }
 
 .drawer-tab {
+  position: relative; /* 选中态极光竖条定位基准(选中语言统一,设计文档 §5.3) */
   display: flex;
   align-items: center;
   gap: 7px;
@@ -222,7 +223,7 @@ onUnmounted(() => {
   border-radius: 9px;
   background: transparent;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--aurora-text-dim);
   cursor: pointer;
   transition: all 0.13s ease;
@@ -234,15 +235,28 @@ onUnmounted(() => {
   color: var(--aurora-text);
 }
 
+/* 选中态:field 底 + 左侧极光渐变竖条(替代原 inset 描边,与 SearchView/剪贴板同款) */
 .drawer-tab.on {
   background: var(--aurora-field);
   color: var(--aurora-text);
-  box-shadow: inset 0 0 0 1px var(--aurora-border);
+}
+
+.drawer-tab.on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 15px;
+  width: 3px;
+  border-radius: 0 99px 99px 0;
+  background: linear-gradient(180deg, var(--aur-1), var(--aur-2));
+  box-shadow: 0 0 8px var(--aur-2);
 }
 
 .drawer-tab .cnt {
   margin-left: auto;
-  font-size: 9.5px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 99px;
   background: var(--aurora-field);

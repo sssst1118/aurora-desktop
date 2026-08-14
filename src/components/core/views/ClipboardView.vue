@@ -233,6 +233,7 @@ onUnmounted(() => {
 }
 
 .clip-item {
+  position: relative; /* 选中态极光竖条定位基准(选中语言统一,设计文档 §5.3) */
   display: flex;
   align-items: center;
   gap: 11px;
@@ -246,6 +247,20 @@ onUnmounted(() => {
 .clip-item:hover,
 .clip-item.selected {
   background: var(--aurora-field);
+}
+
+/* 选中态:左侧极光渐变竖条 + 光晕(与 SearchView .result-item.selected 同款) */
+.clip-item.selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 18px;
+  width: 3px;
+  border-radius: 0 99px 99px 0;
+  background: linear-gradient(180deg, var(--aur-1), var(--aur-2));
+  box-shadow: 0 0 8px var(--aur-2);
 }
 
 .type-ico {
@@ -265,14 +280,14 @@ onUnmounted(() => {
 }
 
 .summary {
-  font-size: 12.5px;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .meta {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--aurora-text-dim);
   margin-top: 2px;
 }

@@ -35,6 +35,11 @@ const win = getCurrentWindow();
 const items = ref<DockItem[]>([]);
 const icons = ref<Map<string, string>>(new Map());
 const running = ref<Set<string>>(new Set());
+/** 加载失败原因(非空时空态区显示真实错误,不再伪装成"应用被清空";2026-08-14 审计) */
+const loadError = ref("");
+/** 最近一次 addPaths 写盘失败原因(空 = 成功或全部已存在;父组件 await 后读此字段
+ *  区分「已存在」与「保存失败」两种语义,见 defineExpose) */
+const addFailReason = ref("");
 
 /** 溢出:条目超过可视容量 → 渲染前 N + 「…」浮层列全条目。
     N 由 mini-dock 实测宽度动态算出(见 recomputeVisible),默认 6 兜底首帧 */
@@ -95,10 +100,15 @@ async function iconOf(path: string): Promise<string | undefined> {
   return undefined;
 }
 
-/** 添加条目(去重;写后端持久化 + 后台取图标)。返回实际新增数(0 = 已存在) */
+/**
+ * 添加条目(去重;写后端持久化 + 后台取图标)。返回实际新增数(0 = 已存在 或 写盘失败)。
+ * 语义区分:失败时置 addFailReason(父组件 await 后读 dockRef.addFailReason.value
+ * 区分「已存在」与「保存失败」;返回结构不变,与旧调用方契约兼容)。
+ */
 async function addPaths(paths: string[]): Promise<number> {
+  addFailReason.value = ""; // 每次尝试先复位,父组件 await 后读到的即本次结果
   const fresh = paths.filter((p) => !items.value.some((it) => it.path === p));
-  if (fresh.length === 0) return 0;
+  if (fresh.length === 0) return 0; // 全部已存在(调用方按 0 提示"已在岛内")
   const next = [...items.value, ...fresh.map((p) => ({ name: nameOf(p), path: p }))];
   try {
     await invoke<boolean>("dock_set_items", { items: next });
@@ -107,6 +117,7 @@ async function addPaths(paths: string[]): Promise<number> {
     return fresh.length;
   } catch (e) {
     console.error("dock_set_items failed", e);
+    addFailReason.value = typeof e === "string" ? e : String(e);
     return 0;
   }
 }
@@ -151,10 +162,14 @@ async function pollRunning() {
 async function loadItems() {
   try {
     items.value = (await invoke<DockItem[]>("dock_get_items")) ?? [];
+    loadError.value = "";
     // 图标预热:挂载即后台发起全部提取(后端缓存幂等),展开零延迟
     for (const it of items.value) void iconOf(it.path);
   } catch (e) {
     console.error("dock_get_items failed", e);
+    // 加载失败不吞错误:空态区显示真实原因(否则像"应用被清空"),并可点击重试
+    loadError.value = typeof e === "string" ? e : String(e);
+    emit("hint", `应用加载失败:${loadError.value}`);
   }
 }
 
@@ -230,7 +245,7 @@ onUnmounted(() => {
 // items 增删后溢出判定变化(是否腾出「…」按钮位),重算容量
 watch(items, recomputeVisible);
 
-defineExpose({ addPaths });
+defineExpose({ addPaths, addFailReason });
 </script>
 
 <template>
@@ -259,12 +274,17 @@ defineExpose({ addPaths });
       </span>
       <!-- 运行中指示点 -->
       <span v-if="running.has(it.path)" class="running-dot"></span>
-      <!-- 悬停 ✕ 删除(不触发启动:stop 掉点击) -->
+      <!-- 悬停 ✕ 删除(不触发启动:stop 掉点击;瓦片本身是 button,徽章不能嵌套 button,
+           用 tabindex+role 提供键盘可达,Enter/Space 触发删除) -->
       <span
         class="del-badge"
+        role="button"
+        tabindex="0"
         :title="`移除 ${it.name}`"
         :aria-label="`移除 ${it.name}`"
         @click.stop="removeItem(it)"
+        @keydown.enter.stop.prevent="removeItem(it)"
+        @keydown.space.stop.prevent="removeItem(it)"
       >
         <AuroraIcon name="close" :size="8" />
       </span>
@@ -292,7 +312,16 @@ defineExpose({ addPaths });
       <AuroraIcon name="plus" :size="12" />
     </button>
 
-    <span v-if="items.length === 0" class="dock-empty">拖拽应用到这里</span>
+    <!-- 空态:加载失败显示真实错误并可点击重试(否则像"应用被清空"误导) -->
+    <button
+      v-if="items.length === 0"
+      class="dock-empty"
+      :class="{ err: loadError }"
+      :title="loadError ? '点击重试加载应用' : undefined"
+      @click="loadItems"
+    >
+      {{ loadError ? "应用加载失败,点击重试" : "拖拽应用到这里" }}
+    </button>
   </div>
 
   <!-- 溢出浮层:Teleport 出药丸避免 overflow:hidden 裁剪;窗口已临时加高容纳 -->
@@ -320,9 +349,13 @@ defineExpose({ addPaths });
         <span v-if="running.has(it.path)" class="running-dot dock-overflow-dot"></span>
         <span
           class="del-badge dock-overflow-del"
+          role="button"
+          tabindex="0"
           :title="`移除 ${it.name}`"
           :aria-label="`移除 ${it.name}`"
           @click.stop="removeItem(it)"
+          @keydown.enter.stop.prevent="removeItem(it)"
+          @keydown.space.stop.prevent="removeItem(it)"
         >
           <AuroraIcon name="close" :size="8" />
         </span>
@@ -406,10 +439,20 @@ defineExpose({ addPaths });
   color: var(--aurora-text);
 }
 
+/* 空态(button:加载失败时可点击重试;err 态用危险色提示真实错误) */
 .dock-empty {
+  border: none;
+  background: transparent;
+  font-family: inherit;
   font-size: 11px;
   color: var(--aurora-text-dim);
   white-space: nowrap;
+  cursor: pointer;
+  padding: 0;
+}
+
+.dock-empty.err {
+  color: var(--aurora-danger);
 }
 
 .running-dot {
@@ -436,10 +479,14 @@ defineExpose({ addPaths });
   place-items: center;
   border-radius: 99px;
   background: var(--aurora-danger);
-  color: #fff;
+  color: #fff; /* 危险红底白字:四套皮肤 danger 均为 300/400 系亮色,白字对比足够;
+                  与项目内 ai-confirm-ok/ai-btn-stop 的 on-accent 白字同一约定,故不抽令牌 */
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
-.dock-tile:hover .del-badge {
+/* 删除徽章默认 hover 显示;键盘可达(2026-08-14 审计):瓦片聚焦或徽章自身聚焦时同样显示 */
+.dock-tile:hover .del-badge,
+.dock-tile:focus-within .del-badge,
+.dock-tile:focus .del-badge {
   display: grid;
 }
 .del-badge:hover {
@@ -484,6 +531,14 @@ defineExpose({ addPaths });
 }
 .dock-tile.launching {
   animation: dock-launch-pulse 0.7s ease-in-out 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 启动脉冲:归零动画 */
+  .dock-tile.launching,
+  .dock-overflow-row.launching {
+    animation: none;
+  }
 }
 
 /* ---- 溢出浮层(Teleport 到 body,固定定位贴药丸下缘右侧) ---- */
@@ -542,7 +597,8 @@ defineExpose({ addPaths });
   position: static;
   flex: none;
 }
-.dock-overflow-row:hover .dock-overflow-del {
+.dock-overflow-row:hover .dock-overflow-del,
+.dock-overflow-row:focus-within .dock-overflow-del {
   display: grid;
 }
 </style>

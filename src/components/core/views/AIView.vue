@@ -28,6 +28,25 @@ const listEl = ref<HTMLDivElement | null>(null);
 const copiedIdx = ref<number | null>(null);
 let copiedTimer: number | undefined;
 
+// 清空对话确认:两层点击(第一击进入确认态,3s 未确认自动复原;对照剪贴板清空模式)
+const clearConfirming = ref(false);
+let clearConfirmTimer: number | undefined;
+
+function onClickClear() {
+  if (!clearConfirming.value) {
+    clearConfirming.value = true;
+    if (clearConfirmTimer) window.clearTimeout(clearConfirmTimer);
+    clearConfirmTimer = window.setTimeout(() => {
+      clearConfirming.value = false;
+    }, 3000);
+    return;
+  }
+  if (clearConfirmTimer) window.clearTimeout(clearConfirmTimer);
+  clearConfirmTimer = undefined;
+  clearConfirming.value = false;
+  clear();
+}
+
 function dismissError() {
   error.value = null;
 }
@@ -99,6 +118,7 @@ onActivated(() => {
 
 onUnmounted(() => {
   if (copiedTimer) window.clearTimeout(copiedTimer);
+  if (clearConfirmTimer) window.clearTimeout(clearConfirmTimer);
 });
 
 interface Block {
@@ -144,12 +164,17 @@ function splitBlocks(text: string): Block[] {
           设置
         </button>
         <button
-          class="flex items-center gap-1 text-xs text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] transition-colors"
-          title="清空对话"
-          @click="clear"
+          class="flex items-center gap-1 text-xs transition-colors"
+          :class="
+            clearConfirming
+              ? 'text-[var(--aurora-danger)]'
+              : 'text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)]'
+          "
+          :title="clearConfirming ? '再次点击确认清空对话' : '清空对话'"
+          @click="onClickClear"
         >
           <AuroraIcon name="trash" :size="11" />
-          清空对话
+          {{ clearConfirming ? "再点一次确认清空" : "清空对话" }}
         </button>
       </div>
     </div>
@@ -179,13 +204,14 @@ function splitBlocks(text: string): Block[] {
       </div>
 
       <template v-for="(m, i) in messages" :key="i">
-        <!-- 工具动作 chip(含"已停止"反馈,同样式) -->
+        <!-- 工具动作 chip(含"已停止"反馈,同样式;emoji 已清剿,图标走 AuroraIcon) -->
         <div v-if="m.role === 'tool'" class="flex justify-center">
           <div
             class="tool-chip max-w-[90%] truncate"
             :title="m.content"
           >
-            {{ m.content }}
+            <AuroraIcon name="ai" :size="11" class="shrink-0" />
+            <span class="truncate">{{ m.content }}</span>
           </div>
         </div>
 
@@ -317,7 +343,7 @@ function splitBlocks(text: string): Block[] {
   max-width: 86%;
   padding: 9px 13px;
   border-radius: 12px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -347,9 +373,12 @@ function splitBlocks(text: string): Block[] {
 
 .tool-chip {
   align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 11px;
   border-radius: 99px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--aurora-warn);
   border: 1px solid color-mix(in srgb, var(--aurora-warn) 30%, transparent);
   background: color-mix(in srgb, var(--aurora-warn) 10%, transparent);
@@ -418,6 +447,13 @@ function splitBlocks(text: string): Block[] {
   }
   50% {
     opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 确认条脉冲:归零动画 */
+  .ai-confirm-hint {
+    animation: none;
   }
 }
 </style>

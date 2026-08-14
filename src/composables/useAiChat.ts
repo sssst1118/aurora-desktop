@@ -131,10 +131,11 @@ export function useAiChat() {
         }
         break;
       case "tool":
-        // 工具动作记录(§2.4):tool 名 + args 摘要内联展示
+        // 工具动作记录(§2.4):tool 名 + args 摘要内联展示;
+        // 2026-08-14 emoji 清剿:内容纯文本,图标由 AIView 的 tool-chip 用 AuroraIcon 渲染
         messages.value.push({
           role: "tool",
-          content: `🔧 正在${toolLabel(ev.tool ?? "")}${ev.args ? ` ${ev.args}` : ""}`,
+          content: `正在${toolLabel(ev.tool ?? "")}${ev.args ? ` ${ev.args}` : ""}`,
         });
         break;
       case "done":

@@ -11,7 +11,16 @@
  * - 键盘 ↑↓/Enter 窗口级监听(仅挂载期间;Esc/打字即搜由壳处理)。
  * 样式移植预览稿 .results/.group-label/.result-item/.app-icon/.item-name/.item-sub/.empty-state。
  */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onMounted,
+  onUnmounted,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRecentApps } from "../../../composables/useRecentApps";
 import AuroraIcon from "../../icons/AuroraIcon.vue";
@@ -271,10 +280,15 @@ function onWindowKeydown(e: KeyboardEvent) {
   }
 }
 
+// 最近打开拉取:挂载时执行;onActivated 兜底(当前 SearchView 不在 KeepAlive 缓存名单,
+// 每次进入全新挂载,onMounted 已覆盖;若未来加入缓存,激活时需重读 localStorage。
+// keydown 监听只在 onMounted 注册一次,onActivated 不重复注册)
 onMounted(() => {
   loadRecents(); // 最近打开列表(空 query 态展示)
   window.addEventListener("keydown", onWindowKeydown);
 });
+
+onActivated(loadRecents);
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
@@ -298,7 +312,7 @@ onUnmounted(() => {
     <div v-else-if="searchError" class="px-4 py-3 text-xs text-[var(--aurora-danger)]">
       {{ searchError }}
     </div>
-    <!-- 有输入且无结果:空态(✦ 装饰;空输入不展示占位,最近打开直接铺满) -->
+    <!-- 有输入且无结果:空态(✦ 装饰) -->
     <div
       v-else-if="props.query.trim() && navigableItems.length === 0"
       class="empty-state"
@@ -308,8 +322,19 @@ onUnmounted(() => {
       <br />
       <span class="sub">换个关键词试试</span>
     </div>
+    <!-- 空输入且最近打开为空:引导空态(与"无匹配结果"区分;2026-08-14 真机反馈:
+         空态全空白像"功能没了",补引导文案) -->
+    <div
+      v-else-if="!props.query.trim() && navigableItems.length === 0"
+      class="empty-state"
+    >
+      <div class="big">✦</div>
+      输入以搜索
+      <br />
+      <span class="sub">打开过的应用与文件会出现在这里</span>
+    </div>
     <!-- 结果列表:应用/文件在上,最近打开固定在下 -->
-    <div v-else class="results flex-1 min-h-0">
+    <div v-else class="results flex-1 min-h-0" role="listbox">
       <template v-for="(g, gi) in groups" :key="gi">
         <div class="group-label">
           {{ g.label }}
@@ -321,6 +346,8 @@ onUnmounted(() => {
           :ref="(el) => setItemEl(el, g.start + ii)"
           class="result-item"
           :class="{ selected: selected === g.start + ii }"
+          role="option"
+          :aria-selected="selected === g.start + ii"
           :style="{ animationDelay: (g.start + ii) * 28 + 'ms' }"
           @mouseenter="selected = g.start + ii"
           @click="openSelected"
@@ -359,7 +386,7 @@ onUnmounted(() => {
   align-items: baseline;
   gap: 7px;
   padding: 9px 12px 5px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -380,7 +407,7 @@ onUnmounted(() => {
   height: 42px;
   padding: 0 12px;
   border-radius: 10px;
-  font-size: 13.5px;
+  font-size: 13px;
   cursor: pointer;
   animation: rise-in 0.22s ease both;
   transition: background 0.1s ease;
@@ -445,7 +472,7 @@ onUnmounted(() => {
 }
 
 .item-sub {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--aurora-text-dim);
   flex: none;
   max-width: 38%;
@@ -466,7 +493,7 @@ onUnmounted(() => {
 .empty-state {
   padding: 26px 16px 30px;
   text-align: center;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--aurora-text-dim);
 }
 
@@ -476,7 +503,7 @@ onUnmounted(() => {
 }
 
 .empty-state .sub {
-  font-size: 10.5px;
+  font-size: 11px;
   opacity: 0.7;
 }
 
@@ -494,6 +521,10 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .result-item {
     animation-duration: 0.01s;
+  }
+  /* 搜索旋转指示:归零动画 */
+  .aurora-spin {
+    animation: none;
   }
 }
 
