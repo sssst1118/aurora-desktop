@@ -1,0 +1,1089 @@
+<title>Aurora v0.2 界面</title>
+<style>
+  /* ============ 皮肤令牌(4 套,与产品 --aurora-* 架构同构) ============ */
+  body {
+    /* 深空(默认) */
+    --bg-a: #0a0f1e;
+    --bg-b: #070a14;
+    --glow-a: rgba(56, 189, 248, 0.16);
+    --glow-b: rgba(167, 139, 250, 0.14);
+    --glass: rgba(15, 21, 40, 0.62);
+    --glass-hi: rgba(255, 255, 255, 0.05);
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #f2f5fb;
+    --text-dim: rgba(242, 245, 251, 0.52);
+    --acc: #38bdf8;
+    --aur-1: #34d399;
+    --aur-2: #38bdf8;
+    --aur-3: #a78bfa;
+    --field: rgba(255, 255, 255, 0.05);
+    --sel: rgba(255, 255, 255, 0.08);
+    --success: #34d399;
+    --danger: #f87171;
+  }
+  body[data-skin="midnight"] {
+    --bg-a: #050507; --bg-b: #020203;
+    --glow-a: rgba(167, 139, 250, 0.13); --glow-b: rgba(56, 189, 248, 0.10);
+    --glass: rgba(10, 10, 14, 0.68);
+    --glass-hi: rgba(255, 255, 255, 0.045);
+    --border: rgba(255, 255, 255, 0.09);
+    --text: #f4f4f8; --text-dim: rgba(244, 244, 248, 0.5);
+    --acc: #a78bfa;
+    --aur-1: #818cf8; --aur-2: #a78bfa; --aur-3: #e879f9;
+    --field: rgba(255, 255, 255, 0.05); --sel: rgba(255, 255, 255, 0.085);
+    --success: #34d399; --danger: #f87171;
+  }
+  body[data-skin="dawn"] {
+    color-scheme: light;
+    --bg-a: #e8ecf3; --bg-b: #dde3ec;
+    --glow-a: rgba(56, 189, 248, 0.22); --glow-b: rgba(167, 139, 250, 0.18);
+    --glass: rgba(255, 255, 255, 0.6);
+    --glass-hi: rgba(255, 255, 255, 0.75);
+    --border: rgba(15, 23, 42, 0.1);
+    --text: #16213a; --text-dim: rgba(22, 33, 58, 0.5);
+    --acc: #4f7df9;
+    --aur-1: #34d399; --aur-2: #38bdf8; --aur-3: #8b7cf6;
+    --field: rgba(15, 23, 42, 0.05); --sel: rgba(15, 23, 42, 0.07);
+    --success: #059669; --danger: #dc2626;
+  }
+  body[data-skin="verdant"] {
+    --bg-a: #08120e; --bg-b: #050c09;
+    --glow-a: rgba(52, 211, 153, 0.14); --glow-b: rgba(56, 189, 248, 0.09);
+    --glass: rgba(10, 24, 17, 0.64);
+    --glass-hi: rgba(255, 255, 255, 0.05);
+    --border: rgba(255, 255, 255, 0.09);
+    --text: #eefaf4; --text-dim: rgba(238, 250, 244, 0.5);
+    --acc: #34d399;
+    --aur-1: #34d399; --aur-2: #4ade80; --aur-3: #38bdf8;
+    --field: rgba(255, 255, 255, 0.05); --sel: rgba(255, 255, 255, 0.085);
+    --success: #4ade80; --danger: #f87171;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    color-scheme: dark;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    background:
+      radial-gradient(1100px 560px at 72% -8%, var(--glow-a), transparent 62%),
+      radial-gradient(900px 520px at 18% 108%, var(--glow-b), transparent 62%),
+      linear-gradient(180deg, var(--bg-a), var(--bg-b));
+    color: var(--text);
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+
+  /* ============ 通用玻璃面板 + 极光缘(签名元素) ============ */
+  .panel {
+    position: relative;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--glass-hi), transparent 42%), var(--glass);
+    backdrop-filter: blur(28px) saturate(165%);
+    -webkit-backdrop-filter: blur(28px) saturate(165%);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+  }
+  .panel::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1.5px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      var(--aur-1) 18%, var(--aur-2) 50%, var(--aur-3) 82%,
+      transparent 100%);
+    background-size: 200% 100%;
+    animation: aurora-flow 9s linear infinite;
+    opacity: 0.85;
+    pointer-events: none;
+  }
+  .panel::after {
+    content: "";
+    position: absolute;
+    top: -14px; left: 8%; right: 8%;
+    height: 30px;
+    background: linear-gradient(90deg, var(--aur-2), var(--aur-3));
+    filter: blur(26px);
+    opacity: 0.13;
+    pointer-events: none;
+  }
+  @keyframes aurora-flow {
+    from { background-position: 0% 0; }
+    to { background-position: 200% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panel::before { animation: none; }
+  }
+
+  /* ============ 动效 ============ */
+  @keyframes pop-in {
+    0% { opacity: 0; transform: scale(0.96) translateY(-8px); }
+    60% { opacity: 1; }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .pop { animation: pop-in 0.26s cubic-bezier(0.22, 1.28, 0.5, 1) both; }
+  @media (prefers-reduced-motion: reduce) {
+    .pop, .result-item { animation-duration: 0.01s !important; }
+  }
+
+  /* ============ 布局 ============ */
+  .stage {
+    min-height: 100vh;
+    padding: 18px 16px 64px;
+  }
+  .stage-title {
+    position: fixed;
+    bottom: 12px; left: 0; right: 0;
+    text-align: center;
+  }
+
+  /* ---- 灵动岛:常态药丸 → 单击展开括入 Dock ---- */
+  .island-zone {
+    position: fixed;
+    top: 16px;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: left 0.28s cubic-bezier(0.22, 1, 0.36, 1), top 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .island-zone.dragging { transition: none; }
+  .island {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 46px;
+    width: 378px;
+    padding: 0 18px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--glass-hi), transparent 45%), var(--glass);
+    backdrop-filter: blur(28px) saturate(165%);
+    -webkit-backdrop-filter: blur(28px) saturate(165%);
+    box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+    transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
+  }
+  .island::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 14%; right: 14%;
+    height: 1.5px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--aur-1), var(--aur-2), var(--aur-3));
+    background-size: 200% 100%;
+    animation: aurora-flow 9s linear infinite;
+    opacity: 0.9;
+  }
+  .island:hover { box-shadow: 0 14px 44px rgba(0, 0, 0, 0.46); }
+  .island:active { transform: scale(0.988); }
+  .island.expanded { width: 648px; }
+  .pulse-dot {
+    width: 7px; height: 7px; flex: none;
+    border-radius: 50%;
+    background: var(--acc);
+    box-shadow: 0 0 10px 1px var(--acc);
+    animation: breathe 3.2s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.82); }
+  }
+  .island .time { font-size: 15px; font-weight: 650; letter-spacing: 0.02em; flex: none; }
+  .island .stats { display: flex; gap: 11px; font-size: 10.5px; color: var(--text-dim); flex: none; }
+  .island .stats b { font-weight: 600; color: var(--text); }
+  .island .divider {
+    width: 1px; height: 20px; flex: none;
+    background: var(--border);
+    opacity: 0;
+    transition: opacity 0.2s ease 0.1s;
+  }
+  /* 括入的 Dock 图标区:常态隐藏,展开时淡入 */
+  .island .mini-dock {
+    display: flex; align-items: center; gap: 4px;
+    flex: 1; min-width: 0;
+    opacity: 0;
+    transform: translateX(-8px);
+    transition: opacity 0.22s ease 0.08s, transform 0.22s ease 0.08s;
+    pointer-events: none;
+  }
+  .island.expanded .mini-dock { opacity: 1; transform: translateX(0); pointer-events: auto; }
+  .island.expanded .divider { opacity: 1; }
+  .mini-dock .dock-tile {
+    position: relative;
+    width: 34px; height: 34px; flex: none;
+    display: grid; place-items: center;
+    border: none; border-radius: 10px;
+    background: transparent;
+    cursor: pointer;
+    transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), background 0.14s ease;
+  }
+  .mini-dock .dock-tile:hover { transform: translateY(-2px) scale(1.08); background: var(--field); }
+  .mini-dock .dock-tile:active { transform: scale(0.92); }
+  .mini-dock .dock-tile.launching { animation: launch-pulse 0.7s ease-in-out 2; }
+  /* 岛 Dock 完善:悬停删除徽章 / 添加按钮 / 拖放入岛高亮 */
+  .mini-dock .del-badge {
+    position: absolute; top: -3px; right: -3px;
+    width: 15px; height: 15px;
+    display: none;
+    place-items: center;
+    border-radius: 99px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 9px;
+    line-height: 1;
+    font-style: normal;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  }
+  .mini-dock .dock-tile:hover .del-badge { display: grid; }
+  .mini-dock .del-badge:hover { background: color-mix(in srgb, var(--danger) 80%, #000); }
+  .dock-add-mini {
+    border: 1.5px dashed var(--border) !important;
+    color: var(--text-dim);
+    font-size: 16px;
+  }
+  .dock-add-mini:hover { color: var(--acc); border-color: var(--acc) !important; background: transparent !important; transform: none !important; }
+  .island.dragover {
+    box-shadow: 0 0 0 2px var(--acc), 0 14px 44px rgba(0, 0, 0, 0.46);
+  }
+  @keyframes launch-pulse {
+    0%, 100% { transform: scale(1); filter: brightness(1); }
+    50% { transform: scale(0.88); filter: brightness(1.5); }
+  }
+  .mini-dock .running-dot {
+    position: absolute;
+    bottom: 1px; left: 50%;
+    transform: translateX(-50%);
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 5px var(--success);
+  }
+  .island .search-entry {
+    flex: none;
+    width: 34px; height: 34px;
+    display: grid; place-items: center;
+    border: none; border-radius: 10px;
+    background: var(--field);
+    color: var(--acc);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.22s ease 0.1s, background 0.14s ease;
+    pointer-events: none;
+  }
+  .island.expanded .search-entry { opacity: 1; pointer-events: auto; }
+  .search-entry:hover { background: var(--sel); }
+  .island-tip {
+    font-size: 11px; color: var(--text-dim);
+    margin-top: 8px; letter-spacing: 0.02em;
+    text-align: center;
+    transition: opacity 0.2s ease;
+  }
+
+  /* ---- 主面板:一岛一窗,五视图合一,位置绑定岛(呼出时贴在岛正下方) ---- */
+  .main-panel { position: fixed; width: min(680px, 94vw); display: none; z-index: 40; }
+  .main-panel.show { display: block; }
+  .main-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px 10px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .head-left { flex: 1; display: flex; align-items: center; min-width: 0; }
+  .head-title { font-size: 13.5px; font-weight: 650; letter-spacing: 0.02em; }
+  .head-input {
+    flex: 1;
+    background: transparent;
+    border: none; outline: none;
+    font-family: inherit;
+    font-size: 16.5px;
+    font-weight: 480;
+    color: var(--text);
+    caret-color: var(--acc);
+    letter-spacing: 0.01em;
+  }
+  .head-input::placeholder { color: var(--text-dim); }
+  /* 首页视图:搜索入口条(打字即搜,非主界面) */
+  .home-body { padding: 8px 8px 6px; max-height: 330px; overflow-y: auto; }
+  .search-enter {
+    display: flex; align-items: center; gap: 10px;
+    margin: 4px 8px 14px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--field);
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: text;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  }
+  .search-enter:hover {
+    border-color: var(--acc);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 12%, transparent);
+    color: var(--text);
+  }
+  .search-enter kbd { margin-left: auto; }
+  /* 视图切换按钮组(五视图合一的切换枢纽) */
+  .view-switch { display: flex; align-items: center; gap: 2px; flex: none; }
+  .view-btn {
+    position: relative;
+    width: 32px; height: 32px;
+    display: grid; place-items: center;
+    border: none; border-radius: 9px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+  .view-btn:hover { background: var(--field); color: var(--text); }
+  .view-btn.on { color: var(--acc); background: var(--field); }
+  .view-btn.on::after {
+    content: "";
+    position: absolute;
+    bottom: -11px; left: 50%;
+    transform: translateX(-50%);
+    width: 14px; height: 2px;
+    border-radius: 99px;
+    background: linear-gradient(90deg, var(--aur-1), var(--aur-2));
+    box-shadow: 0 0 6px var(--aur-2);
+  }
+  .view-body { min-height: 300px; }
+
+  /* 搜索视图 */
+  .results { padding: 6px 8px; max-height: 330px; overflow-y: auto; }
+  .group-label {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 9px 12px 5px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .group-label .count { font-weight: 500; letter-spacing: 0.02em; opacity: 0.75; }
+  .result-item {
+    position: relative;
+    display: flex; align-items: center; gap: 11px;
+    height: 42px;
+    padding: 0 12px;
+    border-radius: 10px;
+    font-size: 13.5px;
+    cursor: pointer;
+    animation: rise-in 0.22s ease both;
+    transition: background 0.1s ease;
+  }
+  .result-item:hover, .result-item.selected { background: var(--sel); }
+  .result-item.selected::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 50%;
+    transform: translateY(-50%);
+    height: 18px; width: 3px;
+    border-radius: 0 99px 99px 0;
+    background: linear-gradient(180deg, var(--aur-1), var(--aur-2));
+    box-shadow: 0 0 8px var(--aur-2);
+  }
+  .app-icon { flex: none; width: 24px; height: 24px; border-radius: 7px; overflow: hidden; }
+  .app-icon svg { display: block; width: 100%; height: 100%; }
+  .item-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-sub { font-size: 10.5px; color: var(--text-dim); flex: none; max-width: 38%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--aur-2); box-shadow: 0 0 6px var(--aur-2); }
+  .empty-state { padding: 26px 16px 30px; text-align: center; font-size: 12px; color: var(--text-dim); }
+  .empty-state .big { font-size: 26px; margin-bottom: 10px; }
+
+  /* 剪贴板视图 */
+  .clip-list { padding: 6px 8px; max-height: 330px; overflow-y: auto; }
+  .clip-item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    animation: rise-in 0.22s ease both;
+    transition: background 0.1s ease;
+  }
+  .clip-item:hover, .clip-item.selected { background: var(--sel); }
+  .clip-item .type-ico {
+    flex: none; width: 24px; height: 24px;
+    display: grid; place-items: center;
+    border-radius: 7px;
+    background: var(--field);
+    color: var(--text-dim);
+  }
+  .clip-item .txt { flex: 1; min-width: 0; }
+  .clip-item .summary { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clip-item .meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .clip-del {
+    flex: none; width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border: none; border-radius: 99px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.14s ease;
+  }
+  .clip-item:hover .clip-del { opacity: 1; }
+  .clip-del:hover { background: var(--danger); color: #fff; }
+
+  /* AI 视图 */
+  .ai-body { padding: 14px 16px 10px; max-height: 330px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .msg-user, .msg-ai { max-width: 86%; padding: 9px 13px; border-radius: 12px; font-size: 12.5px; line-height: 1.55; }
+  .msg-user { align-self: flex-end; background: color-mix(in srgb, var(--acc) 22%, transparent); border: 1px solid color-mix(in srgb, var(--acc) 30%, transparent); }
+  .msg-ai { align-self: flex-start; background: var(--field); border: 1px solid var(--border); color: var(--text); }
+  .tool-chip {
+    align-self: center;
+    padding: 4px 11px;
+    border-radius: 99px;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    background: var(--field);
+  }
+
+  /* 抽屉视图 */
+  .drawer-body { display: flex; min-height: 300px; }
+  .drawer-side {
+    width: 96px; flex: none;
+    padding: 8px 6px;
+    display: flex; flex-direction: column; gap: 2px;
+    border-right: 1px solid var(--border);
+  }
+  .drawer-tab {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 10px;
+    border: none; border-radius: 9px;
+    background: transparent;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.13s ease;
+    text-align: left;
+  }
+  .drawer-tab:hover { background: var(--field); color: var(--text); }
+  .drawer-tab.on { background: var(--field); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+  .drawer-tab .cnt { margin-left: auto; font-size: 9.5px; padding: 1px 6px; border-radius: 99px; background: var(--field); }
+  .drawer-main { flex: 1; padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 6px; align-content: start; }
+  .file-tile {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 9px 4px 7px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.13s ease, transform 0.13s ease;
+  }
+  .file-tile:hover { background: var(--field); transform: translateY(-2px); }
+  .file-tile .f-ico {
+    width: 38px; height: 38px;
+    display: grid; place-items: center;
+    border-radius: 11px;
+  }
+  .file-tile .f-name { font-size: 10.5px; max-width: 80px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 设置视图 */
+  .settings-body { padding: 4px 18px 16px; max-height: 330px; overflow-y: auto; }
+  .s-section { padding: 13px 0 14px; }
+  .s-section + .s-section { border-top: 1px solid var(--border); }
+  .s-sec-title { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
+  .s-sec-title .tick {
+    width: 3px; height: 13px;
+    border-radius: 99px;
+    background: linear-gradient(180deg, var(--aur-1), var(--aur-2));
+    box-shadow: 0 0 6px var(--aur-2);
+  }
+  .s-sec-title span { font-size: 12.5px; font-weight: 650; letter-spacing: 0.02em; }
+  .s-sec-title .desc { font-size: 10.5px; color: var(--text-dim); font-weight: 400; margin-left: auto; }
+  .s-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 4px 0; }
+  .s-row + .s-row { margin-top: 9px; }
+  .s-row .label { font-size: 12.5px; }
+  .s-row .sub { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; }
+  .switch {
+    position: relative;
+    flex: none;
+    width: 38px; height: 21px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--field);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .switch.on { background: var(--acc); border-color: transparent; box-shadow: 0 0 12px -2px var(--acc); }
+  .switch .thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .switch.on .thumb { transform: translateX(17px); }
+  .chip-group { display: flex; gap: 5px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+  .chip {
+    padding: 5px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.16s ease;
+  }
+  .chip:hover { color: var(--text); background: var(--field); }
+  .chip.on { color: #fff; background: var(--acc); border-color: transparent; box-shadow: 0 2px 10px -2px var(--acc); }
+  .chip.on:active { transform: scale(0.96); }
+  .accent-dots { display: flex; gap: 8px; flex: none; align-items: center; }
+  .acc-dot {
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+  }
+  .acc-dot:hover { transform: scale(1.15); }
+  .acc-dot.on { border-color: var(--text); box-shadow: 0 0 8px -1px currentColor; }
+  .demo-input {
+    flex: 1; max-width: 150px;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--field);
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--text);
+    outline: none;
+    caret-color: var(--acc);
+  }
+  .demo-input:focus { border-color: var(--acc); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 18%, transparent); }
+
+  /* Dock 已并入灵动岛展开态(主面板不再有底部 Dock) */
+
+  /* ---- 底部快捷键 ---- */
+  .main-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px 9px;
+    border-top: 1px solid var(--border);
+    font-size: 10.5px;
+    color: var(--text-dim);
+  }
+  .keys { display: flex; align-items: center; gap: 9px; }
+  .keys .grp { display: flex; align-items: center; gap: 3px; }
+  kbd {
+    display: inline-grid; place-items: center;
+    min-width: 20px; height: 19px;
+    padding: 0 6px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--field);
+    font-family: inherit;
+    font-size: 10px;
+    color: var(--text);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
+  }
+  .foot-note { display: flex; align-items: center; gap: 5px; opacity: 0.8; }
+  .foot-note:hover { opacity: 1; }
+
+  .stage-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.06em;
+  }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+  :focus-visible {
+    outline: 2px solid var(--acc);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+</style>
+
+<div class="stage">
+  <!-- 灵动岛:单击展开括入 Dock / 双击呼出主面板 -->
+  <div class="island-zone">
+    <div class="island" id="island" title="单击展开 Dock · 双击呼出主面板">
+      <span class="pulse-dot"></span>
+      <span class="time num">21:38:52</span>
+      <span class="stats">
+        <span>CPU <b class="num">42%</b></span>
+        <span>内存 <b class="num">8.2G</b></span>
+        <span><b class="num">↓12K</b> <b class="num">↑2K</b></span>
+      </span>
+      <span class="divider"></span>
+      <div class="mini-dock" id="miniDock">
+        <button class="dock-tile" title="微信"><span class="app-icon" id="ico-wx">[wx]</span><span class="running-dot"></span><span class="del-badge" title="从岛移除">✕</span></button>
+        <button class="dock-tile" title="Chrome"><span class="app-icon" id="ico-cr">[cr]</span><span class="running-dot"></span><span class="del-badge" title="从岛移除">✕</span></button>
+        <button class="dock-tile" title="记事本"><span class="app-icon" id="ico-np">[np]</span><span class="del-badge" title="从岛移除">✕</span></button>
+        <button class="dock-tile" title="计算器"><span class="app-icon" id="ico-ca">[ca]</span><span class="del-badge" title="从岛移除">✕</span></button>
+        <button class="dock-tile" title="VS Code"><span class="app-icon" id="ico-vc">[vc]</span><span class="del-badge" title="从岛移除">✕</span></button>
+        <button class="dock-tile dock-add-mini" id="miniDockAdd" title="拖拽应用进岛添加">+</button>
+      </div>
+      <button class="search-entry" id="searchEntry" title="呼出主面板">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="island-tip" id="islandTip">拖动岛可移动位置 · 单击展开 Dock · 双击 / Ctrl+Shift+Space 呼出主面板</div>
+  </div>
+
+  <!-- 主面板:一岛一窗,五视图合一 -->
+  <div class="main-panel panel" id="mainPanel">
+    <div class="main-head">
+      <div class="head-left">
+        <span class="head-title" id="headTitle">Aurora</span>
+        <input id="q" class="head-input" placeholder="搜索应用、文件…" style="display:none" />
+      </div>
+      <div class="view-switch">
+        <button class="view-btn on" data-view="drawer" title="小桌面">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+        </button>
+        <button class="view-btn" data-view="search" title="搜索">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        </button>
+        <button class="view-btn" data-view="clip" title="剪贴板">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="8" y="3" width="8" height="4" rx="1.2"></rect><path d="M16 5h2a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 18 21H6a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 6 5h2"></path></svg>
+        </button>
+        <button class="view-btn" data-view="ai" title="AI 助手">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="M19 15l.9 2.4L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.6z"></path></svg>
+        </button>
+        <button class="view-btn" data-view="settings" title="设置">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.8a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03z"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="view-body" id="viewBody"></div>
+
+    <div class="main-foot">
+      <div class="keys">
+        <span class="grp"><kbd>↑</kbd><kbd>↓</kbd>选择</span>
+        <span class="grp"><kbd>Enter</kbd>打开</span>
+        <span class="grp"><kbd>Esc</kbd>关闭</span>
+      </div>
+      <span class="foot-note">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+        拖动窗口
+      </span>
+    </div>
+  </div>
+
+  <div class="stage-title">Aurora · v0.2 设计预览 —— 一岛一窗:五个界面从一个面板长出来 · 皮肤在设置视图切换</div>
+</div>
+
+<script>
+  /* ============ 图标:模拟真实应用图标(落地用现有 ExtractIcon 提取的真实图标) ============ */
+  const ICONS = {
+    wx: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#07c160"/><circle cx="8.6" cy="9.2" r="1.9" fill="#fff"/><circle cx="15.4" cy="9.2" r="1.9" fill="#fff"/><path d="M8 14.5c-2.1 0-3.9-1.4-3.9-3.2 0-1.1.6-2 1.6-2.7-.1 1.9 1.7 3.2 4 3.2h.2c-.3 1.7.2 2.7-1.9 2.7z" fill="#fff" opacity=".9"/></svg>',
+    cr: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="12" fill="#fff"/><circle cx="12" cy="12" r="8.2" fill="none" stroke="#ea4335" stroke-width="2.6"/><path d="M12 7.4a4.6 4.6 0 0 1 4.6 4.6c0 .9-.3 1.7-.7 2.4l-2.3-2.3h-3.2V14h4.2l1.8 1.8A4.6 4.6 0 1 1 12 7.4z" fill="#4285f4"/><path d="M7.4 10.2h3.2v2.1H7.4zM13 12.9h3.4l2.3 2.3A4.6 4.6 0 0 1 12 16.6a4.6 4.6 0 0 1-4-2.4l2.2-1.8h2.8z" fill="#fbbc05"/></svg>',
+    np: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#5b7cfa"/><path d="M7 8h10M7 12h10M7 16h6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    ca: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#8b7cf6"/><rect x="6" y="7" width="12" height="12" rx="2" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M9 13h6M12 10v6" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg>',
+    vc: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#38bdf8"/><path d="M6.5 9l3.5 2.8V7.6L6.5 9zm0 0v5.4l3.5-2.6M13.5 8.2l4-2.4v12.4l-4-2.4M13.5 8.2v7.6M10 12.6v5.8l3.5-2.4v-5.8" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+  };
+  function paintIcons(root) {
+    root.querySelectorAll("[data-ico], #ico-wx, #ico-cr, #ico-np, #ico-ca, #ico-vc").forEach(el => {
+      let key = el.getAttribute("data-ico");
+      if (!key) key = el.id.replace("ico-", "");
+      if (ICONS[key]) el.innerHTML = ICONS[key];
+    });
+  }
+  paintIcons(document);
+
+  /* ============ 搜索视图 ============ */
+  const APPS = [
+    { name: "微信", sub: "C:\\Program Files\\Tencent\\WeChat", ico: "wx", recent: true },
+    { name: "Chrome 浏览器", sub: "C:\\Program Files\\Google\\Chrome", ico: "cr", recent: true },
+    { name: "记事本", sub: "C:\\Windows\\System32", ico: "np" },
+    { name: "计算器", sub: "C:\\Windows\\System32", ico: "ca" },
+    { name: "Visual Studio Code", sub: "C:\\Users\\gzk\\AppData\\Local", ico: "vc" },
+  ];
+  const FILES = [
+    { name: "2026-08 发票.pdf", sub: "桌面 / 财务" },
+    { name: "项目计划书.docx", sub: "桌面 / 工作" },
+    { name: "设计稿导出.png", sub: "图片 / 截图" },
+  ];
+
+  /* 空态:最近打开(应用+文件)直接铺满;搜索态:结果在上,「最近打开」固定在下,与结果重复的自动隐藏 */
+  const RECENT_APPS = [
+    { name: "微信", sub: "12 分钟前", ico: "wx" },
+    { name: "Chrome 浏览器", sub: "1 小时前", ico: "cr" },
+    { name: "记事本", sub: "今天 09:14", ico: "np" },
+    { name: "计算器", sub: "昨天 17:40", ico: "ca" },
+  ];
+  const RECENT_FILES = [
+    { name: "2026-08 发票.pdf", sub: "桌面 / 财务" },
+    { name: "设计稿导出.png", sub: "图片 / 截图" },
+  ];
+  const FILE_ICO = '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#64748b"/><path d="M7 8.5h10M7 12h7M7 15.5h5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+  function itemHtml(name, icoSvg, sub, i, extra) {
+    return '<div class="result-item' + (i === 0 ? " selected" : "") + '" style="animation-delay:' + (i * 28) + 'ms">'
+      + '<span class="app-icon">' + icoSvg + "</span>"
+      + '<span class="item-name">' + name + "</span>"
+      + (extra || "")
+      + (sub ? '<span class="item-sub">' + sub + "</span>" : "") + "</div>";
+  }
+
+  function renderSearch(q) {
+    const kw = (q || "").trim().toLowerCase();
+    let h = "";
+    if (!kw) {
+      // 空态:不占位,最近打开直接铺满
+      h += '<div class="group-label">最近打开 <span class="count num">' + (RECENT_APPS.length + RECENT_FILES.length) + "</span></div>";
+      RECENT_APPS.forEach((a, i) => { h += itemHtml(a.name, ICONS[a.ico], a.sub, i, '<span class="recent-dot" title="最近使用"></span>'); });
+      RECENT_FILES.forEach((f, i) => { h += itemHtml(f.name, FILE_ICO, f.sub, RECENT_APPS.length + i); });
+    } else {
+      const apps = APPS.filter(a => a.name.toLowerCase().includes(kw));
+      const files = FILES.filter(f => f.name.toLowerCase().includes(kw));
+      if (!apps.length && !files.length) {
+        h += '<div class="empty-state"><div class="big">✦</div>无匹配结果<br><span style="font-size:10.5px;opacity:.7">换个关键词试试</span></div>';
+      } else {
+        if (apps.length) {
+          h += '<div class="group-label">搜索结果 · 应用 <span class="count num">' + apps.length + "</span></div>";
+          apps.forEach((a, i) => { h += itemHtml(a.name, ICONS[a.ico], a.sub, i); });
+        }
+        if (files.length) {
+          h += '<div class="group-label">搜索结果 · 文件 <span class="count num">' + files.length + "</span></div>";
+          files.forEach((f, i) => { h += itemHtml(f.name, FILE_ICO, f.sub, apps.length + i); });
+        }
+      }
+      // 固定「最近打开」栏:已出现在结果里的项隐藏,不重复展示
+      const seenApp = new Set(apps.map(a => a.name));
+      const seenFile = new Set(files.map(f => f.name));
+      const recApps = RECENT_APPS.filter(a => !seenApp.has(a.name));
+      const recFiles = RECENT_FILES.filter(f => !seenFile.has(f.name));
+      if (recApps.length || recFiles.length) {
+        h += '<div class="group-label">最近打开 <span class="count num">' + (recApps.length + recFiles.length) + "</span></div>";
+        recApps.forEach((a, i) => { h += itemHtml(a.name, ICONS[a.ico], a.sub, i, '<span class="recent-dot" title="最近使用"></span>'); });
+        recFiles.forEach((f, i) => { h += itemHtml(f.name, FILE_ICO, f.sub, recApps.length + i); });
+      }
+    }
+    return '<div class="results">' + h + "</div>";
+  }
+
+  /* ============ 剪贴板视图 ============ */
+  function renderClip() {
+    const items = [
+      { t: "txt", s: "今天的验收结论:按钮选中态/窗口拖动/配置完好三项全通过", m: "12 分钟前 · 34 字符" },
+      { t: "img", s: "设计稿 v2 截图.png", m: "38 分钟前 · 2.4 MB" },
+      { t: "txt", s: "192.168.1.10 nvidia/nvidia", m: "昨天 21:03 · 20 字符" },
+      { t: "txt", s: "pnpm tauri build --no-bundle", m: "昨天 19:41 · 28 字符" },
+    ];
+    let h = "";
+    items.forEach((it, i) => {
+      const ico = it.t === "img"
+        ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2.5"></rect><circle cx="9" cy="10" r="1.8"></circle><path d="M5 18l5-5 3.5 3.5L16 14l3 3"></path></svg>'
+        : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 6h14M5 12h14M5 18h9"></path></svg>';
+      h += '<div class="clip-item' + (i === 0 ? " selected" : "") + '" style="animation-delay:' + (i * 28) + 'ms">'
+        + '<span class="type-ico">' + ico + "</span>"
+        + '<span class="txt"><div class="summary">' + it.s + '</div><div class="meta num">' + it.m + "</div></span>"
+        + '<button class="clip-del"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>';
+    });
+    return '<div class="clip-list">' + h + "</div>";
+  }
+
+  /* ============ AI 视图 ============ */
+  function renderAi() {
+    return '<div class="ai-body">'
+      + '<div class="tool-chip">🔧 正在执行:打开记事本</div>'
+      + '<div class="msg-user">把桌面壁纸换成极光那张</div>'
+      + '<div class="msg-ai">好的,正在为你设置壁纸。</div>'
+      + '<div class="msg-user">打开记事本</div>'
+      + '<div class="msg-ai">已完成,记事本已打开。</div>'
+      + "</div>";
+  }
+
+  /* ============ 抽屉视图 ============ */
+  function renderDrawer() {
+    const tabs = [
+      { n: "全部", c: 23, on: true },
+      { n: "文档", c: 8 },
+      { n: "图片", c: 6 },
+      { n: "程序", c: 5 },
+      { n: "压缩", c: 2 },
+      { n: "其他", c: 2 },
+    ];
+    let side = "";
+    tabs.forEach(t => {
+      side += '<button class="drawer-tab' + (t.on ? " on" : "") + '"><span>' + t.n + '</span><span class="cnt num">' + t.c + "</span></button>";
+    });
+    const files = [
+      { n: "发票.pdf", bg: "#64748b", ch: "P" },
+      { n: "计划书.docx", bg: "#5b7cfa", ch: "W" },
+      { n: "截图.png", bg: "#8b7cf6", ch: "P" },
+      { n: "安装包.zip", bg: "#b45309", ch: "Z" },
+      { n: "极光壁纸.jpg", bg: "#38bdf8", ch: "J" },
+      { n: "会议记录.txt", bg: "#64748b", ch: "T" },
+    ];
+    let grid = "";
+    files.forEach((f, i) => {
+      grid += '<div class="file-tile" style="animation:rise-in .22s ease both;animation-delay:' + (i * 30) + 'ms">'
+        + '<span class="f-ico" style="background:linear-gradient(135deg,' + f.bg + "," + f.bg + 'cc);color:#fff;font-size:13px;font-weight:700">' + f.ch + "</span>"
+        + '<span class="f-name">' + f.n + "</span></div>";
+    });
+    return '<div class="drawer-body"><div class="drawer-side">' + side + '</div><div class="drawer-main">' + grid + "</div></div>";
+  }
+
+  /* ============ 设置视图 ============ */
+  function renderSettings() {
+    return '<div class="settings-body">'
+      + '<div class="s-section">'
+      + '<div class="s-sec-title"><span class="tick"></span><span>皮肤</span><span class="desc">整套视觉风格,保存即生效</span></div>'
+      + '<div class="s-row"><div><div class="label">皮肤包</div><div class="sub">四套预设,自由切换</div></div>'
+      + '<div class="chip-group" id="skinChips">'
+      + '<button class="chip on" data-skin>深空极光</button>'
+      + '<button class="chip" data-skin="midnight">午夜</button>'
+      + '<button class="chip" data-skin="dawn">拂晓</button>'
+      + '<button class="chip" data-skin="verdant">翠野</button>'
+      + "</div></div>"
+      + '<div class="s-row"><div><div class="label">强调色</div><div class="sub">选中态、开关与光带颜色</div></div>'
+      + '<div class="accent-dots">'
+      + '<span class="acc-dot on" style="background:#38bdf8;color:#38bdf8"></span>'
+      + '<span class="acc-dot" style="background:#a78bfa;color:#a78bfa"></span>'
+      + '<span class="acc-dot" style="background:#34d399;color:#34d399"></span>'
+      + '<span class="acc-dot" style="background:#fbbf24;color:#fbbf24"></span>'
+      + "</div></div></div>"
+      + '<div class="s-section">'
+      + '<div class="s-sec-title"><span class="tick"></span><span>通用</span></div>'
+      + '<div class="s-row"><div><div class="label">灵动岛</div><div class="sub">屏幕顶部常驻状态条</div></div><button class="switch on"><span class="thumb"></span></button></div>'
+      + '<div class="s-row"><div><div class="label">开机自启动</div><div class="sub">登录 Windows 后自动运行</div></div><button class="switch"><span class="thumb"></span></button></div>'
+      + '<div class="s-row"><div><div class="label">搜索框呼出热键</div><div class="sub">点击后按下组合键</div></div><input class="demo-input num" value="Ctrl+Shift+Space" readonly /></div>'
+      + "</div></div>";
+  }
+
+  /* ============ 视图路由(小桌面为主界面,AI 为并列主视图,搜索=打字触发的动作) ============ */
+  const VIEW_TITLES = { drawer: "小桌面", clip: "剪贴板", ai: "AI 助手", settings: "设置" };
+  const VIEWS = { drawer: renderDrawer, search: renderSearch, clip: renderClip, ai: renderAi, settings: renderSettings };
+  const viewBody = document.getElementById("viewBody");
+  const viewBtns = document.querySelectorAll(".view-btn");
+  const headTitle = document.getElementById("headTitle");
+  const qEl = document.getElementById("q");
+  let curView = "home";
+  let lastQuery = "";
+
+  function showView(v, query) {
+    curView = v;
+    viewBtns.forEach(b => b.classList.toggle("on", b.getAttribute("data-view") === v));
+    if (v === "search") {
+      // 搜索态:header 变为输入框,其余视图显示标题
+      lastQuery = query !== undefined ? query : lastQuery;
+      qEl.value = lastQuery;
+      qEl.style.display = "";
+      headTitle.style.display = "none";
+      viewBody.innerHTML = renderSearch(lastQuery);
+    } else {
+      qEl.style.display = "none";
+      headTitle.style.display = "";
+      headTitle.textContent = VIEW_TITLES[v] || "Aurora";
+      viewBody.innerHTML = VIEWS[v]();
+    }
+    bindViewInteractions();
+  }
+  function bindViewInteractions() {
+    const searchEnter = viewBody.querySelector("#searchEnter");
+    if (searchEnter) {
+      searchEnter.addEventListener("click", () => { showView("search", ""); qEl.focus(); });
+    }
+    viewBody.querySelectorAll(".switch").forEach(s =>
+      s.addEventListener("click", () => s.classList.toggle("on")));
+    const skinChips = viewBody.querySelector("#skinChips");
+    if (skinChips) {
+      skinChips.querySelectorAll(".chip").forEach(b =>
+        b.addEventListener("click", () => applySkin(b.getAttribute("data-skin"))));
+    }
+    viewBody.querySelectorAll(".chip-group:not(#skinChips) .chip").forEach(c =>
+      c.addEventListener("click", () => {
+        c.parentElement.querySelectorAll(".chip").forEach(x => x.classList.remove("on"));
+        c.classList.add("on");
+      }));
+    viewBody.querySelectorAll(".acc-dot").forEach(d =>
+      d.addEventListener("click", () => {
+        d.parentElement.querySelectorAll(".acc-dot").forEach(x => x.classList.remove("on"));
+        d.classList.add("on");
+      }));
+    viewBody.querySelectorAll(".drawer-tab").forEach(t =>
+      t.addEventListener("click", () => {
+        t.parentElement.querySelectorAll(".drawer-tab").forEach(x => x.classList.remove("on"));
+        t.classList.add("on");
+      }));
+    viewBody.querySelectorAll(".clip-del").forEach(b =>
+      b.addEventListener("click", e => {
+        e.stopPropagation();
+        b.closest(".clip-item").style.display = "none";
+      }));
+  }
+  viewBtns.forEach(b =>
+    b.addEventListener("click", () => showView(b.getAttribute("data-view"))));
+  qEl.addEventListener("input", e => {
+    lastQuery = e.target.value;
+    viewBody.innerHTML = renderSearch(lastQuery);
+  });
+
+  /* ============ 岛交互:拖动定位 / 单击展开 / 双击呼出主面板 ============ */
+  const island = document.getElementById("island");
+  const islandZone = island.parentElement;
+  const mainPanel = document.getElementById("mainPanel");
+  const islandTip = document.getElementById("islandTip");
+  let clickTimer = null;
+  let dragged = false;
+  let dragState = null;
+
+  // 拖动岛:面板呼出时实时跟随
+  island.addEventListener("pointerdown", e => {
+    if (e.target.closest(".mini-dock, .search-entry")) return;
+    dragged = false;
+    dragState = { sx: e.clientX, sy: e.clientY, ox: islandZone.offsetLeft, oy: islandZone.offsetTop };
+    island.setPointerCapture(e.pointerId);
+    islandZone.classList.add("dragging");
+  });
+  island.addEventListener("pointermove", e => {
+    if (!dragState) return;
+    const dx = e.clientX - dragState.sx, dy = e.clientY - dragState.sy;
+    if (!dragged && Math.hypot(dx, dy) > 4) dragged = true;
+    if (!dragged) return;
+    islandZone.style.left = Math.min(Math.max(dragState.ox + dx, 8), window.innerWidth - island.offsetWidth - 8) + "px";
+    islandZone.style.top = Math.min(Math.max(dragState.oy + dy, 4), window.innerHeight - 160) + "px";
+    if (mainPanel.classList.contains("show")) positionPanel();
+  });
+  function endDrag() {
+    dragState = null;
+    islandZone.classList.remove("dragging");
+  }
+  island.addEventListener("pointerup", endDrag);
+  island.addEventListener("pointercancel", endDrag);
+
+  // 单击=展开/收起 Dock(拖动过则不触发)
+  island.addEventListener("click", e => {
+    if (dragged) { dragged = false; return; }
+    if (e.target.closest(".mini-dock, .search-entry")) return;
+    if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; } // 双击分支
+    clickTimer = setTimeout(() => { clickTimer = null; island.classList.toggle("expanded"); }, 240);
+  });
+  // 双击=呼出主面板
+  island.addEventListener("dblclick", () => {
+    if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+    island.classList.add("expanded");
+    showMain();
+  });
+
+  // 岛 Dock(唯一 Dock 载体):点击=启动应用(阻断冒泡;脉冲反馈+岛收回;
+  // 防连点;✕/＋ 按钮不触发启动)
+  document.querySelectorAll("#miniDock .dock-tile").forEach(t =>
+    t.addEventListener("click", e => {
+      e.stopPropagation();
+      if (e.target.closest(".del-badge") || t.classList.contains("dock-add-mini")) return;
+      if (t.classList.contains("launching")) return;
+      t.classList.add("launching");
+      setTimeout(() => { t.classList.remove("launching"); island.classList.remove("expanded"); }, 900);
+    }));
+  // 悬停 ✕ = 从岛移除(演示)
+  document.querySelectorAll("#miniDock .del-badge").forEach(b =>
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      b.closest(".dock-tile").remove();
+    }));
+  // ＋ 按钮 = 提示添加方式
+  document.getElementById("miniDockAdd").addEventListener("click", e => {
+    e.stopPropagation();
+    islandTip.textContent = "拖拽任意应用(.exe / .lnk)进展开的岛即可添加 · 悬停图标点 ✕ 移除";
+  });
+  // 拖放入岛:展开态接收拖放并高亮(真实版将提取图标入库)
+  island.addEventListener("dragover", e => {
+    if (!island.classList.contains("expanded")) return;
+    e.preventDefault();
+    island.classList.add("dragover");
+  });
+  island.addEventListener("dragleave", () => island.classList.remove("dragover"));
+  island.addEventListener("drop", e => {
+    if (!island.classList.contains("expanded")) return;
+    e.preventDefault();
+    island.classList.remove("dragover");
+    islandTip.textContent = "已接收拖放:真实版将提取图标入库并即时出现在岛里(演示稿略)";
+  });
+  // 展开态搜索入口 = 呼出主面板
+  document.getElementById("searchEntry").addEventListener("click", e => {
+    e.stopPropagation();
+    showMain();
+  });
+
+  // 主面板位置绑定岛:呼出时贴在岛正下方水平居中,越界回弹
+  function positionPanel() {
+    const z = islandZone.getBoundingClientRect();
+    const pw = mainPanel.offsetWidth;
+    const x = Math.min(Math.max(z.left + z.width / 2 - pw / 2, 8), window.innerWidth - pw - 8);
+    mainPanel.style.left = x + "px";
+    mainPanel.style.top = Math.min(z.bottom + 12, window.innerHeight - 300) + "px";
+  }
+  function showMain() {
+    mainPanel.classList.add("show");
+    positionPanel();
+    mainPanel.classList.remove("pop");
+    void mainPanel.offsetWidth;
+    mainPanel.classList.add("pop");
+    qEl.focus();
+  }
+  // 初始居中 + 窗口变化时岛保持可见、面板跟随
+  function centerIsland() {
+    islandZone.style.left = Math.max(8, (window.innerWidth - island.offsetWidth) / 2) + "px";
+  }
+  centerIsland();
+  window.addEventListener("resize", () => {
+    centerIsland();
+    if (mainPanel.classList.contains("show")) positionPanel();
+  });
+  document.addEventListener("keydown", e => {
+    if (!mainPanel.classList.contains("show")) {
+      // 面板未呼出:仅响应热键
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "Space") {
+        e.preventDefault();
+        showMain();
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      // 搜索态先退回小桌面(有输入先清空),再按才关面板;岛展开则先收回
+      if (curView === "search") {
+        lastQuery = "";
+        showView("drawer");
+      } else if (mainPanel.classList.contains("show")) {
+        mainPanel.classList.remove("show");
+      } else {
+        island.classList.remove("expanded");
+      }
+      return;
+    }
+    // 打字即搜:面板呼出时按任意可见字符 → 切换到搜索态并输入
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.key.length === 1 && curView !== "search") {
+      showView("search", e.key);
+      qEl.focus();
+    }
+  });
+  // 点击面板外空白收起主面板
+  document.addEventListener("click", e => {
+    if (mainPanel.classList.contains("show") && !mainPanel.contains(e.target) && !island.contains(e.target)) {
+      mainPanel.classList.remove("show");
+    }
+  });
+
+  /* ============ 皮肤切换(设置视图内) ============ */
+  function applySkin(skin) {
+    document.body.setAttribute("data-skin", skin || "");
+    document.querySelectorAll("#skinChips .chip").forEach(b => {
+      b.classList.toggle("on", (b.getAttribute("data-skin") || "") === (skin || ""));
+    });
+  }
+
+  /* 初始:主面板隐藏,展示岛;默认视图=小桌面(主界面),搜索靠打字唤醒 */
+  showView("drawer");
+</script>
