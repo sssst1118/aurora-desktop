@@ -13,7 +13,12 @@
 //   非目标类型忽略+提示;常态拖入先展开再接收(enter 携带有效路径即展开,drop 兜底)。
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import {
+  availableMonitors,
+  getCurrentWindow,
+  LogicalPosition,
+  LogicalSize,
+} from "@tauri-apps/api/window";
 import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 import IslandDock from "./IslandDock.vue";
 import AuroraIcon from "../icons/AuroraIcon.vue";
@@ -37,13 +42,22 @@ const W_EXPANDED = 648;
 const WINDOW_H = 46;
 const EXPAND_MS = 280;
 const DOUBLE_CLICK_MS = 240;
+/** 落盘防抖:写配置频率低,600ms 不变(审计项:与跟随节流拆成两条链路,互不重置) */
 const MOVE_DEBOUNCE_MS = 600;
+/** 拖动中跟随节流(设计文档 §4.2「岛被拖动且面板可见时,面板实时跟随」):
+    80ms 固定间隔广播几何,拖动全程面板平滑跟随而不频繁触发 reposition */
+const MOVE_FOLLOW_MS = 80;
 
 const expanded = ref(false);
 /** 拖动态:临时禁毛玻璃防透明窗口拖动重绘闪烁(2026-08-14 真机反馈) */
 const dragging = ref(false);
+/** 宽度动画进行中(双击判定门控:动画期间第二击按单击处理,不识别为双击,防连点收起被吞) */
+let animating = false;
 /** 动画期间实际窗口宽度(逻辑像素),下一次动画以它为起点 */
 let curW = W_COLLAPSED;
+/** 动画期间实际窗口高度(逻辑像素,初始 46)。宽度动画每帧 setSize 以它为高度而非常量
+    WINDOW_H:展开动画中溢出浮层临时加高窗口(46+extra)时不被压回(审计项 2026-08-14) */
+let curH = WINDOW_H;
 
 // ---- 时间 / 系统状态(沿用旧岛逻辑;net 拆 rx/tx 双 b 展示对齐设计稿) ----
 const timeStr = ref("");
@@ -90,7 +104,7 @@ function expandEase(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
-function setWidthAnimated(target: number): Promise<void> {
+async function setWidthAnimated(target: number): Promise<void> {
   // 新动画打断旧动画(释放等待者,避免 drop 流程的 await 悬挂)
   if (animRaf) {
     cancelAnimationFrame(animRaf);
@@ -98,19 +112,29 @@ function setWidthAnimated(target: number): Promise<void> {
     animResolve?.();
     animResolve = null;
   }
-  return new Promise((resolve) => {
+  animating = true;
+  // 动画开始前记录当前实际高度(而非常量 WINDOW_H):展开动画期间溢出浮层临时加高
+  // 窗口(46+extra)时,每帧 setSize 不再把高度写回 46(审计项:浮层被宽度动画拦腰裁)
+  try {
+    const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    curH = Math.max(1, Math.round(size.height / sf));
+  } catch {
+    /* 读取失败保留上次高度,不阻断动画 */
+  }
+  await new Promise<void>((resolve) => {
     const from = curW;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const finish = () => {
       animRaf = 0;
       animResolve = null;
+      animating = false;
       resolve();
     };
     if (reduced || Math.abs(target - from) < 1) {
       // 降级:瞬时切换
       curW = target;
       win
-        .setSize(new LogicalSize(target, WINDOW_H))
+        .setSize(new LogicalSize(target, curH))
         .catch((e) => console.error("island setSize failed", e));
       finish();
       return;
@@ -120,7 +144,7 @@ function setWidthAnimated(target: number): Promise<void> {
       const t = Math.min(1, (now - start) / EXPAND_MS);
       curW = Math.round(from + (target - from) * expandEase(t));
       win
-        .setSize(new LogicalSize(curW, WINDOW_H))
+        .setSize(new LogicalSize(curW, curH))
         .catch((e) => console.error("island setSize failed", e));
       if (t < 1) {
         animRaf = requestAnimationFrame(step);
@@ -133,9 +157,40 @@ function setWidthAnimated(target: number): Promise<void> {
   });
 }
 
+/** 展开前右缘越界补偿:系统拖动无 clamp、启动恢复的 clamp 按 378 宽计算,岛拖到
+    屏幕右缘后展开(378→648 左锚点右扩)会把右端裁出屏。检测岛所在显示器右缘,
+    超界先左移补偿(与宽度动画同帧起步,setPosition 先于 setSize 动画执行) */
+async function ensureExpandFits(targetW: number) {
+  if (targetW <= curW) return;
+  try {
+    const [pos, sf] = await Promise.all([win.innerPosition(), win.scaleFactor()]);
+    const x = pos.x / sf;
+    const y = pos.y / sf;
+    const cx = x + curW / 2; // 岛中心 → 选岛所在显示器
+    const ms = await availableMonitors();
+    const m =
+      ms.find((mm) => {
+        const mx = mm.position.x / mm.scaleFactor;
+        const mw = mm.size.width / mm.scaleFactor;
+        return cx >= mx && cx < mx + mw;
+      }) ?? ms[0];
+    const mx = m.position.x / m.scaleFactor;
+    const mw = m.size.width / m.scaleFactor;
+    const over = x + targetW - (mx + mw);
+    if (over > 0) {
+      await win.setPosition(new LogicalPosition(Math.round(x - over), Math.round(y)));
+    }
+  } catch (e) {
+    console.error("ensureExpandFits failed", e);
+  }
+}
+
 function toggleExpand() {
   expanded.value = !expanded.value;
-  void setWidthAnimated(expanded.value ? W_EXPANDED : W_COLLAPSED);
+  void (async () => {
+    if (expanded.value) await ensureExpandFits(W_EXPANDED);
+    await setWidthAnimated(expanded.value ? W_EXPANDED : W_COLLAPSED);
+  })();
 }
 
 let autoCollapseTimer: number | undefined;
@@ -146,7 +201,10 @@ let autoCollapseTimer: number | undefined;
 function openSearchPanel() {
   if (!expanded.value) {
     expanded.value = true;
-    void setWidthAnimated(W_EXPANDED);
+    void (async () => {
+      await ensureExpandFits(W_EXPANDED);
+      await setWidthAnimated(W_EXPANDED);
+    })();
   }
   invoke("open_search").catch((e) => console.error("open_search failed", e));
   if (autoCollapseTimer) window.clearTimeout(autoCollapseTimer);
@@ -183,7 +241,9 @@ function onPointerDown(e: PointerEvent) {
   if (!target || target.closest(".mini-dock, .search-entry")) return;
   downPos = { x: e.clientX, y: e.clientY };
   const now = performance.now();
-  if (now - lastDownAt < DOUBLE_CLICK_MS) {
+  // 展开动画进行中第二击按单击处理(审计项 2026-08-14:240ms 判定窗吞「快速连点收起」,
+  // 动画期间单击展开中,第二击落窗内会被误判双击呼出面板)
+  if (!animating && now - lastDownAt < DOUBLE_CLICK_MS) {
     // 双击:呼出主面板(同时展开)
     lastDownAt = 0;
     downPos = null;
@@ -195,6 +255,12 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
   lastDownAt = now;
+  // 取消上一击 pending 单击(双击判定被禁用时,连点的第二击接管为「单击」语义,
+  // 不清的话上一击 timer 到期会多触发一次 toggleExpand,展开又被立即收起)
+  if (clickTimer !== undefined) {
+    window.clearTimeout(clickTimer);
+    clickTimer = undefined;
+  }
   clickTimer = window.setTimeout(() => {
     clickTimer = undefined;
     toggleExpand();
@@ -229,8 +295,31 @@ function onPointerUp() {
 
 let unMoved: UnlistenFn | undefined;
 let geometryTimer: number | undefined;
+let followTimer: number | undefined;
+let lastFollowAt = 0;
 
-/** 读当前几何(innerPosition/innerSize 物理像素 → 逻辑像素),落盘 + 广播 island-geometry */
+/** 读当前几何(innerPosition/innerSize 物理像素 → 逻辑像素),仅广播 island-geometry。
+    拖动中 80ms 节流调用,供主面板实时跟随(设计文档 §4.2) */
+async function emitGeometry() {
+  try {
+    const [pos, size, sf] = await Promise.all([
+      win.innerPosition(),
+      win.innerSize(),
+      win.scaleFactor(),
+    ]);
+    const x = Math.round(pos.x / sf);
+    const y = Math.round(pos.y / sf);
+    const w = Math.round(size.width / sf);
+    const h = Math.round(size.height / sf);
+    emit("island-geometry", { x, y, w, h }).catch((e) =>
+      console.error("emit island-geometry failed", e),
+    );
+  } catch (e) {
+    console.error("emitGeometry failed", e);
+  }
+}
+
+/** 读当前几何,落盘 + 广播(600ms 防抖后执行一次:写配置频率低,最终位置兜底一致) */
 async function persistGeometry() {
   try {
     const [pos, size, sf] = await Promise.all([
@@ -253,8 +342,26 @@ async function persistGeometry() {
   }
 }
 
-/** 拖动/尺寸变化后防抖 600ms 落盘并通知主面板跟随 */
+/** 拖动/尺寸变化:两条独立链路(审计项 2026-08-14:原 600ms 防抖里 emit 被拖动期间
+    反复重置,面板全程不动、松手 600ms 才跳一次位)。
+    - 跟随:80ms 节流(首帧立即 + 固定间隔 + 拖尾兜底),拖动全程面板实时跟随;
+    - 落盘:600ms 防抖不变,写配置频率低。 */
 function schedulePersistGeometry() {
+  const now = performance.now();
+  if (followTimer) {
+    window.clearTimeout(followTimer);
+    followTimer = undefined;
+  }
+  if (now - lastFollowAt >= MOVE_FOLLOW_MS) {
+    lastFollowAt = now;
+    void emitGeometry();
+  } else {
+    followTimer = window.setTimeout(() => {
+      followTimer = undefined;
+      lastFollowAt = performance.now();
+      void emitGeometry();
+    }, MOVE_FOLLOW_MS - (now - lastFollowAt));
+  }
   if (geometryTimer) window.clearTimeout(geometryTimer);
   geometryTimer = window.setTimeout(() => {
     geometryTimer = undefined;
@@ -263,6 +370,10 @@ function schedulePersistGeometry() {
 }
 
 // ---- 拖放入岛(Tauri 2 拦截 DOM 拖放,官方 onDragDropEvent 接管) ----
+
+/** Dock 模块开关(设置页 enable_dock,热生效;false 时整个括入区不渲染,
+    修复 2026-08-14 文档审计:此前无条件渲染,开关空操作) */
+const dockEnabled = ref(true);
 
 const dockRef = ref<InstanceType<typeof IslandDock> | null>(null);
 const fileDragOver = ref(false);
@@ -305,12 +416,16 @@ win.onDragDropEvent((event) => {
     position?: { x: number; y: number };
   };
   if (payload.type === "enter") {
+    if (!dockEnabled.value) return; // Dock 关闭:不展开不点亮
     // 常态拖入:enter 携带有效应用路径即先展开(露出投放区)再点亮高亮
     const apps = (payload.paths ?? []).filter(isAppPath);
     if (apps.length === 0) return;
     if (!expanded.value) {
       expanded.value = true;
-      void setWidthAnimated(W_EXPANDED);
+      void (async () => {
+        await ensureExpandFits(W_EXPANDED);
+        await setWidthAnimated(W_EXPANDED);
+      })();
     }
     markFileDrag();
   } else if (payload.type === "over") {
@@ -325,6 +440,10 @@ win.onDragDropEvent((event) => {
       showHint("仅支持拖入应用(.exe / .lnk)");
       return;
     }
+    if (!dockEnabled.value) {
+      showHint("Dock 已关闭,请在设置中开启后再拖入");
+      return;
+    }
     void (async () => {
       // 常态拖入兜底:先展开再接收(窗口变宽露出投放区)
       if (!expanded.value) {
@@ -332,7 +451,20 @@ win.onDragDropEvent((event) => {
         await setWidthAnimated(W_EXPANDED);
       }
       const added = await dockRef.value?.addPaths(apps);
-      showHint(added ? `已添加 ${added} 个应用到岛` : "应用已在岛内");
+      if (added) {
+        showHint(`已添加 ${added} 个应用到岛`);
+        return;
+      }
+      // 0 = 全部已存在 或 写盘失败:拉一次真实条目区分,失败提示具体原因
+      // (参考剪贴板 deleteError 模式,2026-08-14 审计:此前一律提示"应用已在岛内"误导)
+      try {
+        const items = (await invoke<{ path: string }[]>("dock_get_items")) ?? [];
+        const allExist = apps.every((p) => items.some((it) => it.path === p));
+        showHint(allExist ? "应用已在岛内" : "添加失败:写入配置出错,请重试");
+      } catch (e) {
+        console.error("dock_get_items failed", e);
+        showHint("添加失败:无法读取 Dock 状态");
+      }
     })();
   }
 });
@@ -342,14 +474,34 @@ function onLaunched() {
   if (expanded.value) toggleExpand();
 }
 
+/** 配置热生效应用:皮肤/显示方式/Dock 开关(启动与 config-saved 各走一次;
+    enable_dock 门控 IslandDock 渲染,设置页改动保存后即时生效) */
+async function applyConfig() {
+  try {
+    const cfg = await invoke<{
+      theme_mode: string;
+      theme_accent: string;
+      skin?: string;
+      search_style?: string;
+      enable_dock?: boolean;
+    }>("config_load");
+    apply_theme(cfg);
+    apply_panel_style(cfg.search_style ?? "solid");
+    if (typeof cfg.enable_dock === "boolean") dockEnabled.value = cfg.enable_dock;
+  } catch (e) {
+    console.error("config reload failed", e);
+  }
+}
+
 onMounted(async () => {
   tickTime();
-  // 展开动画起点:以实际窗口宽度为准(配置 378;读取失败保留默认)
+  // 展开动画起点:以实际窗口宽高为准(配置 378×46;读取失败保留默认)
   try {
     const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
     curW = Math.max(1, Math.round(size.width / sf));
+    curH = Math.max(1, Math.round(size.height / sf));
   } catch {
-    /* 保留 378 兜底 */
+    /* 保留 378×46 兜底 */
   }
   // 系统状态:后端 2s 采样线程广播,取代前端轮询(Phase2 2.5 机制)
   try {
@@ -363,28 +515,15 @@ onMounted(async () => {
   } catch (e) {
     console.error("sys_get_status failed", e);
   }
-  // 拖动结束(tauri://move)→ 防抖落盘 + 广播几何(主面板跟随)
+  // 拖动结束(tauri://move)→ 跟随节流广播 + 防抖落盘(主面板跟随)
   unMoved = await win.onMoved(() => schedulePersistGeometry());
-  // Phase6 皮肤跨窗口热生效:设置页保存后后端全局广播 config-saved,
-  // 岛窗口重载配置并应用主题(皮肤/强调色/显示方式即时生效,无需重启)
+  // 皮肤/Dock 开关跨窗口热生效:设置页保存后后端全局广播 config-saved
   try {
-    unlistenCfg = await listen("config-saved", async () => {
-      try {
-        const cfg = await invoke<{
-          theme_mode: string;
-          theme_accent: string;
-          skin?: string;
-          search_style?: string;
-        }>("config_load");
-        apply_theme(cfg);
-        apply_panel_style(cfg.search_style ?? "solid");
-      } catch (e) {
-        console.error("config reload for theme failed", e);
-      }
-    });
+    unlistenCfg = await listen("config-saved", applyConfig);
   } catch (e) {
     console.error("listen config-saved failed", e);
   }
+  void applyConfig();
   // 启动广播一次初始几何:落盘幂等(setup 已恢复的位置写回原值),主面板可得初始同步
   void persistGeometry();
   timeTimer = window.setInterval(tickTime, 1000);
@@ -394,6 +533,7 @@ onUnmounted(() => {
   if (timeTimer) window.clearInterval(timeTimer);
   if (clickTimer) window.clearTimeout(clickTimer);
   if (geometryTimer) window.clearTimeout(geometryTimer);
+  if (followTimer) window.clearTimeout(followTimer);
   if (hintTimer) window.clearTimeout(hintTimer);
   if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
   if (dragEndTimer) window.clearTimeout(dragEndTimer);
@@ -426,6 +566,7 @@ onUnmounted(() => {
     </span>
     <span class="divider" data-tauri-drag-region></span>
     <IslandDock
+      v-if="dockEnabled"
       ref="dockRef"
       :expanded="expanded"
       @hint="showHint"
@@ -461,8 +602,10 @@ onUnmounted(() => {
   backdrop-filter: blur(28px) saturate(165%);
   -webkit-backdrop-filter: blur(28px) saturate(165%);
   /* 2026-08-14 真机反馈:外阴影在透明矩形窗口内被裁剪,圆角药丸外露出
-     "方块"残影 → 去掉外阴影,只保留内高光;层次靠边框+顶部极光带 */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+     "方块"残影 → 去掉外阴影,只保留内高光;层次靠边框+顶部极光带。
+     内高光用 --aurora-text 低浓度自适应(2026-08-14 审计:硬编码白高光在拂晓
+     浅色皮肤上失效,color-mix 随皮肤变深色低对比提亮) */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--aurora-text) 7%, transparent);
   cursor: pointer;
   user-select: none;
   overflow: hidden;
@@ -615,6 +758,7 @@ onUnmounted(() => {
   white-space: nowrap;
   pointer-events: none;
   z-index: 30;
+  /* 气泡投影固定黑(投影=压暗通用语义);拂晓浅色皮肤下 0.35 略重但浮层层次仍合理 */
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 .hint-fade-enter-active,

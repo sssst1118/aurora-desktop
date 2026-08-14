@@ -164,8 +164,13 @@ async function followIsland(p: { x: number; y: number; w: number; h: number }) {
     const cx = p.x + p.w / 2;
     const m =
       monitors.find((mm) => cx >= mm.x && cx < mm.x + mm.w) ?? monitors[0];
-    const px = Math.min(Math.max(Math.round(p.x + p.w / 2 - w / 2), m.x), m.x + m.w - w);
-    const py = Math.min(Math.max(Math.round(p.y + p.h + 12), m.y), m.y + m.h - h);
+    // 窄显示器(m.w < 面板宽 w)时上限 m.x+m.w-w < 下限 m.x,Math.max 会产生
+    // 下限大于上限的非法区间,右缘直接出屏(审计项 2026-08-14):下限取 min 兜底
+    // 使下限=上限,面板右缘贴屏(左侧超屏),y 方向同理
+    const loX = Math.min(m.x, m.x + m.w - w);
+    const loY = Math.min(m.y, m.y + m.h - h);
+    const px = Math.min(Math.max(Math.round(p.x + p.w / 2 - w / 2), loX), m.x + m.w - w);
+    const py = Math.min(Math.max(Math.round(p.y + p.h + 12), loY), m.y + m.h - h);
     await win.setPosition(new LogicalPosition(px, py));
   } catch (e) {
     console.error("follow island geometry failed", e);
@@ -415,7 +420,8 @@ onUnmounted(() => {
 }
 
 .head-title {
-  font-size: 13.5px;
+  /* 字号档归并(设计文档 §5.3 四档):标题档 15px,原 13.5 混档(2026-08-14 审计) */
+  font-size: 15px;
   font-weight: 650;
   letter-spacing: 0.02em;
 }
@@ -427,7 +433,8 @@ onUnmounted(() => {
   border: none;
   outline: none;
   font-family: inherit;
-  font-size: 16.5px;
+  /* 字号档归并(设计文档 §5.3 四档):输入档 17px,原 16.5 混档(2026-08-14 审计) */
+  font-size: 17px;
   font-weight: 480;
   color: var(--aurora-text);
   caret-color: var(--aurora-accent);
@@ -499,7 +506,8 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 8px 14px 9px;
   border-top: 1px solid var(--aurora-border);
-  font-size: 10.5px;
+  /* 字号档归并(设计文档 §5.3 四档):caption 档 11px,原 10.5 混档(2026-08-14 审计) */
+  font-size: 11px;
   color: var(--aurora-text-dim);
   flex: none;
 }
@@ -526,8 +534,10 @@ kbd {
   border: 1px solid var(--aurora-border);
   background: var(--aurora-field);
   font-family: inherit;
-  font-size: 10px;
+  /* 字号档归并(设计文档 §5.3 四档):caption 档 11px,原 10 混档(2026-08-14 审计) */
+  font-size: 11px;
   color: var(--aurora-text);
+  /* 键帽投影固定黑 0.15(压暗通用语义,深浅皮肤通用,拂晓下观感正常) */
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
 }
 
