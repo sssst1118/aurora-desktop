@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Dock 快捷方式条目(AppConfig.dock_items 元素;2.1 模块命令直接复用本类型)
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -249,6 +249,9 @@ pub fn config_import(app: tauri::AppHandle, json: String) -> Result<bool, String
     drop(guard);
     if ok {
         crate::runtime::apply(&app, &cfg);
+        // Phase6 皮肤跨窗口热生效:全局广播(区别于前端 window 级 aurora:config-saved),
+        // 岛窗口监听到后重新 config_load + apply_theme,无需重启
+        let _ = app.emit("config-saved", ());
     }
     Ok(ok)
 }
@@ -335,6 +338,9 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> Result<bool, St
     // 同步运行中状态(热键/监听/watcher/采样线程/窗口显隐)。失败不阻断保存。
     if ok {
         crate::runtime::apply(&app, &cfg);
+        // Phase6 皮肤跨窗口热生效:全局广播(区别于前端 window 级 aurora:config-saved),
+        // 岛窗口监听到后重新 config_load + apply_theme,无需重启
+        let _ = app.emit("config-saved", ());
     }
     Ok(ok)
 }

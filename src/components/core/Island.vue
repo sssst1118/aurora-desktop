@@ -17,6 +17,7 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 import IslandDock from "./IslandDock.vue";
 import AuroraIcon from "../icons/AuroraIcon.vue";
+import { apply_theme } from "../../theme";
 
 interface SysStatus {
   cpu: number;
@@ -51,6 +52,7 @@ const netTx = ref("");
 
 let timeTimer: number | undefined;
 let unlistenSys: UnlistenFn | undefined;
+let unlistenCfg: UnlistenFn | undefined;
 
 function pad(n: number) {
   return n.toString().padStart(2, "0");
@@ -316,6 +318,24 @@ onMounted(async () => {
   }
   // 拖动结束(tauri://move)→ 防抖落盘 + 广播几何(主面板跟随)
   unMoved = await win.onMoved(() => schedulePersistGeometry());
+  // Phase6 皮肤跨窗口热生效:设置页保存后后端全局广播 config-saved,
+  // 岛窗口重载配置并应用主题(皮肤/强调色即时生效,无需重启)
+  try {
+    unlistenCfg = await listen("config-saved", async () => {
+      try {
+        const cfg = await invoke<{
+          theme_mode: string;
+          theme_accent: string;
+          skin?: string;
+        }>("config_load");
+        apply_theme(cfg);
+      } catch (e) {
+        console.error("config reload for theme failed", e);
+      }
+    });
+  } catch (e) {
+    console.error("listen config-saved failed", e);
+  }
   // 启动广播一次初始几何:落盘幂等(setup 已恢复的位置写回原值),主面板可得初始同步
   void persistGeometry();
   timeTimer = window.setInterval(tickTime, 1000);
@@ -330,6 +350,7 @@ onUnmounted(() => {
   if (animRaf) cancelAnimationFrame(animRaf);
   unlistenSys?.();
   unMoved?.();
+  unlistenCfg?.();
 });
 </script>
 
