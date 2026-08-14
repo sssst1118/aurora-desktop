@@ -36,12 +36,8 @@ pub fn run() {
                     let _ = win.hide();
                 }
             }
-            // 2.2 FileDrawer:drawer_open_on_launch 时启动即显示抽屉窗口
-            if cfg.enable_file_drawer && cfg.drawer_open_on_launch {
-                if let Some(win) = app.get_webview_window("drawer") {
-                    let _ = win.show();
-                }
-            }
+            // Phase6:drawer_open_on_launch 字段保留兼容但不再消费(旧独立 drawer 窗口已删除,
+            // 小桌面是主面板默认视图,呼出面板即见)
             // 热键注册失败(如被系统或其他程序占用)不阻止应用启动,只记录告警
             if let Err(e) = crate::hotkey::setup_hotkey(&handle) {
                 eprintln!("[aurora] 全局热键注册失败(可能被占用): {e}");
@@ -50,37 +46,20 @@ pub fn run() {
             crate::commands::clipboard::setup(&handle)?;
             // 2.2 FileDrawer:启动桌面目录 watcher(事件驱动;内部按 enable_file_drawer 开关自判)
             crate::commands::drawer::init_watcher(handle.clone())?;
-            // 搜索框几何记忆:恢复记住的位置/大小(2026-08-12 用户要求可移动/可缩放);
-            // 位置完全在屏幕外(显示器拔掉/分辨率变化)则回退居中
+            // 主面板几何记忆:只恢复记住的尺寸(Phase6 起位置不再恢复——呼出时由
+            // show_search_window 绑定岛下方;无记忆尺寸时跟随 tauri.conf.json 680x520)
             if let Some(win) = app.get_webview_window("search") {
-                let w = cfg.search_width.unwrap_or(620.0);
-                let h = cfg.search_height.unwrap_or(420.0);
+                let w = cfg.search_width.unwrap_or(680.0);
+                let h = cfg.search_height.unwrap_or(520.0);
                 let _ = win.set_size(tauri::LogicalSize::new(w, h));
-                if let (Some(x), Some(y)) = (cfg.search_x, cfg.search_y) {
-                    // 显示器工作区(物理像素 → 逻辑像素;scale_factor 为 dpi 缩放)
-                    let monitors: Vec<(i32, i32, i32, i32)> = app
-                        .available_monitors()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|m| {
-                            let s = m.scale_factor();
-                            let p = m.position();
-                            let sz = m.size();
-                            (
-                                (p.x as f64 / s).round() as i32,
-                                (p.y as f64 / s).round() as i32,
-                                (sz.width as f64 / s).round() as i32,
-                                (sz.height as f64 / s).round() as i32,
-                            )
-                        })
-                        .collect();
-                    if let Some((cx, cy)) = crate::win_utils::clamp_to_visible(
-                        x,
-                        y,
-                        w as i32,
-                        h as i32,
-                        &monitors,
-                    ) {
+            }
+            // Phase6:灵动岛位置恢复(拖动记忆;越界回退顶部居中)
+            if let Some(win) = app.get_webview_window("island") {
+                if let (Some(x), Some(y)) = (cfg.island_x, cfg.island_y) {
+                    let monitors = crate::win_utils::logical_monitors(&handle);
+                    if let Some((cx, cy)) =
+                        crate::win_utils::clamp_to_visible(x, y, 378, 46, &monitors)
+                    {
                         let _ = win.set_position(tauri::LogicalPosition::new(cx, cy));
                     }
                 }
@@ -166,6 +145,7 @@ pub fn run() {
             commands::config::config_export,
             commands::config::config_import,
             commands::config::search_save_geometry,
+            commands::config::island_save_geometry,
             commands::system::sys_get_status,
             // ---- 稳定性包:开机自启动(注册表 Run 键为真值) ----
             commands::launch::launch_set_startup,

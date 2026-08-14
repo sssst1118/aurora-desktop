@@ -73,6 +73,10 @@ pub struct AppConfig {
     // ---- 稳定性包(2026-08-13)----
     pub launch_at_startup: bool,           // 开机自启;注册表 Run 键为真值(commands/launch.rs 读写)
     pub first_run_done: bool,              // 首次启动引导是否已完成(见 first_run.rs;默认 false)
+    // ---- Phase6 UI 重构(2026-08-14,设计文档 §7)----
+    pub skin: String,                 // 皮肤包 "deep"|"midnight"|"dawn"|"verdant",默认 "deep"
+    pub island_x: Option<i32>,        // 灵动岛位置(逻辑像素);None=顶部居中
+    pub island_y: Option<i32>,
 }
 
 impl Default for AppConfig {
@@ -123,6 +127,9 @@ impl Default for AppConfig {
             search_height: None,
             launch_at_startup: false,
             first_run_done: false,
+            skin: "deep".to_string(),
+            island_x: None,
+            island_y: None,
         }
     }
 }
@@ -346,6 +353,18 @@ pub fn search_save_geometry(app: tauri::AppHandle, x: i32, y: i32, w: f64, h: f6
     cfg.search_y = Some(y);
     cfg.search_width = Some(w);
     cfg.search_height = Some(h);
+    save_to(&path, &cfg)
+}
+
+/// 灵动岛拖动后记忆位置(前端 onMoved 防抖后调用;None 语义=居中,由前端判断)。
+/// 只写配置文件、不触发热生效:位置是纯展示状态,下次启动由 setup 恢复。
+#[tauri::command]
+pub fn island_save_geometry(app: tauri::AppHandle, x: i32, y: i32) -> bool {
+    let path = config_path(&app);
+    let _guard = config_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let mut cfg = load_from(&path);
+    cfg.island_x = Some(x);
+    cfg.island_y = Some(y);
     save_to(&path, &cfg)
 }
 
@@ -580,6 +599,36 @@ mod tests {
         let loaded = load_from(&p);
         assert!(loaded.launch_at_startup);
         assert!(loaded.first_run_done);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // ---- Phase6 字段(设计文档 §7):老配置缺 Phase6 字段逐字段回退默认 ----
+
+    #[test]
+    fn missing_phase6_fields_fall_back_per_field() {
+        let p = tmp_cfg("p6partial");
+        std::fs::write(&p, r#"{"hotkey_search":"ctrl+alt+z"}"#).unwrap();
+        let cfg = load_from(&p);
+        assert_eq!(cfg.skin, "deep");
+        assert_eq!(cfg.island_x, None);
+        assert_eq!(cfg.island_y, None);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn phase6_fields_roundtrip() {
+        let p = tmp_cfg("p6roundtrip");
+        let cfg = AppConfig {
+            skin: "dawn".to_string(),
+            island_x: Some(120),
+            island_y: Some(30),
+            ..AppConfig::default()
+        };
+        assert!(save_to(&p, &cfg));
+        let loaded = load_from(&p);
+        assert_eq!(loaded.skin, "dawn");
+        assert_eq!(loaded.island_x, Some(120));
+        assert_eq!(loaded.island_y, Some(30));
         let _ = std::fs::remove_file(&p);
     }
 

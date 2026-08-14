@@ -104,9 +104,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show_all" => crate::win_utils::show_all(app),
             "hide_all" => crate::win_utils::hide_all(app),
-            "toggle_drawer" => crate::hotkey::toggle_drawer_window(app),
-            "toggle_clipboard" => crate::hotkey::toggle_clipboard_window(app),
-            "toggle_ai_panel" => crate::hotkey::toggle_ai_panel_window(app),
+            // Phase6:托盘入口 = 呼出主面板对应视图(旧独立窗口已删除)
+            "toggle_drawer" => crate::win_utils::show_panel_with_view(app, "drawer"),
+            "toggle_clipboard" => crate::win_utils::show_panel_with_view(app, "clipboard"),
+            "toggle_ai_panel" => crate::win_utils::show_panel_with_view(app, "ai"),
             // 5.1 检查更新:结果广播 update-check-result(前端/托盘弹窗均可消费)
             "check_update" => {
                 let tray_app = app.clone();

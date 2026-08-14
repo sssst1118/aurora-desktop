@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::commands::config::AppConfig;
@@ -21,52 +21,20 @@ fn registered() -> &'static Mutex<Option<HashMap<&'static str, String>>> {
     &REGISTERED
 }
 
-/// 2.2 抽屉窗口呼出/隐藏(热键与托盘共用入口)
+/// Phase6:抽屉热键 = 呼出主面板并定位到「小桌面」视图
+/// (旧独立 drawer 窗口已并入主面板,设计文档 §2 窗口收敛;热键与托盘共用入口)
 pub fn toggle_drawer_window(app: &AppHandle) {
-    toggle_window(app, "drawer", true);
+    crate::win_utils::show_panel_with_view(app, "drawer");
 }
 
-/// 2.3 剪贴板历史窗口呼出/隐藏(热键与托盘共用入口)
+/// Phase6:剪贴板热键 = 呼出主面板并定位到「剪贴板」视图(同上)
 pub fn toggle_clipboard_window(app: &AppHandle) {
-    toggle_window(app, "clipboard", true);
+    crate::win_utils::show_panel_with_view(app, "clipboard");
 }
 
-/// Phase3 3.1 AI 对话面板呼出/隐藏(热键与托盘共用入口);
-/// ai_panel 设计为不置顶(设计文档 §0.3.5),故 set_top=false
+/// Phase6:AI 热键 = 呼出主面板并定位到「AI 助手」视图(同上)
 pub fn toggle_ai_panel_window(app: &AppHandle) {
-    toggle_window(app, "ai_panel", false);
-}
-
-/// 通用窗口显隐切换(Phase1 toggle_search_window 同款手法):
-/// 显示时按 set_top 决定是否置顶强制 Z 序提升(drawer/clipboard 配置为置顶,ai_panel 不置顶)
-/// + Alt 伪按键绕过 Windows 前台锁,保证 WebView 输入可聚焦
-fn toggle_window(app: &AppHandle, label: &str, set_top: bool) {
-    let Some(win) = app.get_webview_window(label) else {
-        return;
-    };
-    if win.is_visible().unwrap_or(false) {
-        let _ = win.hide();
-        return;
-    }
-    let _ = win.show();
-    // 置顶幂等:已置顶则跳过,避免每次呼出都做无谓的 Z 序操作(显示更跟手)
-    if set_top && !win.is_always_on_top().unwrap_or(false) {
-        let _ = win.set_always_on_top(true);
-    }
-    unsafe {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            keybd_event, KEYEVENTF_KEYUP, VK_MENU,
-        };
-        keybd_event(VK_MENU as u8, 0, 0, 0);
-        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
-    }
-    if let Ok(hwnd) = win.hwnd() {
-        unsafe {
-            use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-            let _ = SetForegroundWindow(hwnd.0 as *mut core::ffi::c_void);
-        }
-    }
-    let _ = win.set_focus();
+    crate::win_utils::show_panel_with_view(app, "ai");
 }
 
 /// 注册单个热键,按下时触发 on_press
@@ -139,7 +107,7 @@ fn unregister_shortcut(app: &AppHandle, key: &str) {
     }
 }
 
-/// 用途 → 按键处理函数(抽屉/剪贴板/AI 三窗口)
+/// 用途 → 按键处理函数(抽屉/剪贴板/AI 三入口,Phase6 起均呼出主面板对应视图)
 fn handler_for(kind: &str) -> fn(&AppHandle) {
     match kind {
         "drawer" => toggle_drawer_window,

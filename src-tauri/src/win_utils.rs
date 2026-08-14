@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// 切换 search 窗口显隐(热键触发)。
 ///
@@ -25,6 +25,27 @@ pub fn toggle_search_window(app: &AppHandle) {
 /// search 窗口本身配置了 alwaysOnTop,重复置顶不改变属性,只强制 Z 序提升。
 pub fn show_search_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("search") {
+        // Phase6:主面板位置绑定岛——水平居中于岛,垂直在岛下方 12px;越界 clamp
+        if let Some(island) = app.get_webview_window("island") {
+            if let (Ok(ipos), Ok(isz)) = (island.outer_position(), island.outer_size()) {
+                let scale = island.scale_factor().unwrap_or(1.0);
+                let ix = ipos.x as f64 / scale;
+                let iy = ipos.y as f64 / scale;
+                let iw = isz.width as f64 / scale;
+                let ih = isz.height as f64 / scale;
+                if let Ok(ssize) = win.outer_size() {
+                    let sscale = win.scale_factor().unwrap_or(1.0);
+                    let w = ssize.width as f64 / sscale;
+                    let h = ssize.height as f64 / sscale;
+                    let monitors = logical_monitors(app);
+                    let px = (ix + iw / 2.0 - w / 2.0).round() as i32;
+                    let py = (iy + ih + 12.0).round() as i32;
+                    if let Some((cx, cy)) = clamp_to_visible(px, py, w as i32, h as i32, &monitors) {
+                        let _ = win.set_position(tauri::LogicalPosition::new(cx, cy));
+                    }
+                }
+            }
+        }
         let _ = win.show();
         // 置顶强制 Z 序提升(参考 ZeroLaunch 手法;窗口本就配置置顶,不改变属性)
         let _ = win.set_always_on_top(true);
@@ -48,13 +69,41 @@ pub fn show_search_window(app: &AppHandle) {
     }
 }
 
+/// 呼出主面板并定位到指定视图(抽屉/剪贴板/AI 热键与托盘入口共用)。
+/// 事件在 show 后 emit,前端 MainPanel 监听 "panel-open-view" 切换视图。
+pub fn show_panel_with_view(app: &AppHandle, view: &str) {
+    show_search_window(app);
+    let _ = app.emit("panel-open-view", serde_json::json!({ "view": view }));
+}
+
+/// 枚举显示器工作区(物理像素 → 逻辑像素四元组 (x, y, w, h));
+/// 呼出定位与位置恢复共用的坐标换算(scale_factor 为 DPI 缩放)
+pub(crate) fn logical_monitors(app: &AppHandle) -> Vec<(i32, i32, i32, i32)> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|m| {
+            let s = m.scale_factor();
+            let p = m.position();
+            let sz = m.size();
+            (
+                (p.x as f64 / s).round() as i32,
+                (p.y as f64 / s).round() as i32,
+                (sz.width as f64 / s).round() as i32,
+                (sz.height as f64 / s).round() as i32,
+            )
+        })
+        .collect()
+}
+
 /// 托盘"隐藏全部"时记录可见窗口快照,"显示全部"按快照恢复(恢复后清空)
 static HIDDEN_SNAPSHOT: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 /// 隐藏全部交互窗口(wallpaper 壁纸渲染窗口不受托盘管理,不参与);
 /// 隐藏前记录当前可见窗口,供 show_all 恢复
 pub fn hide_all(app: &AppHandle) {
-    const LABELS: [&str; 5] = ["island", "search", "drawer", "clipboard", "ai_panel"];
+    // Phase6 一岛一窗:交互窗口收敛为 island + search(drawer/clipboard/ai_panel 已删除)
+    const LABELS: [&str; 2] = ["island", "search"];
     let visible: Vec<String> = LABELS
         .iter()
         .filter(|l| {
