@@ -251,13 +251,36 @@ function selectPrev() {
   void scrollSelectedIntoView();
 }
 
+/** 轻提示(打开失败等非阻断反馈;3s 自动消退,与 Island showHint 同型) */
+const hint = ref("");
+let hintTimer: number | undefined;
+
+function showHint(text: string) {
+  hint.value = text;
+  if (hintTimer) window.clearTimeout(hintTimer);
+  hintTimer = window.setTimeout(() => {
+    hint.value = "";
+  }, 3000);
+}
+
 async function openSelected() {
   // 应用与文件走同一 open_item(ShellExecute 语义,文件/目录/应用通吃)
   const item = navigableItems.value[selected.value];
   if (!item) return;
-  const ok = await invoke<boolean>("open_item", { path: item.path });
+  let ok = false;
+  try {
+    ok = await invoke<boolean>("open_item", { path: item.path });
+  } catch (e) {
+    console.error("open_item failed", e);
+  }
+  // 打开失败(返回 false 或 IPC 异常):轻提示并保留面板,结果列表仍在可改选重试;
+  // 不再无条件 emit("open") 关面板(2026-08-14 波次 3 审计)
+  if (!ok) {
+    showHint("打开失败,请重试");
+    return;
+  }
   // 打开成功即写入最近使用(置顶去重;文件条目同样记入,kind 区分展示)
-  if (ok) saveRecent({ name: item.name, path: item.path, kind: item.kind });
+  saveRecent({ name: item.name, path: item.path, kind: item.kind });
   emit("open");
 }
 
@@ -293,11 +316,12 @@ onActivated(loadRecents);
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
   if (debounceTimer) window.clearTimeout(debounceTimer);
+  if (hintTimer) window.clearTimeout(hintTimer);
 });
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col min-h-0 select-none">
+  <div class="relative h-full w-full flex flex-col min-h-0 select-none">
     <!-- 进行中指示(150ms 防抖后真正发起搜索期间) -->
     <div
       v-if="searching"
@@ -370,6 +394,10 @@ onUnmounted(() => {
         </div>
       </template>
     </div>
+    <!-- 打开失败等非阻断轻提示:视图内居中浮层,3s 自动消退(不占用结果列表空间) -->
+    <Transition name="hint-fade">
+      <div v-if="hint" class="view-hint">{{ hint }}</div>
+    </Transition>
   </div>
 </template>
 
@@ -536,5 +564,31 @@ onUnmounted(() => {
 }
 .aurora-spin {
   animation: aurora-spin 0.8s linear infinite;
+}
+
+/* 轻提示气泡(打开失败等):视图内居中浮层,与 Island .island-hint 同观感 */
+.view-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--aurora-panel-solid);
+  border: 1px solid var(--aurora-border);
+  color: var(--aurora-text);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 30;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.hint-fade-enter-active,
+.hint-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.hint-fade-enter-from,
+.hint-fade-leave-to {
+  opacity: 0;
 }
 </style>

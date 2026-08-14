@@ -475,7 +475,11 @@ win.onDragDropEvent((event) => {
       // (参考剪贴板 deleteError 模式,2026-08-14 审计:此前一律提示"应用已在岛内"误导)
       try {
         const items = (await invoke<{ path: string }[]>("dock_get_items")) ?? [];
-        const allExist = apps.every((p) => items.some((it) => it.path === p));
+        // Windows 路径大小写不敏感:统一小写再比较,同路径不同大小写也应判为已存在
+        // (2026-08-14 波次 3 审计:此前严格相等,大小写差异会被误判为新应用)
+        const allExist = apps.every((p) =>
+          items.some((it) => it.path.toLowerCase() === p.toLowerCase()),
+        );
         showHint(allExist ? "应用已在岛内" : "添加失败:写入配置出错,请重试");
       } catch (e) {
         console.error("dock_get_items failed", e);
@@ -540,8 +544,11 @@ onMounted(async () => {
     console.error("listen config-saved failed", e);
   }
   void applyConfig();
-  // 启动广播一次初始几何:落盘幂等(setup 已恢复的位置写回原值),主面板可得初始同步
-  void persistGeometry();
+  // 启动只广播一次初始几何(主面板可得初始同步),不落盘:setup 的 setPosition 经
+  // Windows 消息循环异步生效,前端此刻读 innerPosition 可能早于移动完成,会把
+  // 未恢复到位的位置写进 config(漂移缺陷 2,2026-08-14 修复);
+  // 落盘仅由用户拖动(onMoved → schedulePersistGeometry)驱动
+  void emitGeometry();
   // 面板 Esc 二级收岛请求(面板→岛):展开才收起;同步清自动收回定时器,
   // 防 450ms 到期重复触发(if expanded 兜底存在,主动清更干净)
   try {

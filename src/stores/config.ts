@@ -62,6 +62,11 @@ export interface AppConfig {
   // ---- 稳定性包(与 src-tauri/src/commands/config.rs 同步)----
   launch_at_startup: boolean; // 开机自启;真值为注册表 Run 键(后端 launch_get_startup 读取)
   first_run_done: boolean; // 首次启动引导完成标记(后端自动置位)
+  // ---- Phase6 UI 重构(与 src-tauri/src/commands/config.rs:78-79 同步)----
+  // 2026-08-14 修复:此前接口缺这两个字段,前端 save 传回的 cfg 无岛位置,
+  // 后端 serde(default) 静默置 None 落盘,岛位置记忆被清、重启回默认位
+  island_x: number | null; // 灵动岛位置(逻辑像素);None=顶部居中
+  island_y: number | null;
 }
 
 export const useConfigStore = defineStore("config", {

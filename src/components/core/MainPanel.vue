@@ -8,6 +8,8 @@
  * - 打字即搜:窗口 keydown 按可见字符(排除修饰键/IME 组合/可输入元素焦点)→ 切 search 态并输入。
  * - Esc 三级(设计文档 §3.1「先收岛展开 → 再关主面板」,2026-08-14 审计中项):
  *   ① search 态清空回小桌面 ② 岛展开时请求岛收起(面板保持打开)③ 再按隐藏窗口。
+ *   焦点在可输入元素(INPUT/TEXTAREA/SELECT/富文本)时 Esc 放行不劫持(取消输入,
+ *   与打字即搜同一豁免原则)。
  *   岛展开状态来自岛 watch 广播的 island-expand-state 事件,收岛走反向事件
  *   island-collapse-request(纯事件通道,与 island-geometry 对称,无后端命令)。
  * - 位置跟随岛:监听 island-geometry(Task 3 岛拖动防抖后 emit,逻辑像素)→ 面板可见时
@@ -107,8 +109,24 @@ function replayPopIn() {
 
 // ---- 窗口级键盘:Esc 三级 + 打字即搜 ----
 
+/** 焦点是否在可输入元素(INPUT/TEXTAREA/SELECT/富文本)。
+    Esc 放行与打字即搜豁免共用同一原则(2026-08-14 波次 3 审计):焦点在输入区时
+    键盘事件归属输入控件,窗口级快捷键一律不劫持 */
+function isTypingTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  return (
+    t.tagName === "INPUT" ||
+    t.tagName === "TEXTAREA" ||
+    t.tagName === "SELECT" ||
+    t.isContentEditable
+  );
+}
+
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
+    // 焦点豁免:焦点在可输入元素时放行原生 Esc(取消输入/关闭下拉),
+    // 不触发清搜索/收岛/关面板——与下方打字即搜的焦点豁免原则一致
+    if (isTypingTarget(e.target)) return;
     e.preventDefault();
     if (activeView.value === "search") {
       // 一级:搜索态 → 清空输入退回小桌面(对标 Raycast,面板保持打开)
@@ -134,16 +152,7 @@ function onWindowKeydown(e: KeyboardEvent) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key.length !== 1) return;
   if (activeView.value === "search") return;
-  const t = e.target as HTMLElement | null;
-  if (
-    t &&
-    (t.tagName === "INPUT" ||
-      t.tagName === "TEXTAREA" ||
-      t.tagName === "SELECT" ||
-      t.isContentEditable)
-  ) {
-    return;
-  }
+  if (isTypingTarget(e.target)) return;
   e.preventDefault();
   showView("search", e.key);
 }
@@ -218,9 +227,18 @@ function scheduleSaveSize() {
 }
 
 // ---- 右下角缩放手柄(无边框窗口无系统 resize 边框,自绘手柄 + setSize;
-//      移植自 SearchBar 的 rAF 节流模式,最小尺寸下限防布局挤崩) ----
+//      移植自 SearchBar 的 rAF 节流模式,尺寸夹在 360×260 ~ 2 倍显示器之间,
+//      与后端 clamp_search_size 同口径) ----
 
-let resizeState: { sx: number; sy: number; w: number; h: number } | null = null;
+let resizeState: {
+  sx: number;
+  sy: number;
+  w: number;
+  h: number;
+  /** 尺寸上限(逻辑像素)= 显示器尺寸 × 2,与后端 clamp_search_size 对齐 */
+  maxW: number;
+  maxH: number;
+} | null = null;
 let lastDx = 0;
 let lastDy = 0;
 let resizeRaf = 0;
@@ -228,9 +246,21 @@ let resizeRaf = 0;
 async function resizeStart(e: PointerEvent) {
   e.preventDefault();
   try {
-    const size = await win.innerSize();
-    const sf = await win.scaleFactor();
-    resizeState = { sx: e.screenX, sy: e.screenY, w: size.width / sf, h: size.height / sf };
+    const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    // 上限与后端 clamp_search_size 同口径:全部显示器取最大宽/高 × 2;
+    // 无显示器时后端回退 4096(2026-08-14 波次 3 审计:此前仅 Math.max 下限,
+    // 拖大无上限,巨窗口 setSize 卡渲染且与后端落盘 clamp 不一致)
+    const monitors = await logicalMonitors();
+    const maxW = monitors.length ? Math.max(...monitors.map((m) => m.w)) * 2 : 4096;
+    const maxH = monitors.length ? Math.max(...monitors.map((m) => m.h)) * 2 : 4096;
+    resizeState = {
+      sx: e.screenX,
+      sy: e.screenY,
+      w: size.width / sf,
+      h: size.height / sf,
+      maxW,
+      maxH,
+    };
     window.addEventListener("pointermove", resizeMove);
     window.addEventListener("pointerup", resizeEnd);
   } catch (err) {
@@ -249,8 +279,9 @@ function resizeMove(e: PointerEvent) {
 function applyResize() {
   resizeRaf = 0;
   if (!resizeState) return;
-  const w = Math.max(360, Math.round(resizeState.w + lastDx));
-  const h = Math.max(260, Math.round(resizeState.h + lastDy));
+  // 下限 360×260 与后端 clamp_search_size 的 MIN 一致;上限 2 倍显示器
+  const w = Math.min(resizeState.maxW, Math.max(360, Math.round(resizeState.w + lastDx)));
+  const h = Math.min(resizeState.maxH, Math.max(260, Math.round(resizeState.h + lastDy)));
   win.setSize(new LogicalSize(w, h)).catch((err) => console.error("setSize failed", err));
 }
 
