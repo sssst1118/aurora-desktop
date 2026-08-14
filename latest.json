@@ -1,6 +1,6 @@
 {
-  "version": "0.2.1",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.1/Aurora_0.2.1_x64-setup.exe",
-  "sha256": "69021a8e1ffbee17a35629abbffac554f60a11794b242dd368fd880b5828d1b2",
-  "notes": "v0.2.1:面板实时跟随岛拖动(节流 80ms 随动+防抖落盘);搜索界面补最近访问引导空态(✦ 输入以搜索);Dock 开关生效+加载失败重试;AI 清空二次确认+消息长度上限;启动去重消竞态;窄屏面板防出屏;剪贴板/分类选中态极光竖条统一;字号四档收敛"
+  "version": "0.2.2",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.2/Aurora_0.2.2_x64-setup.exe",
+  "sha256": "a5435b7eed39ddd13c870fed3c2bda87580d1570280f69796b20c95185fbaab4",
+  "notes": "v0.2.2:Esc 三级递进(搜索态清输入→岛展开先收岛→再关面板,面板跟随设计承诺);reduced-motion 全量覆盖;文档与实现对齐;测试语义修正"
 }
