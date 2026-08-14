@@ -1,50 +1,178 @@
-/* Phase4 4.4 主题令牌(设计文档 §4.2)。
- * html.dark class 由 theme.ts 按 theme_mode 控制;深色值 = 迁移前硬编码值,浅色值 = 新增。
- * 组件内不写 dark: 变体,深浅色全部由 CSS 变量驱动。 */
+/* Phase6 视觉系统(设计文档 §5):四套皮肤令牌 + 极光缘签名元素 + 通用面板类。
+ * - 皮肤:documentElement.dataset.skin("deep"|"midnight"|"dawn"|"verdant")由 theme.ts 切换;
+ *   :root 块 = deep(默认)皮肤令牌值,三个 [data-skin=...] 块覆盖;令牌值移植自设计稿 aurora-v02-preview.html。
+ * - 保留 Phase4 的 --aurora-* 键名与语义色(下游 Settings/各面板在用),只改值与新增皮肤块,不删语义色键。
+ * - 新增:--aur-1/2/3(极光带三色)、--glass-hi(玻璃高光)到每个皮肤块。
+ * - html.dark 仍由 theme.ts 切换(影响系统级 color-scheme 与未来 dark: 变体);皮肤令牌自身决定明暗,
+ *   dawn 皮肤块内 color-scheme: light。
+ * - 字号收敛 4 档:11(caption/辅助)/13(body)/15(标题)/17(输入);数字统一 .num(tabular-nums);
+ *   圆角体系:面板根 16px/控件 10px/胶囊 999px。 */
+
+/* ---- 皮肤令牌:深空(默认) ---- */
 :root {
-  /* 浅色主题(Light) */
-  --aurora-panel: rgba(255, 255, 255, 0.72); /* 面板毛玻璃底色 */
-  --aurora-panel-solid: #f8fafc; /* 不透明面板(AI 面板等) */
-  --aurora-text: #0f172a;
-  --aurora-text-dim: rgba(15, 23, 42, 0.55);
-  --aurora-border: rgba(15, 23, 42, 0.12);
-  --aurora-accent: #3b82f6; /* 默认蓝,theme_accent 换 token 名映射 */
-  --aurora-field: rgba(15, 23, 42, 0.05); /* 输入框底色 */
-  --aurora-field-hover: rgba(15, 23, 42, 0.09); /* 字段/按钮 hover 提亮 */
-  /* 语义色(危险/成功/警示):浅色用 600/700 系深色保证白底可读,bg 为同色系淡底 */
-  --aurora-danger: #b91c1c;
-  --aurora-danger-bg: rgba(185, 28, 28, 0.08);
-  --aurora-success: #047857;
-  --aurora-success-bg: rgba(4, 120, 87, 0.08);
+  color-scheme: dark;
+  --aurora-panel: rgba(15, 21, 40, 0.62); /* 玻璃面板底色 */
+  --aurora-panel-solid: #0d1322; /* 不透明面板(AI 面板等) */
+  --aurora-text: #f2f5fb;
+  --aurora-text-dim: rgba(242, 245, 251, 0.52);
+  --aurora-border: rgba(255, 255, 255, 0.08);
+  --aurora-accent: #38bdf8; /* 皮肤默认强调色,theme_accent 可覆盖 */
+  --aurora-field: rgba(255, 255, 255, 0.05); /* 输入框底色 */
+  --aurora-field-hover: rgba(255, 255, 255, 0.08); /* 字段/按钮 hover 与选中底 */
+  /* 语义色(危险/成功/警示):深色皮肤用 300/400 系浅色观感,bg 为同色系淡底 */
+  --aurora-danger: #f87171;
+  --aurora-danger-bg: rgba(248, 113, 113, 0.12);
+  --aurora-success: #34d399;
+  --aurora-success-bg: rgba(52, 211, 153, 0.12);
+  --aurora-warn: #fde68a;
+  --aurora-warn-bg: rgba(245, 158, 11, 0.1);
+  --aurora-switch-thumb: #ffffff;
+  /* Phase6 新增:玻璃高光 + 极光带三色 */
+  --glass-hi: rgba(255, 255, 255, 0.05);
+  --aur-1: #34d399;
+  --aur-2: #38bdf8;
+  --aur-3: #a78bfa;
+}
+
+/* ---- 皮肤:午夜 ---- */
+:root[data-skin="midnight"] {
+  color-scheme: dark;
+  --aurora-panel: rgba(10, 10, 14, 0.68);
+  --aurora-panel-solid: #0b0b10;
+  --aurora-text: #f4f4f8;
+  --aurora-text-dim: rgba(244, 244, 248, 0.5);
+  --aurora-border: rgba(255, 255, 255, 0.09);
+  --aurora-accent: #a78bfa;
+  --aurora-field: rgba(255, 255, 255, 0.05);
+  --aurora-field-hover: rgba(255, 255, 255, 0.085);
+  --aurora-danger: #f87171;
+  --aurora-danger-bg: rgba(248, 113, 113, 0.12);
+  --aurora-success: #34d399;
+  --aurora-success-bg: rgba(52, 211, 153, 0.12);
+  --aurora-warn: #fde68a;
+  --aurora-warn-bg: rgba(245, 158, 11, 0.1);
+  --aurora-switch-thumb: #ffffff;
+  --glass-hi: rgba(255, 255, 255, 0.045);
+  --aur-1: #818cf8;
+  --aur-2: #a78bfa;
+  --aur-3: #e879f9;
+}
+
+/* ---- 皮肤:拂晓(浅色) ---- */
+:root[data-skin="dawn"] {
+  color-scheme: light;
+  --aurora-panel: rgba(255, 255, 255, 0.6);
+  --aurora-panel-solid: #f8fafc;
+  --aurora-text: #16213a;
+  --aurora-text-dim: rgba(22, 33, 58, 0.5);
+  --aurora-border: rgba(15, 23, 42, 0.1);
+  --aurora-accent: #4f7df9;
+  --aurora-field: rgba(15, 23, 42, 0.05);
+  --aurora-field-hover: rgba(15, 23, 42, 0.07);
+  /* 语义色:浅色用 600/700 系深色保证白底可读 */
+  --aurora-danger: #dc2626;
+  --aurora-danger-bg: rgba(220, 38, 38, 0.08);
+  --aurora-success: #059669;
+  --aurora-success-bg: rgba(5, 150, 105, 0.08);
   --aurora-warn: #b45309;
   --aurora-warn-bg: rgba(180, 83, 9, 0.08);
-  /* 开关滑块:浅色下用深灰,保证在浅色轨道上可见(深色下为白) */
   --aurora-switch-thumb: #475569;
+  --glass-hi: rgba(255, 255, 255, 0.75);
+  --aur-1: #34d399;
+  --aur-2: #38bdf8;
+  --aur-3: #8b7cf6;
 }
 
-:root.dark {
-  /* 深色主题(当前视觉,原样迁入) */
-  --aurora-panel: rgba(0, 0, 0, 0.7);
-  --aurora-panel-solid: #020617;
-  --aurora-text: #ffffff;
-  --aurora-text-dim: rgba(255, 255, 255, 0.3);
-  --aurora-border: rgba(255, 255, 255, 0.1);
-  --aurora-accent: #3b82f6;
+/* ---- 皮肤:翠野 ---- */
+:root[data-skin="verdant"] {
+  color-scheme: dark;
+  --aurora-panel: rgba(10, 24, 17, 0.64);
+  --aurora-panel-solid: #0b1a12;
+  --aurora-text: #eefaf4;
+  --aurora-text-dim: rgba(238, 250, 244, 0.5);
+  --aurora-border: rgba(255, 255, 255, 0.09);
+  --aurora-accent: #34d399;
   --aurora-field: rgba(255, 255, 255, 0.05);
-  --aurora-field-hover: rgba(255, 255, 255, 0.1);
-  /* 语义色:深色沿用迁移前 300 系浅色观感,bg 为同色系 10% 淡底 */
-  --aurora-danger: #fca5a5; /* red-300 */
-  --aurora-danger-bg: rgba(239, 68, 68, 0.1); /* red-500/10 */
-  --aurora-success: #6ee7b7; /* emerald-300 */
-  --aurora-success-bg: rgba(16, 185, 129, 0.1); /* emerald-500/10 */
-  --aurora-warn: #fde68a; /* amber-200 */
-  --aurora-warn-bg: rgba(245, 158, 11, 0.1); /* amber-500/10 */
+  --aurora-field-hover: rgba(255, 255, 255, 0.085);
+  --aurora-danger: #f87171;
+  --aurora-danger-bg: rgba(248, 113, 113, 0.12);
+  --aurora-success: #4ade80;
+  --aurora-success-bg: rgba(74, 222, 128, 0.12);
+  --aurora-warn: #fde68a;
+  --aurora-warn-bg: rgba(245, 158, 11, 0.1);
   --aurora-switch-thumb: #ffffff;
+  --glass-hi: rgba(255, 255, 255, 0.05);
+  --aur-1: #34d399;
+  --aur-2: #4ade80;
+  --aur-3: #38bdf8;
 }
 
-/* ---- 全局质感(2026-08-13 UI 升级) ---- */
+/* ---- 通用玻璃面板 + 极光缘(签名元素,设计稿 .panel 移植;各窗口根容器加 .aurora-panel) ---- */
+.aurora-panel {
+  position: relative;
+  border-radius: 16px;
+  border: 1px solid var(--aurora-border);
+  background: linear-gradient(180deg, var(--glass-hi), transparent 42%), var(--aurora-panel);
+  backdrop-filter: blur(28px) saturate(165%);
+  -webkit-backdrop-filter: blur(28px) saturate(165%);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
 
-/* 细窄半透明滚动条:深浅色自动适配,拖拽提示之外的滚动体验优化 */
+/* 极光缘:顶部 1.5px 流动渐变光带(9s 循环) */
+.aurora-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--aur-1) 18%,
+    var(--aur-2) 50%,
+    var(--aur-3) 82%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: aurora-flow 9s linear infinite;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/* 极光缘上方柔光晕 */
+.aurora-panel::after {
+  content: "";
+  position: absolute;
+  top: -14px;
+  left: 8%;
+  right: 8%;
+  height: 30px;
+  background: linear-gradient(90deg, var(--aur-2), var(--aur-3));
+  filter: blur(26px);
+  opacity: 0.13;
+  pointer-events: none;
+}
+
+@keyframes aurora-flow {
+  from {
+    background-position: 0% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-panel::before {
+    animation: none;
+  }
+}
+
+/* ---- 全局质感 ---- */
+
+/* 细窄半透明滚动条(6px):随皮肤令牌自动适配 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -60,13 +188,25 @@
   background: var(--aurora-text-dim);
 }
 
-/* 输入光标取强调色:小细节,聚焦时与主题色呼应 */
+/* 输入光标取强调色 */
 input,
 textarea {
   caret-color: var(--aurora-accent);
 }
 
-/* 可拖区域把手(搜索框 header/设置页标题栏):默认极淡,悬停提亮,提示"这里能拖窗口" */
+/* 键盘焦点环:强调色描边 */
+:focus-visible {
+  outline: 2px solid var(--aurora-accent);
+  outline-offset: 2px;
+}
+
+/* 数字统一 tabular-nums */
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* 可拖区域把手:默认极淡,悬停提亮,提示"这里能拖窗口" */
 .aurora-drag-hint {
   color: var(--aurora-text-dim);
   opacity: 0.45;

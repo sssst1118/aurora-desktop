@@ -18,7 +18,9 @@ const root =
 // config_load 失败(后端未就绪)时用默认 system/blue 兜底
 async function bootstrap() {
   try {
-    const cfg = await invoke<{ theme_mode: string; theme_accent: string }>("config_load");
+    const cfg = await invoke<{ theme_mode: string; theme_accent: string; skin: string }>(
+      "config_load"
+    );
     apply_theme(cfg);
   } catch (e) {
     console.error("config_load failed, fallback to default theme", e);
