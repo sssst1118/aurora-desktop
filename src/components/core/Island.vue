@@ -17,7 +17,7 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 import IslandDock from "./IslandDock.vue";
 import AuroraIcon from "../icons/AuroraIcon.vue";
-import { apply_theme } from "../../theme";
+import { apply_theme, apply_panel_style } from "../../theme";
 
 interface SysStatus {
   cpu: number;
@@ -145,37 +145,49 @@ function openSearchPanel() {
   invoke("open_search").catch((e) => console.error("open_search failed", e));
 }
 
-// ---- 单击/双击判定:单击=展开/收起;240ms 内第二击=双击呼出主面板;拖动 >4px 不触发 ----
+// ---- 单击/双击判定(pointerdown 驱动,2026-08-14 真机反馈修复):
+// 单击=展开/收起;240ms 内第二次按下=双击呼出主面板;按下后移动 >4px=拖动,取消单击。
+// 改用 pointerdown 计数而非 click/dblclick 事件:data-tauri-drag-region 元素上
+// 原生拖动会吞掉 click,导致"只有特定区域能双击"——按下事件不受影响,全岛判定一致。 ----
 
 let clickTimer: number | undefined;
 let downPos: { x: number; y: number } | null = null;
+let lastDownAt = 0;
 
 function onPointerDown(e: PointerEvent) {
-  if ((e.target as HTMLElement | null)?.closest('[data-tauri-drag-region="false"]')) return;
-  downPos = { x: e.clientX, y: e.clientY };
-}
-
-function onRootClick(e: MouseEvent) {
   const target = e.target as HTMLElement | null;
-  // 括入区/搜索入口的点击不参与岛单击判定(与设计稿同:图标区点空白不收起)
+  // 括入区(Dock 图标/✕/＋)与搜索入口的按下不参与岛判定(设计稿同)
   if (!target || target.closest(".mini-dock, .search-entry")) return;
-  // 拖动 >4px 视为拖动,不触发单击(设计文档 §3.1)
-  if (downPos) {
-    const d = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+  downPos = { x: e.clientX, y: e.clientY };
+  const now = performance.now();
+  if (now - lastDownAt < DOUBLE_CLICK_MS) {
+    // 双击:呼出主面板(同时展开)
+    lastDownAt = 0;
     downPos = null;
-    if (d > 4) return;
-  }
-  if (clickTimer !== undefined) {
-    // 240ms 内第二击 = 双击:呼出主面板(同时展开)
-    window.clearTimeout(clickTimer);
-    clickTimer = undefined;
+    if (clickTimer !== undefined) {
+      window.clearTimeout(clickTimer);
+      clickTimer = undefined;
+    }
     openSearchPanel();
     return;
   }
+  lastDownAt = now;
   clickTimer = window.setTimeout(() => {
     clickTimer = undefined;
     toggleExpand();
   }, DOUBLE_CLICK_MS);
+}
+
+/** 按下后移动 >4px 判定为拖动:取消 pending 单击(原生拖动接管) */
+function onPointerMove(e: PointerEvent) {
+  if (!downPos) return;
+  if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
+    downPos = null;
+    if (clickTimer !== undefined) {
+      window.clearTimeout(clickTimer);
+      clickTimer = undefined;
+    }
+  }
 }
 
 // ---- 几何记忆 + 主面板跟随事件 ----
@@ -319,7 +331,7 @@ onMounted(async () => {
   // 拖动结束(tauri://move)→ 防抖落盘 + 广播几何(主面板跟随)
   unMoved = await win.onMoved(() => schedulePersistGeometry());
   // Phase6 皮肤跨窗口热生效:设置页保存后后端全局广播 config-saved,
-  // 岛窗口重载配置并应用主题(皮肤/强调色即时生效,无需重启)
+  // 岛窗口重载配置并应用主题(皮肤/强调色/显示方式即时生效,无需重启)
   try {
     unlistenCfg = await listen("config-saved", async () => {
       try {
@@ -327,8 +339,10 @@ onMounted(async () => {
           theme_mode: string;
           theme_accent: string;
           skin?: string;
+          search_style?: string;
         }>("config_load");
         apply_theme(cfg);
+        apply_panel_style(cfg.search_style ?? "solid");
       } catch (e) {
         console.error("config reload for theme failed", e);
       }
@@ -361,16 +375,18 @@ onUnmounted(() => {
     data-tauri-drag-region
     title="单击展开 Dock · 双击呼出主面板"
     @pointerdown="onPointerDown"
-    @click="onRootClick"
+    @pointermove="onPointerMove"
   >
-    <span class="pulse-dot"></span>
-    <span class="time num">{{ timeStr }}</span>
-    <span class="stats">
+    <!-- 静态展示元素全部标 drag-region(bare 语义下命中它们也能拖动窗口,
+         2026-08-14 真机反馈:此前只有根元素空白处能拖) -->
+    <span class="pulse-dot" data-tauri-drag-region></span>
+    <span class="time num" data-tauri-drag-region>{{ timeStr }}</span>
+    <span class="stats" data-tauri-drag-region>
       <span>CPU <b class="num">{{ cpu }}</b></span>
       <span>内存 <b class="num">{{ mem }}</b></span>
       <span class="net"><b class="num">{{ netRx }}</b> <b class="num">{{ netTx }}</b></span>
     </span>
-    <span class="divider"></span>
+    <span class="divider" data-tauri-drag-region></span>
     <IslandDock
       ref="dockRef"
       :expanded="expanded"

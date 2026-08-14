@@ -36,6 +36,16 @@ export function apply_skin(skin: string): void {
   document.documentElement.dataset.skin = VALID_SKINS.includes(skin) ? skin : "deep";
 }
 
+/**
+ * 应用面板显示方式(Phase6 真机反馈恢复的设置项):
+ * @param style "glass"(半透明玻璃)| "solid"(不透明,默认)
+ * 实现 = <html data-glass>:global.css 的 [data-glass="true"] 块把 --aurora-panel
+ * 覆盖为半透明值;默认(无属性)即各皮肤实色。真窗口无系统级模糊,玻璃为纯半透明效果。
+ */
+export function apply_panel_style(style: string): void {
+  document.documentElement.dataset.glass = style === "glass" ? "true" : "";
+}
+
 /** 解析 skin 字段:显式非默认皮肤直接用;缺失或默认 "deep"(老用户)+ 浅色主题 → 拂晓(兼容映射) */
 function resolveSkin(cfg: { theme_mode: string; skin?: string }): string {
   const skin = cfg.skin ?? "deep";

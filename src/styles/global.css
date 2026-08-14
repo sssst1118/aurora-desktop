@@ -11,7 +11,7 @@
 /* ---- 皮肤令牌:深空(默认) ---- */
 :root {
   color-scheme: dark;
-  --aurora-panel: rgba(15, 21, 40, 0.62); /* 玻璃面板底色 */
+  --aurora-panel: #10182c; /* 面板底色(默认不透明:透明窗口无真模糊,半透明透桌面读不清;玻璃模式见文末 data-glass 覆盖块) */
   --aurora-panel-solid: #0d1322; /* 不透明面板(AI 面板等) */
   --aurora-text: #f2f5fb;
   --aurora-text-dim: rgba(242, 245, 251, 0.52);
@@ -37,7 +37,7 @@
 /* ---- 皮肤:午夜 ---- */
 :root[data-skin="midnight"] {
   color-scheme: dark;
-  --aurora-panel: rgba(10, 10, 14, 0.68);
+  --aurora-panel: #0a0a0e;
   --aurora-panel-solid: #0b0b10;
   --aurora-text: #f4f4f8;
   --aurora-text-dim: rgba(244, 244, 248, 0.5);
@@ -61,7 +61,7 @@
 /* ---- 皮肤:拂晓(浅色) ---- */
 :root[data-skin="dawn"] {
   color-scheme: light;
-  --aurora-panel: rgba(255, 255, 255, 0.6);
+  --aurora-panel: #f4f6fb;
   --aurora-panel-solid: #f8fafc;
   --aurora-text: #16213a;
   --aurora-text-dim: rgba(22, 33, 58, 0.5);
@@ -86,7 +86,7 @@
 /* ---- 皮肤:翠野 ---- */
 :root[data-skin="verdant"] {
   color-scheme: dark;
-  --aurora-panel: rgba(10, 24, 17, 0.64);
+  --aurora-panel: #0b1a12;
   --aurora-panel-solid: #0b1a12;
   --aurora-text: #eefaf4;
   --aurora-text-dim: rgba(238, 250, 244, 0.5);
@@ -168,6 +168,22 @@
   .aurora-panel::before {
     animation: none;
   }
+}
+
+/* ---- 显示方式:玻璃模式(设置可选;默认不透明,2026-08-14 真机反馈)。
+   玻璃=半透明面板色;真窗口 backdrop-filter 只能模糊窗口内内容,
+   桌面内容透出效果依赖系统级材质(后续可用 vibrancy 插件增强)。 ---- */
+:root[data-glass="true"] {
+  --aurora-panel: rgba(15, 21, 40, 0.62);
+}
+:root[data-glass="true"][data-skin="midnight"] {
+  --aurora-panel: rgba(10, 10, 14, 0.68);
+}
+:root[data-glass="true"][data-skin="dawn"] {
+  --aurora-panel: rgba(255, 255, 255, 0.6);
+}
+:root[data-glass="true"][data-skin="verdant"] {
+  --aurora-panel: rgba(10, 24, 17, 0.64);
 }
 
 /* ---- 全局质感 ---- */

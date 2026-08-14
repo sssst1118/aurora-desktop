@@ -1,6 +1,6 @@
 use crate::indexer::app_index::{AppEntry, AppIndex};
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::State;
 
 /// 在内存索引中搜索应用(搜索质量包 2026-08-13):
 /// 名称子串 > 拼音全拼前缀 > 拼音首字母三层匹配,层内完全命中优先,
@@ -27,13 +27,13 @@ pub fn open_item(path: String) -> bool {
     opener::open(&path).is_ok()
 }
 
-/// 显示 search 窗口并聚焦(island 点击唤起搜索;纯打开语义,AIPanel 设置入口在用)
+/// 显示 search 窗口并聚焦(island 双击唤起主面板;AIPanel 设置入口在用)。
+/// Phase6 修复(2026-08-14 真机反馈):原实现只 show+focus,未走定位逻辑,
+/// 主面板停在旧位置而非岛正下方 → 改走 win_utils::show_search_window
+/// (定位岛下方 12px 水平居中 + 置顶强制提升 + 前台锁绕过,与热键呼出同链路)
 #[tauri::command]
 pub fn open_search(app: tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("search") {
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
+    crate::win_utils::show_search_window(&app);
 }
 
 /// 显隐切换 search 窗口(island 点击/双击呼出;与热键同款 toggle 逻辑)

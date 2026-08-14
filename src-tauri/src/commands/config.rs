@@ -120,7 +120,7 @@ impl Default for AppConfig {
                 .to_string(),
             wallpaper_multi_monitor: false,
             wallpaper_span_mode: true,
-            search_style: "glass".to_string(),
+            search_style: "solid".to_string(), // Phase6 真机反馈(2026-08-14):默认不透明;玻璃为可选
             search_x: None,
             search_y: None,
             search_width: None,

@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useConfigStore, type AppConfig } from "../../stores/config";
-import { apply_theme } from "../../theme";
+import { apply_theme, apply_panel_style } from "../../theme";
 import ToggleSwitch from "../ToggleSwitch.vue";
 import WallpaperPanel from "./WallpaperPanel.vue";
 
@@ -477,6 +477,24 @@ const SKINS = [
 ];
 
 /** 强调色圆点数据(token 名与后端 theme_accent 一致;色值为 Phase6 新 4 色) */
+const PANEL_STYLES = [
+  { id: "solid", label: "经典不透明" },
+  { id: "glass", label: "极光玻璃" },
+];
+
+/** 显示方式选中态(search_style 老字段;Phase6 真机反馈恢复设置项,默认不透明) */
+function panelStyle(): string {
+  return store.cfg?.search_style === "glass" ? "glass" : "solid";
+}
+
+/** 显示方式切换:保存 + 立即应用(data-glass 属性驱动 global.css 面板色) */
+async function setPanelStyle(style: string) {
+  if (!store.cfg) return;
+  store.cfg.search_style = style;
+  await saveSafe();
+  apply_panel_style(style);
+}
+
 const ACCENTS = [
   { name: "blue", value: "#38bdf8" },
   { name: "purple", value: "#a78bfa" },
@@ -1458,6 +1476,19 @@ async function uiaType() {
             :aria-label="`强调色:${c.name}`"
             @click="setAccent(c.name)"
           />
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">显示方式</span>
+          <button
+            v-for="p in PANEL_STYLES"
+            :key="p.id"
+            class="text-xs px-3 py-1 rounded-full transition-all active:scale-95"
+            :class="panelStyle() === p.id ? CHIP_ON : CHIP_OFF"
+            :aria-label="`显示方式:${p.label}`"
+            @click="setPanelStyle(p.id)"
+          >
+            {{ p.label }}
+          </button>
         </div>
       </div>
 

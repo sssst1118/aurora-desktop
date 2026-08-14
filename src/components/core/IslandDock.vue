@@ -202,8 +202,10 @@ defineExpose({ addPaths });
 
 <template>
   <!-- 括入区根容器:整窗可拖下显式禁拖(tauri 2.11 drag-region="false" 阻断祖先判定,
-  保证瓦片点击/✕/＋ 交互不被拖动接管;与旧 Dock.vue 同款处理) -->
-  <div class="mini-dock" data-tauri-drag-region="false">
+  保证瓦片点击/✕/＋ 交互不被拖动接管;与旧 Dock.vue 同款处理)。
+  expanded class = 岛展开态样式联动(收起时隐藏,2026-08-14 真机反馈:此前收起态
+  括入区无隐藏样式,被静态内容挤成 34px 宽仍可见,表现为"Dock 只有一个图标") -->
+  <div class="mini-dock" :class="{ expanded }" data-tauri-drag-region="false">
     <button
       v-for="it in visibleItems"
       :key="it.path"
@@ -297,6 +299,29 @@ defineExpose({ addPaths });
 </template>
 
 <style scoped>
+/* 括入区(设计稿 .island .mini-dock 移植):
+   收起态隐藏(淡出+左移),展开态淡入;防挤压——静态内容(时间/状态)占满窄岛时
+   不把 Dock 区压成 34px 竖条(2026-08-14 真机反馈) */
+.mini-dock {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: translateX(-8px);
+  transition:
+    opacity 0.22s ease 0.08s,
+    transform 0.22s ease 0.08s;
+  pointer-events: none;
+}
+.mini-dock.expanded {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
 /* 图标瓦片(设计稿 .dock-tile 移植,令牌换 --aurora-*) */
 .dock-tile {
   position: relative;
