@@ -1,6 +1,6 @@
 {
-  "version": "0.1.1",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.1.1/Aurora_0.1.1_x64-setup.exe",
-  "sha256": "e717684281b2214e6b98d0813d9528c7c27839347afedada6b9c38f53bab3408",
-  "notes": "搜索框直接搜文件;AI 危险工具执行前用户确认;剪贴板单条删除;热键录制输入;主题即时生效修复;多项安全加固(html 壁纸权限洞/更新源白名单/符号链接逃逸封堵)"
+  "version": "0.2.0",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.0/Aurora_0.2.0_x64-setup.exe",
+  "sha256": "aadf68350f43a828055ebdac61d9059159e3f90f5551c2108f986e1e149705d6",
+  "notes": "全新形态「一岛一窗」:灵动岛药丸三态(单击展开 Dock/双击呼出主面板/位置跟随);主面板五视图合一(小桌面/AI/剪贴板/设置,打字即搜);4 套皮肤+极光缘签名视觉;默认不透明面板"
 }
