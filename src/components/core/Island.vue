@@ -422,16 +422,12 @@ onUnmounted(() => {
   background: linear-gradient(180deg, var(--glass-hi), transparent 45%), var(--aurora-panel);
   backdrop-filter: blur(28px) saturate(165%);
   -webkit-backdrop-filter: blur(28px) saturate(165%);
-  box-shadow:
-    0 10px 36px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  /* 2026-08-14 真机反馈:外阴影在透明矩形窗口内被裁剪,圆角药丸外露出
+     "方块"残影 → 去掉外阴影,只保留内高光;层次靠边框+顶部极光带 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   cursor: pointer;
   user-select: none;
   overflow: hidden;
-  transition: box-shadow 0.2s ease;
-}
-.island:hover {
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.46);
 }
 .island:active {
   transform: scale(0.988);
@@ -451,11 +447,10 @@ onUnmounted(() => {
   opacity: 0.9;
   pointer-events: none;
 }
-/* 拖入有效应用文件悬停高亮(设计稿 .island.dragover) */
+/* 拖入有效应用文件悬停高亮(设计稿 .island.dragover;外描边在透明窗口会被裁,
+   改边框变色提示) */
 .island.dragover {
-  box-shadow:
-    0 0 0 2px var(--aurora-accent),
-    0 14px 44px rgba(0, 0, 0, 0.46);
+  border-color: var(--aurora-accent);
 }
 
 /* 呼吸点 */

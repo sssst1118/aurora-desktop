@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -63,8 +63,19 @@ async function saveSafe(): Promise<boolean> {
 
 // 设置页 KeepAlive 缓存(2026-08-13 状态保持改造 → Phase6 作为主面板 settings 视图沿用):
 // onMounted 只跑一次(事件订阅/版本号),配置与显示器数据拉取移到 onActivated,
-// 每次打开设置视图都刷新,保证"重新打开即最新",与旧版每次重建重新拉数据行为一致
+// 每次打开设置视图都刷新,保证"重新打开即最新",与旧版每次重建重新拉数据行为一致。
+// Phase6 预热改造(2026-08-14 真机反馈"配置界面打开卡一会儿"):
+// 组件改为 v-show 常驻挂载(不再走 KeepAlive 激活),启动即 onMounted 拉取数据;
+// active prop 由主面板传入,切换进来时再刷一次(最新优先);onActivated 保留(兼容 KeepAlive 场景)。
+const props = defineProps<{ active?: boolean }>();
+watch(
+  () => props.active,
+  (v) => {
+    if (v) refreshData();
+  },
+);
 onMounted(async () => {
+  void refreshData(); // 预热:挂载即拉取,打开设置视图秒出数据
   try {
     appVersion.value = await getVersion();
   } catch {
@@ -116,10 +127,15 @@ onMounted(async () => {
   updateListeners = unlisteners;
 });
 
-onActivated(() => {
+/** 配置/显示器/自启状态拉取(挂载预热 + 每次激活刷新共用) */
+function refreshData() {
   void loadCfg();
   void loadMultiMonitorState(); // 显示器信息 + 素材列表 + 每屏当前素材(多屏关时也拉素材列表)
   void loadLaunchState(); // 开机自启:注册表实际状态
+}
+
+onActivated(() => {
+  refreshData();
 });
 
 // 离开设置页(KeepAlive 停用/销毁):结束热键录制,防止残留窗口级监听

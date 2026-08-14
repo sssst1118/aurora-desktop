@@ -54,6 +54,11 @@ const CACHED_VIEWS = ["SmallDesktopView", "ClipboardView", "AIView", "Settings"]
 
 const win = getCurrentWindow();
 
+/** 隐藏主面板(header ✕ 按钮;与 Esc 同级入口,2026-08-14 真机反馈) */
+function hidePanel() {
+  void win.hide();
+}
+
 const activeView = ref<ViewId>("small-desktop");
 /** 搜索输入状态由壳持有(打字即搜写入、视图切换保留、呼出重置清空),SearchView 经 prop 消费 */
 const query = ref("");
@@ -330,11 +335,22 @@ onUnmounted(() => {
         >
           <AuroraIcon :name="b.icon" :size="15" />
         </button>
+        <!-- 隐藏按钮(2026-08-14 真机反馈:主界面要可见的关闭入口,Esc 之外再给一个) -->
+        <button
+          class="view-btn close-btn"
+          title="隐藏主面板"
+          aria-label="隐藏主面板"
+          @click="hidePanel"
+        >
+          <AuroraIcon name="close" :size="14" />
+        </button>
       </div>
     </header>
 
-    <!-- view-body:KeepAlive 缓存小桌面/剪贴板/AI/设置;search 不缓存(每次全新) -->
+    <!-- view-body:Settings 常驻挂载(v-show)预热——"配置界面打开卡一会儿"修复:
+         启动即拉取数据,点击秒开;其余视图 KeepAlive 缓存 -->
     <div class="view-body" data-tauri-drag-region="false">
+      <Settings v-show="activeView === 'settings'" :active="activeView === 'settings'" />
       <KeepAlive :include="CACHED_VIEWS">
         <SmallDesktopView v-if="activeView === 'small-desktop'" />
         <SearchView
@@ -344,7 +360,6 @@ onUnmounted(() => {
         />
         <ClipboardView v-else-if="activeView === 'clipboard'" />
         <AIView v-else-if="activeView === 'ai'" @open-settings="showView('settings')" />
-        <Settings v-else />
       </KeepAlive>
     </div>
 

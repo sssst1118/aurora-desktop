@@ -216,7 +216,7 @@ function splitBlocks(text: string): Block[] {
               <template v-for="(b, j) in splitBlocks(m.content)" :key="j">
                 <pre
                   v-if="b.code"
-                  class="mt-1 mb-1 p-2 rounded bg-black/50 border border-[var(--aurora-border)] text-xs overflow-x-auto font-mono text-[var(--aurora-success)]"
+                  class="code-block mt-1 mb-1 p-2 rounded border border-[var(--aurora-border)] text-xs overflow-x-auto font-mono"
                   >{{ b.text }}</pre
                 >
                 <p v-else class="whitespace-pre-wrap break-words">{{ b.text }}</p>
@@ -336,6 +336,13 @@ function splitBlocks(text: string): Block[] {
   border: 1px solid var(--aurora-border);
   color: var(--aurora-text);
   min-width: 0;
+}
+
+/* 代码块(2026-08-14:原 bg-black/50 硬编码在浅色皮肤下成"浅面板嵌黑块",
+   语义色绿字误用于代码正文 → 改半透明黑叠加皮肤自适应,文字用正文色) */
+.code-block {
+  background: color-mix(in srgb, #000 35%, transparent);
+  color: var(--aurora-text);
 }
 
 .tool-chip {
