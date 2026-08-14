@@ -123,6 +123,13 @@ onMounted(async () => {
       updateError.value = String((ev.payload as { message?: string }).message ?? "下载失败");
       updateProgress.value = null;
     }),
+    // 安装启动(后端 spawn 安装器成功后、app.exit 前广播;退出即交安装器接管,失败由安装器自报告)
+    await listen("update-install-start", (ev) => {
+      const p = ev.payload as { version?: string; message?: string };
+      updateStatus.value = "installing";
+      updateError.value = "";
+      updateHint.value = p.message ?? "开始安装,安装器将接管后续";
+    }),
   ];
   updateListeners = unlisteners;
 });
@@ -661,10 +668,11 @@ async function onImportFileChange(e: Event) {
 // ---- Phase5 5.1 自动更新(自研 updater;命令契约见 docs/Phase5-设计.md §1)----
 
 const appVersion = ref("");
-const updateStatus = ref("idle"); // idle | checking | latest | available | downloading | downloaded | error
+const updateStatus = ref("idle"); // idle | checking | latest | available | downloading | downloaded | installing | error
 const updateVersion = ref("");
 const updateNotes = ref("");
 const updateError = ref("");
+const updateHint = ref(""); // installing 状态提示(update-install-start 事件 message)
 let updateListeners: UnlistenFn[] = [];
 
 /** update-progress 事件 payload(与后端 updater::UpdateProgress 契约对应;
@@ -1572,6 +1580,12 @@ async function uiaType() {
 
         <div v-if="updateError" class="text-xs text-[var(--aurora-danger)] bg-[var(--aurora-danger-bg)] rounded-lg px-3 py-1.5">
           {{ updateError }}
+        </div>
+        <div
+          v-else-if="updateStatus === 'installing'"
+          class="text-xs text-[var(--aurora-accent)] bg-[var(--aurora-field)] rounded-lg px-3 py-1.5"
+        >
+          {{ updateHint || "开始安装,安装器将接管后续" }}
         </div>
         <div
           v-else-if="updateStatus === 'latest'"
