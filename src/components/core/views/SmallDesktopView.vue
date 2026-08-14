@@ -1,17 +1,20 @@
 <script setup lang="ts">
+/**
+ * Phase6 小桌面视图(DrawerPanel.vue 内容迁移,设计文档 §4.1 + 预览稿 renderDrawer)。
+ * - 数据流与旧抽屉一致:挂载时 invoke drawer_list_files,订阅 "drawer-updated" 事件
+ *   自动刷新(非轮询);点击条目 → drawer_open(逻辑收纳,文件原位不动)。
+ * - 去掉了窗口级 header/footer/drag-region(由 MainPanel 壳统一),分类 tab/网格/
+ *   收折/手动刷新兜底等能力原样保留。
+ * - 分类 tab 样式移植预览稿 .drawer-side/.drawer-tab(无 emoji 图标,文字+计数);
+ *   网格与条目复用 FileItem.vue(图标懒加载 + 缓存不变)。
+ */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { MAX_FILES, iconOf, type DrawerGroup } from "./types";
-import FileItem from "./FileItem.vue";
+import { MAX_FILES, type DrawerGroup } from "../../FileDrawer/types";
+import FileItem from "../../FileDrawer/FileItem.vue";
 
-/**
- * 2.2 FileDrawer 桌面文件抽屉主面板。
- * 毛玻璃风格与 Island 一致;接线(挂载进 App.vue drawer 分支)由集成 agent 完成。
- * 数据流:显示时先 invoke drawer_list_files,再订阅 "drawer-updated" 事件自动刷新;
- * 点击条目 → drawer_open(逻辑收纳,文件原位不动)。
- */
+defineOptions({ name: "SmallDesktopView" });
 
 const groups = ref<DrawerGroup[]>([]);
 const selected = ref("全部");
@@ -19,9 +22,7 @@ const collapsed = ref<Set<string>>(new Set());
 const loading = ref(false);
 
 /** 展示总数(后端已截断到 MAX_FILES) */
-const total = computed(() =>
-  groups.value.reduce((sum, g) => sum + g.files.length, 0),
-);
+const total = computed(() => groups.value.reduce((sum, g) => sum + g.files.length, 0));
 
 /** 是否被后端截断(总数到上限时提示条说明) */
 const truncated = computed(() => total.value >= MAX_FILES);
@@ -84,13 +85,6 @@ function selectCategory(category: string) {
   }
 }
 
-/** 右上角关闭按钮:隐藏窗口(热键/托盘可再次呼出) */
-function closeWindow() {
-  getCurrentWindow()
-    .hide()
-    .catch((e) => console.error("drawer hide failed", e));
-}
-
 let unlisten: UnlistenFn | undefined;
 
 onMounted(async () => {
@@ -107,98 +101,66 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    class="w-full h-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl border border-[var(--aurora-border)] overflow-hidden text-[var(--aurora-text)] shadow-2xl"
-  >
-    <!-- 头部(可拖动区域) -->
-    <header
-      class="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--aurora-border)] shrink-0 cursor-move"
-      data-tauri-drag-region
+  <div class="h-full w-full flex flex-col min-h-0 text-[var(--aurora-text)]">
+    <!-- 信息条:总数/截断提示 + 手动刷新兜底 -->
+    <div
+      class="flex items-center gap-2 px-4 py-1.5 border-b border-[var(--aurora-border)] text-[10.5px] text-[var(--aurora-text-dim)] shrink-0"
     >
-      <span class="text-lg leading-none" data-tauri-drag-region>🗂️</span>
-      <h1 class="text-sm font-medium tracking-wide" data-tauri-drag-region>
-        桌面文件抽屉
-      </h1>
-      <span class="text-xs text-[var(--aurora-text-dim)]" data-tauri-drag-region>
-        共 {{ total }} 项
-      </span>
-      <span v-if="truncated" class="text-[10px] text-[var(--aurora-warn)]">
+      <span>共 <span class="num">{{ total }}</span> 项</span>
+      <span v-if="truncated" class="text-[var(--aurora-warn)]">
         仅显示前 {{ MAX_FILES }} 项
       </span>
-      <div class="ml-auto flex items-center gap-1">
-        <span
-          class="aurora-drag-hint text-xs px-1 cursor-grab"
-          data-tauri-drag-region
-          title="拖动窗口移动(标题栏空白处也可拖)"
-        >
-          ⠿
-        </span>
-        <button
-          class="w-7 h-7 rounded-lg text-sm text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors"
-          title="刷新"
-          @click="refresh"
-        >
-          🔄
-        </button>
-        <button
-          class="w-7 h-7 rounded-lg text-sm text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors"
-          title="隐藏"
-          @click="closeWindow"
-        >
-          ✕
-        </button>
-      </div>
-    </header>
+      <span class="flex-1"></span>
+      <button
+        class="px-2 py-0.5 rounded-md hover:bg-[var(--aurora-field)] hover:text-[var(--aurora-text)] transition-colors"
+        title="重新扫描桌面"
+        @click="refresh"
+      >
+        刷新
+      </button>
+    </div>
 
     <div class="flex flex-1 min-h-0">
-      <!-- 左侧分类 tab(带计数) -->
-      <aside
-        class="w-32 shrink-0 border-r border-[var(--aurora-border)] p-2 space-y-1 overflow-y-auto"
-      >
+      <!-- 左侧分类 tab(带计数;样式=预览稿 .drawer-side/.drawer-tab) -->
+      <aside class="drawer-side">
         <button
           v-for="t in tabs"
           :key="t.category"
-          class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors"
-          :class="
-            selected === t.category
-              ? 'bg-[var(--aurora-field)] text-[var(--aurora-text)]'
-              : 'text-[var(--aurora-text-dim)] hover:bg-[var(--aurora-field)]'
-          "
+          class="drawer-tab"
+          :class="{ on: selected === t.category }"
+          :title="`${t.category}(${t.count} 项)`"
           @click="selectCategory(t.category)"
         >
-          <span class="text-sm leading-none">{{ iconOf(t.category, false) }}</span>
-          <span class="flex-1 min-w-0 text-left truncate">{{ t.category }}</span>
-          <span
-            class="shrink-0 text-[10px] px-1.5 rounded-full bg-[var(--aurora-field)] text-[var(--aurora-text-dim)]"
-          >
-            {{ t.count }}
-          </span>
+          <span>{{ t.category }}</span>
+          <span class="cnt num">{{ t.count }}</span>
         </button>
       </aside>
 
       <!-- 右侧文件列表 -->
-      <main class="flex-1 min-w-0 flex flex-col p-3 gap-3 overflow-y-auto">
+      <main class="drawer-main">
         <!-- 加载中 -->
         <div
           v-if="loading"
-          class="flex-1 flex items-center justify-center text-xs text-[var(--aurora-text-dim)]"
+          class="col-span-full flex items-center justify-center py-8 text-xs text-[var(--aurora-text-dim)]"
         >
           正在扫描桌面…
         </div>
         <!-- 空桌面空态 -->
         <div
           v-else-if="total === 0"
-          class="flex-1 flex flex-col items-center justify-center gap-1 text-[var(--aurora-text-dim)]"
+          class="col-span-full flex flex-col items-center justify-center gap-1 py-8 text-[var(--aurora-text-dim)]"
         >
           <div class="text-3xl mb-1">✨</div>
           <div class="text-sm">桌面空空如也</div>
-          <div class="text-xs text-[var(--aurora-text-dim)]">
-            把文件放到桌面,它们会自动出现在这里
-          </div>
+          <div class="text-xs">把文件放到桌面,它们会自动出现在这里</div>
         </div>
         <!-- 分组列表(分组可收折) -->
         <template v-else>
-          <section v-for="g in visibleGroups" :key="g.category" class="shrink-0">
+          <section
+            v-for="g in visibleGroups"
+            :key="g.category"
+            class="col-span-full shrink-0"
+          >
             <button
               class="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-[var(--aurora-field)] transition-colors"
               @click="toggleCollapse(g.category)"
@@ -209,7 +171,6 @@ onUnmounted(() => {
               >
                 ▶
               </span>
-              <span class="text-sm leading-none">{{ iconOf(g.category, false) }}</span>
               <span class="text-xs font-medium text-[var(--aurora-text)]">{{ g.category }}</span>
               <span
                 class="text-[10px] px-1.5 rounded-full bg-[var(--aurora-field)] text-[var(--aurora-text-dim)]"
@@ -217,16 +178,12 @@ onUnmounted(() => {
                 {{ g.files.length }}
               </span>
             </button>
-            <!-- 图标网格(参考 Dock:真实图标 + 名称下注,点击打开) -->
+            <!-- 图标网格(FileItem:真实图标懒加载 + 名称下注,点击打开) -->
             <div
               v-if="!collapsed.has(g.category)"
               class="mt-1.5 grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-1.5"
             >
-              <FileItem
-                v-for="f in g.files"
-                :key="f.path"
-                :file="f"
-              />
+              <FileItem v-for="f in g.files" :key="f.path" :file="f" />
               <!-- 单分类视图下空组:明确提示,避免"点了分类没内容"的困惑 -->
               <div
                 v-if="g.files.length === 0 && selected !== '全部'"
@@ -241,3 +198,65 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 分类侧栏与 tab 样式移植自设计稿 aurora-v02-preview.html(.drawer-side/.drawer-tab) */
+.drawer-side {
+  width: 96px;
+  flex: none;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--aurora-border);
+  overflow-y: auto;
+}
+
+.drawer-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--aurora-text-dim);
+  cursor: pointer;
+  transition: all 0.13s ease;
+  text-align: left;
+}
+
+.drawer-tab:hover {
+  background: var(--aurora-field);
+  color: var(--aurora-text);
+}
+
+.drawer-tab.on {
+  background: var(--aurora-field);
+  color: var(--aurora-text);
+  box-shadow: inset 0 0 0 1px var(--aurora-border);
+}
+
+.drawer-tab .cnt {
+  margin-left: auto;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: var(--aurora-field);
+  color: var(--aurora-text-dim);
+}
+
+.drawer-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  gap: 6px;
+  align-content: start;
+  overflow-y: auto;
+}
+</style>

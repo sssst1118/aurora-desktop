@@ -4,15 +4,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import App from "./App.vue";
 import Island from "./components/core/Island.vue";
-import SearchBar from "./components/core/SearchBar.vue";
+import MainPanel from "./components/core/MainPanel.vue";
 import { apply_theme } from "./theme";
 import "./style.css";
 import "./styles/global.css";
 
-// 双窗口共用同一份前端代码,按窗口 label 分流挂载不同根组件
+// 多窗口共用同一份前端代码,按窗口 label 分流挂载不同根组件(Phase6 一岛一窗:
+// island=灵动岛 / search=主面板五视图合一,其余 label 落到 App 兜底)
 const label = getCurrentWindow().label;
 const root =
-  label === "island" ? Island : label === "search" ? SearchBar : App;
+  label === "island" ? Island : label === "search" ? MainPanel : App;
 
 // Phase4 4.4 主题:启动时按持久化配置应用深浅色 + 强调色(mount 前应用,避免首帧错主题);
 // config_load 失败(后端未就绪)时用默认 system/blue 兜底

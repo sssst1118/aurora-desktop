@@ -1,10 +1,22 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+/**
+ * Phase6 剪贴板视图(ClipboardPanel.vue 内容迁移,设计文档 §4.1 + 预览稿 renderClip)。
+ * - 去掉了窗口级根/标题栏/拖拽把手/底部提示条(由 MainPanel 壳统一);
+ *   搜索过滤 + 清空(两层确认)+ 回贴 + 单条删除能力原样保留。
+ * - 回贴成功后隐藏面板(贴近 Win+V 交互,焦点回到原应用);
+ * - 数据刷新时机从"窗口显示(tauri://show)"改为 KeepAlive 激活(onActivated):
+ *   窗口呼出且视图为剪贴板时刷新,视图切换切回时同样刷新,语义更准。
+ * - 键盘 ↑↓/Enter 绑定在搜索框上(焦点在框内时生效);Esc 由壳统一处理。
+ * 样式移植预览稿 .clip-list/.clip-item/.type-ico/.clip-del。
+ */
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useClipboardStore, type ClipboardItem, type HistoryEntry } from "../../stores/clipboard";
-import { useClipboardHistory } from "../../composables/useClipboardHistory";
+import { useClipboardStore, type ClipboardItem, type HistoryEntry } from "../../../stores/clipboard";
+import { useClipboardHistory } from "../../../composables/useClipboardHistory";
+import AuroraIcon from "../../icons/AuroraIcon.vue";
+
+defineOptions({ name: "ClipboardView" });
 
 const store = useClipboardStore();
 const win = getCurrentWindow();
@@ -31,7 +43,7 @@ function summary(item: ClipboardItem): string {
 async function copyBack(index: number) {
   try {
     await store.copyBack(index);
-    // 回贴后自动隐藏窗口,贴近系统 Win+V 交互(焦点回到原应用)
+    // 回贴后自动隐藏面板,贴近系统 Win+V 交互(焦点回到原应用)
     await win.hide();
   } catch (e) {
     console.error("copy back failed", e);
@@ -95,6 +107,7 @@ function onClickClear() {
   void clearAll();
 }
 
+/** 搜索框键盘(焦点在框内时):↑↓ 选择 / Enter 回贴;Esc 由壳统一处理 */
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "ArrowDown") {
     e.preventDefault();
@@ -108,47 +121,39 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault();
     const entry = list.value[store.selected];
     if (entry) void copyBack(entry.index);
-  } else if (e.key === "Escape") {
-    win.hide();
   }
 }
 
-onMounted(async () => {
+/** 激活(窗口呼出且剪贴板为当前视图 / 切回本视图)时:拉最新历史并聚焦 */
+function onActivatedView() {
   void store.refresh().catch((e) => console.error("load history failed", e));
-  void start();
   void nextTick().then(() => inputEl.value?.focus());
-  // 窗口显示(呼出)时拉最新历史并聚焦(不绑焦点事件,见上方说明)
-  unlistenShow = await listen("tauri://show", () => {
-    void store.refresh().catch((e) => console.error("load history failed", e));
-    void nextTick().then(() => inputEl.value?.focus());
-  });
+}
+
+onMounted(() => {
+  void start(); // 事件订阅一次即可(组件销毁时 stop)
 });
+
+// 首次挂载后 activated 必触发一次,数据拉取与聚焦统一走这里
+onActivated(onActivatedView);
 
 onUnmounted(() => {
   stop();
-  unlistenShow?.();
   if (confirmTimer) window.clearTimeout(confirmTimer);
   if (clearedTimer) window.clearTimeout(clearedTimer);
   if (deleteErrorTimer) window.clearTimeout(deleteErrorTimer);
 });
-
-// 窗口真正显示时(tauri://show)拉最新历史并聚焦搜索框;不绑焦点事件——
-// 焦点在窗口激活抖动(拖拽/缩放/点击回窗)时也会触发,会打断面板内正在进行的搜索
-let unlistenShow: UnlistenFn | undefined;
 </script>
 
 <template>
-  <div
-    class="h-full w-full flex flex-col bg-[var(--aurora-panel)] backdrop-blur-xl rounded-xl overflow-hidden text-[var(--aurora-text)] select-none"
-    data-tauri-drag-region="true"
-  >
-    <!-- 标题栏:图标 + 搜索框 + 清空(标题栏空白处可拖窗口,输入框/按钮自动豁免) -->
-    <div class="flex items-center gap-2 px-4 py-3 border-b border-[var(--aurora-border)]">
-      <span class="text-sm">📋</span>
+  <div class="h-full w-full flex flex-col min-h-0 select-none">
+    <!-- 工具行:搜索框 + 清空(两层确认) -->
+    <div class="flex items-center gap-2 px-4 py-2 border-b border-[var(--aurora-border)] shrink-0">
+      <AuroraIcon name="search" :size="13" class="shrink-0 text-[var(--aurora-text-dim)]" />
       <input
         ref="inputEl"
         v-model="store.keyword"
-        class="flex-1 bg-transparent outline-none text-sm placeholder:text-[var(--aurora-text-dim)]"
+        class="flex-1 min-w-0 bg-transparent outline-none text-[13px] placeholder:text-[var(--aurora-text-dim)]"
         placeholder="搜索剪贴板历史…"
         @keydown="onKeydown"
       />
@@ -166,52 +171,150 @@ let unlistenShow: UnlistenFn | undefined;
       >
         {{ cleared ? "已清空" : confirming ? "确认清空?" : "清空" }}
       </button>
-      <!-- 拖拽把手(与搜索框一致的窗口拖动提示) -->
-      <span class="aurora-drag-hint text-xs px-1 cursor-grab" title="拖动窗口移动(输入框/按钮除外)">⠿</span>
     </div>
-    <!-- 历史列表(禁拖:保护滚动条与条目点击) -->
-    <div class="flex-1 overflow-y-auto py-1" data-tauri-drag-region="false">
+
+    <!-- 历史列表 -->
+    <div class="clip-list flex-1 min-h-0">
       <!-- 单条删除失败提示(3s 自动消失) -->
       <div
         v-if="deleteError"
-        class="mx-4 mt-1 rounded-lg bg-[var(--aurora-danger-bg)] px-3 py-1 text-xs text-[var(--aurora-danger)]"
+        class="mx-2 mt-1 rounded-lg bg-[var(--aurora-danger-bg)] px-3 py-1 text-xs text-[var(--aurora-danger)]"
       >
         {{ deleteError }}
       </div>
-      <div v-if="store.items.length === 0" class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]">
+      <div
+        v-if="store.items.length === 0"
+        class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]"
+      >
         暂无历史,复制文本后自动记录
       </div>
-      <div v-else-if="list.length === 0" class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]">
+      <div
+        v-else-if="list.length === 0"
+        class="px-4 py-6 text-center text-xs text-[var(--aurora-text-dim)]"
+      >
         无匹配结果
       </div>
       <div
         v-for="(entry, i) in list"
         :key="`${entry.item.ts}-${i}`"
-        class="group px-4 py-2 flex items-center gap-3 cursor-pointer"
-        :class="i === store.selected ? 'bg-[var(--aurora-field)]' : ''"
+        class="clip-item"
+        :class="{ selected: i === store.selected }"
+        :style="{ animationDelay: i * 28 + 'ms' }"
         @mouseenter="store.selected = i"
         @click="copyBack(entry.index)"
       >
-        <span class="text-base shrink-0">{{ entry.item.tp === "image" ? "🖼️" : "📄" }}</span>
-        <span class="flex-1 min-w-0 block text-sm truncate">
-          {{ entry.item.tp === "image" ? entry.item.payload : summary(entry.item) }}
+        <span class="type-ico">
+          <AuroraIcon :name="entry.item.tp === 'image' ? 'file' : 'copy'" :size="13" />
         </span>
-        <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">{{ fmtTime(entry.item.ts) }}</span>
+        <span class="txt">
+          <span class="summary block">
+            {{ entry.item.tp === "image" ? entry.item.payload : summary(entry.item) }}
+          </span>
+          <span class="meta num">{{ fmtTime(entry.item.ts) }}</span>
+        </span>
         <!-- 悬停 ✕ 单条删除(对标 Win+V;stop 阻止冒泡触发回贴) -->
         <button
-          class="hidden h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] leading-none text-[var(--aurora-text-dim)] group-hover:flex hover:bg-[var(--aurora-danger)] hover:text-white"
+          class="clip-del"
           title="删除该条"
           @click.stop="deleteItem(entry)"
         >
-          ✕
+          <AuroraIcon name="close" :size="10" />
         </button>
       </div>
     </div>
-    <div
-      class="px-4 py-2 flex items-center justify-between text-[10px] text-[var(--aurora-text-dim)] border-t border-[var(--aurora-border)]"
-    >
-      <span>↑↓ 选择 · Enter 回贴 · Esc 关闭</span>
-      <span class="aurora-drag-hint flex items-center gap-0.5" title="底部空白处拖动窗口移动">⠿ 拖动窗口</span>
-    </div>
   </div>
 </template>
+
+<style scoped>
+/* 样式移植自设计稿 aurora-v02-preview.html(.clip-list/.clip-item/.type-ico/.clip-del) */
+.clip-list {
+  padding: 6px 8px;
+  overflow-y: auto;
+}
+
+.clip-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  animation: rise-in 0.22s ease both;
+  transition: background 0.1s ease;
+}
+
+.clip-item:hover,
+.clip-item.selected {
+  background: var(--aurora-field);
+}
+
+.type-ico {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--aurora-field);
+  color: var(--aurora-text-dim);
+}
+
+.txt {
+  flex: 1;
+  min-width: 0;
+}
+
+.summary {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  font-size: 10px;
+  color: var(--aurora-text-dim);
+  margin-top: 2px;
+}
+
+.clip-del {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--aurora-text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.14s ease;
+}
+
+.clip-item:hover .clip-del {
+  opacity: 1;
+}
+
+.clip-del:hover {
+  background: var(--aurora-danger);
+  color: #fff;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-item {
+    animation-duration: 0.01s;
+  }
+}
+</style>

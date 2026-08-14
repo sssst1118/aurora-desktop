@@ -1,12 +1,15 @@
 import { ref } from "vue";
 
 /**
- * 最近打开应用(SearchBar 空 query 态展示)。
+ * 最近打开(应用 + 文件,SearchView 空 query 态展示;设计文档 §6:文件经 open_item
+ * 打开后同样记入,与预览稿「最近打开」应用/文件双组对应)。
  * localStorage 持久化,最多 10 条,按最近打开倒序;模块级单例,重挂载不丢内存态。
+ * kind 为 Phase6 新增字段(老数据无此字段,回退按应用展示)。
  */
 export interface RecentApp {
   name: string;
   path: string;
+  kind?: "app" | "file";
 }
 
 const STORAGE_KEY = "aurora-recent-apps";

@@ -8,6 +8,9 @@ import { apply_theme } from "../../theme";
 import ToggleSwitch from "../ToggleSwitch.vue";
 import WallpaperPanel from "./WallpaperPanel.vue";
 
+// Phase6:作为主面板 settings 视图被 KeepAlive 按名缓存
+defineOptions({ name: "Settings" });
+
 const store = useConfigStore();
 
 /**
@@ -18,7 +21,6 @@ const store = useConfigStore();
 const CHIP_ON =
   "bg-[var(--aurora-accent)] text-white shadow-[0_2px_10px_color-mix(in_srgb,var(--aurora-accent)_45%,transparent)]";
 const CHIP_OFF = "bg-[var(--aurora-field)] hover:bg-[var(--aurora-field-hover)]";
-const emit = defineEmits<{ (e: "close"): void }>();
 
 /** 配置保存统一入口:失败时回滚本地值为后端实际配置并展示红字提示;成功清空提示 */
 const saveError = ref("");
@@ -59,9 +61,9 @@ async function saveSafe(): Promise<boolean> {
   }
 }
 
-// 设置页被 SearchBar 用 KeepAlive 缓存(2026-08-13 状态保持改造):
+// 设置页 KeepAlive 缓存(2026-08-13 状态保持改造 → Phase6 作为主面板 settings 视图沿用):
 // onMounted 只跑一次(事件订阅/版本号),配置与显示器数据拉取移到 onActivated,
-// 每次打开设置页都刷新,保证"重新打开即最新",与旧版每次重建重新拉数据行为一致
+// 每次打开设置视图都刷新,保证"重新打开即最新",与旧版每次重建重新拉数据行为一致
 onMounted(async () => {
   try {
     appVersion.value = await getVersion();
@@ -760,22 +762,10 @@ async function uiaType() {
 </script>
 
 <template>
-  <div
-    class="h-full w-full flex flex-col rounded-xl overflow-hidden text-[var(--aurora-text)]"
-    :class="store.cfg?.search_style === 'solid' ? 'bg-[var(--aurora-panel-solid)]' : 'bg-[var(--aurora-panel)] backdrop-blur-xl'"
-  >
-    <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--aurora-border)]">
-      <span class="text-sm">设置</span>
-      <div class="flex items-center gap-1">
-        <!-- P2:设置页标题栏同样留拖拽把手(内容区禁拖保护滚动,标题栏可拖) -->
-        <span class="aurora-drag-hint text-xs px-1 cursor-grab" title="拖动窗口移动">⠿</span>
-        <button class="text-[var(--aurora-text-dim)] hover:text-[var(--aurora-text)] text-sm" title="关闭" aria-label="关闭设置" @click="emit('close')">
-          ✕
-        </button>
-      </div>
-    </div>
-    <!-- 内容区禁拖(设置项滚动/开关点击放行;标题栏留可拖,设置页也能拖窗口) -->
-    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4" data-tauri-drag-region="false">
+  <!-- Phase6:作为主面板 settings 视图嵌入,窗口级根/标题栏/把手由 MainPanel 壳统一 -->
+  <div class="h-full w-full flex flex-col text-[var(--aurora-text)]">
+    <!-- 内容区禁拖(设置项滚动/开关点击放行;壳根容器整窗可拖) -->
+    <div class="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4" data-tauri-drag-region="false">
       <!-- 配置未加载占位:加载中提示 / 失败红字 + 重试(cfg 为空时其余区块一律不渲染,避免整页空白) -->
       <div v-if="!store.cfg" class="py-10 flex flex-col items-center gap-2">
         <div v-if="cfgLoading" class="text-xs text-[var(--aurora-text-dim)]">配置加载中…</div>
