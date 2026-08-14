@@ -1,6 +1,6 @@
 [package]
 name = "aurora-desktop"
-version = "0.2.2"
+version = "0.2.3"
 description = "Aurora 桌面启动器(灵动岛 + 全局搜索)"
 edition = "2021"
 
