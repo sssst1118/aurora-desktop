@@ -1086,4 +1086,22 @@
 
   /* 初始:主面板隐藏,展示岛;默认视图=小桌面(主界面),搜索靠打字唤醒 */
   showView("drawer");
+
+  /* ============ 深链状态(截图/演示用):?shot=panel&view=drawer|search|clip|ai|settings&skin=deep|midnight|dawn|verdant&q=关键词 ============ */
+  (function () {
+    const p = new URLSearchParams(location.search);
+    if (p.get("shot") === "panel") {
+      // 截图模式:隐藏演示注记(舞台标题/岛提示),画面贴近真实产品
+      const st = document.querySelector(".stage-title");
+      if (st) st.style.display = "none";
+      const tip = document.getElementById("islandTip");
+      if (tip) tip.style.display = "none";
+      const skin = p.get("skin");
+      if (skin) applySkin(skin);
+      island.classList.add("expanded");
+      showMain();
+      const v = p.get("view");
+      if (v && VIEWS[v]) showView(v, p.get("q") || "");
+    }
+  })();
 </script>
