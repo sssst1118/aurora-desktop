@@ -1,6 +1,6 @@
 {
-  "version": "0.2.2",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.2/Aurora_0.2.2_x64-setup.exe",
-  "sha256": "a5435b7eed39ddd13c870fed3c2bda87580d1570280f69796b20c95185fbaab4",
-  "notes": "v0.2.2:Esc 三级递进(搜索态清输入→岛展开先收岛→再关面板,面板跟随设计承诺);reduced-motion 全量覆盖;文档与实现对齐;测试语义修正"
+  "version": "0.2.3",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.3/Aurora_0.2.3_x64-setup.exe",
+  "sha256": "2635335b7cf18c0c933aff9f789112e99a3ccbe565ad65289b3c425333295c74",
+  "notes": "v0.2.3:修复保存设置清空岛位置记忆(配置接口补齐岛坐标字段);岛位置落盘校验+越界兜底主屏居中;Esc 输入框焦点豁免(编辑时不误收岛关面板);搜索打开失败保留面板提示重试;Dock 去重路径大小写不敏感;主面板缩放上限防拖出屏;Dock 条目上限 50;更新开关重开即时检查;AI 工具轮数上限 10;开发文档命令表/目录树全面同步实现"
 }
