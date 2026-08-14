@@ -34,7 +34,7 @@ Aurora 是 Windows 10/11 上的开源桌面效率中枢——灵动岛(常驻药
 
 ## 🚀 快速开始
 
-1. 从 [Releases](https://github.com/sssst1118/aurora-desktop/releases) 下载安装包(推荐 `Aurora_0.2.0_x64-setup.exe`,备选 `Aurora_0.2.0_x64_en-US.msi`)
+1. 从 [Releases](https://github.com/sssst1118/aurora-desktop/releases) 下载安装包(推荐 `Aurora_0.2.1_x64-setup.exe`,备选 `Aurora_0.2.1_x64_en-US.msi`)
 2. 双击安装并启动 Aurora
 3. 按 `Ctrl+Shift+Space` 呼出主面板,开始使用
 
