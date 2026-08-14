@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.0/Aurora_0.2.0_x64-setup.exe",
-  "sha256": "aadf68350f43a828055ebdac61d9059159e3f90f5551c2108f986e1e149705d6",
-  "notes": "全新形态「一岛一窗」:灵动岛药丸三态(单击展开 Dock/双击呼出主面板/位置跟随);主面板五视图合一(小桌面/AI/剪贴板/设置,打字即搜);4 套皮肤+极光缘签名视觉;默认不透明面板"
+  "version": "0.2.1",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.1/Aurora_0.2.1_x64-setup.exe",
+  "sha256": "69021a8e1ffbee17a35629abbffac554f60a11794b242dd368fd880b5828d1b2",
+  "notes": "v0.2.1:面板实时跟随岛拖动(节流 80ms 随动+防抖落盘);搜索界面补最近访问引导空态(✦ 输入以搜索);Dock 开关生效+加载失败重试;AI 清空二次确认+消息长度上限;启动去重消竞态;窄屏面板防出屏;剪贴板/分类选中态极光竖条统一;字号四档收敛"
 }
