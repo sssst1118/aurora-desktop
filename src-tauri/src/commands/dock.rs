@@ -638,12 +638,16 @@ mod tests {
 
     #[test]
     fn running_windows_smoke() {
-        // 注:进程路径不保证 .exe 结尾(NoMachine 运行进程是 nxplayer.bin),只断言非空与不重复
+        // 注1:进程路径不保证 .exe 结尾(NoMachine 运行进程是 nxplayer.bin),只断言非空
+        // 注2:同 exe 多窗口是 Windows 合法常态(explorer 桌面+文件夹、多个记事本),
+        // 绿点判定走 window_matches_item 逐窗匹配,枚举层不要求 exe 去重;
+        // 单次 EnumWindows 中 hwnd 不重复才是有效不变式(2026-08-14 修正:原断言
+        // 「exe 不重复」在开多个 explorer 窗口时必挂,属测试语义错误非产品缺陷)
         let windows = running_windows();
         let mut set = std::collections::HashSet::new();
         for w in &windows {
             assert!(!w.exe.trim().is_empty(), "exe 路径不应为空");
-            assert!(set.insert(w.exe.to_lowercase()), "exe 路径不应重复: {}", w.exe);
+            assert!(set.insert(w.hwnd), "hwnd 不应重复: {}", w.hwnd);
         }
     }
 
