@@ -862,15 +862,16 @@ async function uiaType() {
       <div class="bg-[var(--aurora-field)] rounded p-2.5 space-y-1.5">
         <div class="text-xs text-[var(--aurora-text-dim)]">快捷键速查</div>
         <div class="flex items-center justify-between text-xs">
-          <!-- 灵动岛即顶部常驻栏:点击或按快捷键均呼出搜索框;键位为固定值(与 hotkey.rs SEARCH_HOTKEY 一致) -->
-          <span>灵动岛 · 呼出搜索框</span>
+          <!-- 灵动岛即顶部常驻栏:单击展开 Dock,双击或按快捷键均呼出主面板;键位为固定值(与 hotkey.rs SEARCH_HOTKEY 一致) -->
+          <span>灵动岛 · 呼出主面板</span>
           <span
             class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
             >Ctrl+Shift+Space</span
           >
         </div>
         <div class="flex items-center justify-between text-xs">
-          <span>文件抽屉</span>
+          <!-- 抽屉热键 = 呼出主面板并定位到小桌面视图(不再是独立窗口) -->
+          <span>文件抽屉 · 定位小桌面</span>
           <span
             class="font-mono bg-[var(--aurora-panel)] rounded px-2 py-0.5 border border-[var(--aurora-border)]"
             >{{ store.cfg?.drawer_hotkey ?? "Ctrl+Alt+D" }}</span
@@ -891,7 +892,7 @@ async function uiaType() {
             >Ctrl+Shift+H</span
           >
         </div>
-        <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出搜索框;全部显示/隐藏为固定值;抽屉/剪贴板可在各自区块修改</p>
+        <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出主面板;抽屉/剪贴板/AI 热键呼出主面板并定位到对应视图(不再是独立窗口);全部显示/隐藏为固定值;抽屉/剪贴板热键可在各自区块修改</p>
       </div>
 
       <ToggleSwitch
@@ -915,11 +916,11 @@ async function uiaType() {
         {{ launchError }}
       </div>
 
-      <!-- Dock 栏:并入搜索窗口底部,拖拽添加 -->
+      <!-- Dock 栏:括入灵动岛展开区,拖拽添加 -->
       <ToggleSwitch
         :model-value="on(store.cfg?.enable_dock)"
         label="Dock 栏"
-        description="搜索窗口底部快捷栏,拖拽 exe/lnk 添加,立即生效"
+        description="灵动岛展开区,拖拽 exe/lnk 进岛添加,立即生效"
         @update:model-value="toggleModule('enable_dock')"
       />
 

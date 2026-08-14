@@ -142,8 +142,8 @@
 
 ## 7. 配置与迁移
 
-- 新增字段:#[serde(default)]——`skin`(默认 "deep")、`island_pos`(岛位置,默认空=居中)、`panel_size`(主面板尺寸,沿用 search 几何字段)。
-- 废弃字段保留读取兼容:dock_position/dock_auto_hide(已废弃)、search_geometry 尺寸部分继续生效,位置部分不再消费。
+- 新增字段:#[serde(default)]——`skin`(默认 "deep")、`island_x`/`island_y`(岛位置,默认 None=顶部居中,island_save_geometry 命令落盘);主面板尺寸不新增字段,沿用 search_width/search_height(尺寸可调记忆)。
+- 废弃字段保留读取兼容:dock_position/dock_auto_hide(已废弃)、search_width/search_height 尺寸部分继续生效,search_x/search_y 位置部分不再消费(主面板呼出定位跟随岛)。
 - 旧窗口删除后:drawer/clipboard/ai_panel 的独立窗口配置与能力声明删除;热键行为改为「呼出主面板+定位视图」。
 - 配置损坏 .broken 回退机制不变。
 

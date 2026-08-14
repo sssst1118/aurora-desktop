@@ -10,7 +10,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11. The Island 
 ## ✨ Highlights
 
 - **🌌 Island (pill form)** — Persistent pill at the top of your screen: time, CPU, memory, network at a glance; **single-click expands the Dock into the pill** (real icons / running dots / hover-to-remove / drag-to-add), one click to launch; draggable anywhere, the main panel follows
-- **🪟 One-Island-One-Panel** — Double-click the Island or `Ctrl+Shift+Space` to summon the main panel right below it: small desktop (default) / AI / clipboard / settings views in one window; **just type to search** — search is an action, not a screen
+- **🪟 One-Island-One-Panel** — Double-click the Island or `Ctrl+Shift+Space` to summon the main panel right below it: small desktop (default) / search / clipboard / AI / settings views in one window; **just type to search** — search is an action, not a screen
 - **📁 Small Desktop (file drawer)** — Desktop files auto-sorted by type, refreshed on change — a tidy desktop, always
 - **⚡ Global Search** — Pinyin-aware matching for Chinese apps (`jsq` → 计算器), app + file result groups, recents pinned smartly, Enter to go
 - **📋 Clipboard History** — Every copy auto-recorded, searchable, one-click re-paste, per-item delete, persisted across reboots
@@ -34,7 +34,7 @@ Aurora is an open-source desktop productivity hub for Windows 10/11. The Island 
 
 ## 🚀 Quick Start
 
-1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.1.0_x64-setup.exe` recommended, or `Aurora_0.1.0_x64_en-US.msi`)
+1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.2.0_x64-setup.exe` recommended, or `Aurora_0.2.0_x64_en-US.msi`)
 2. Install and launch Aurora
 3. Press `Ctrl+Shift+Space` (or double-click the Island) to summon the main panel and start
 
