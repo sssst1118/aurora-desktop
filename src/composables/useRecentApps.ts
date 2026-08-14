@@ -41,12 +41,13 @@ function loadRecents() {
   }
 }
 
-/** 记录一次打开:同路径去重后置顶,截断到上限 */
+/** 记录一次打开:同路径去重后置顶,截断到上限。
+ * 去重按小写比较:Windows 路径大小写不敏感,同路径不同大小写(如 C:\ 与 c:\)视为同一条 */
 function saveRecent(app: RecentApp) {
-  const next = [app, ...recents.value.filter((r) => r.path !== app.path)].slice(
-    0,
-    MAX_RECENT,
-  );
+  const next = [
+    app,
+    ...recents.value.filter((r) => r.path.toLowerCase() !== app.path.toLowerCase()),
+  ].slice(0, MAX_RECENT);
   recents.value = next;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));

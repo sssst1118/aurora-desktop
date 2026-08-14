@@ -151,7 +151,7 @@ function splitBlocks(text: string): Block[] {
     <div
       class="flex items-center justify-between px-4 py-1.5 border-b border-[var(--aurora-border)] shrink-0"
     >
-      <span class="text-[10.5px] text-[var(--aurora-text-dim)]">
+      <span class="text-[11px] text-[var(--aurora-text-dim)]">
         {{ streaming ? "正在生成…" : "可调用工具:打开应用 / 搜文件 / 设壁纸 / 查系统状态" }}
       </span>
       <div class="flex items-center gap-1.5">
@@ -219,7 +219,7 @@ function splitBlocks(text: string): Block[] {
         <div v-else-if="m.role === 'user'" class="flex justify-end items-start group gap-1.5">
           <button
             v-if="m.content"
-            class="hidden group-hover:flex items-center justify-center w-6 h-6 shrink-0 rounded-md transition-colors"
+            class="flex items-center justify-center w-6 h-6 shrink-0 rounded-md transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             :class="
               copiedIdx === i
                 ? 'text-[var(--aurora-success)]'
@@ -255,7 +255,7 @@ function splitBlocks(text: string): Block[] {
           </div>
           <button
             v-if="m.content"
-            class="hidden group-hover:flex items-center justify-center w-6 h-6 shrink-0 rounded-md transition-colors"
+            class="flex items-center justify-center w-6 h-6 shrink-0 rounded-md transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             :class="
               copiedIdx === i
                 ? 'text-[var(--aurora-success)]'
@@ -312,7 +312,7 @@ function splitBlocks(text: string): Block[] {
         @keydown="onKeydown"
       />
       <div class="flex items-center justify-between mt-1.5">
-        <span class="text-[10px] text-[var(--aurora-text-dim)]">
+        <span class="text-[11px] text-[var(--aurora-text-dim)]">
           {{ streaming ? "回车停止 · 已接收内容保留" : "Enter 发送 · Shift+Enter 换行" }}
         </span>
         <button

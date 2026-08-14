@@ -18,7 +18,7 @@ const emit = defineEmits<{ (e: "update:modelValue", value: boolean): void }>();
         <span class="w-[3px] h-3 rounded-full bg-[var(--aurora-accent)]"></span>
         {{ label }}
       </div>
-      <div v-if="description" class="text-[10px] text-[var(--aurora-text-dim)]">
+      <div v-if="description" class="text-[11px] text-[var(--aurora-text-dim)]">
         {{ description }}
       </div>
     </div>
@@ -26,6 +26,7 @@ const emit = defineEmits<{ (e: "update:modelValue", value: boolean): void }>();
       type="button"
       role="switch"
       :aria-checked="modelValue"
+      :aria-label="label"
       :disabled="disabled"
       class="w-10 h-5 rounded-full relative transition-colors shrink-0"
       :class="[

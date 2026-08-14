@@ -268,10 +268,26 @@ function normalizeHotkeyKey(key: string): string | null {
   return m ? "f" + m[1].toLowerCase() : null;
 }
 
+/** 录制中连续忽略计数/提示:不支持的键(纯修饰键、无修饰键、主键不合法)被静默忽略
+ *  继续等待,连续 N 次仍无结果时提示,防用户以为录制没生效 */
+const RECORD_IGNORE_LIMIT = 3;
+const recordIgnoreCount = ref(0);
+const recordHint = ref("");
+
+/** 忽略一次按键:累计到阈值给红字提示(继续等待,不打断录制) */
+function noteIgnoredKey() {
+  recordIgnoreCount.value += 1;
+  if (recordIgnoreCount.value >= RECORD_IGNORE_LIMIT) {
+    recordHint.value = "该键不支持,请换一个组合(纯修饰键或未按修饰键均无效)";
+  }
+}
+
 /** 进入录制:窗口捕获阶段接管后续按键(capture 先于 SearchBar 冒泡阶段 handler) */
 function startRecord(key: string) {
   if (!store.cfg) return;
   recordingKey.value = key;
+  recordIgnoreCount.value = 0;
+  recordHint.value = "";
   window.removeEventListener("keydown", onRecordKeydown, true); // 防重复注册
   window.addEventListener("keydown", onRecordKeydown, true);
 }
@@ -280,6 +296,8 @@ function startRecord(key: string) {
 function stopRecord() {
   if (recordingKey.value === null) return;
   recordingKey.value = null;
+  recordIgnoreCount.value = 0;
+  recordHint.value = "";
   window.removeEventListener("keydown", onRecordKeydown, true);
 }
 
@@ -298,10 +316,19 @@ function onRecordKeydown(e: KeyboardEvent) {
     stopRecord();
     return;
   }
-  if (isModifierKey(e.key)) return;
-  if (!(e.ctrlKey || e.altKey || e.shiftKey || e.metaKey)) return; // 必须含至少一个修饰键
+  if (isModifierKey(e.key)) {
+    noteIgnoredKey();
+    return;
+  }
+  if (!(e.ctrlKey || e.altKey || e.shiftKey || e.metaKey)) {
+    noteIgnoredKey();
+    return; // 必须含至少一个修饰键
+  }
   const main = normalizeHotkeyKey(e.key);
-  if (!main) return;
+  if (!main) {
+    noteIgnoredKey();
+    return;
+  }
   const parts: string[] = [];
   if (e.ctrlKey) parts.push("ctrl");
   if (e.altKey) parts.push("alt");
@@ -719,8 +746,21 @@ const simError = ref("");
 
 async function simClick() {
   simError.value = "";
+  // 空串/非数字拦截:Number("") === 0、Number("abc") === NaN,空着就提交会真的
+  // 点击屏幕左上角(0,0)或把 NaN 传给后端,均为误操作,先本地校验并红字提示
+  const x = Number(simX.value);
+  const y = Number(simY.value);
+  if (
+    simX.value.trim() === "" ||
+    simY.value.trim() === "" ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y)
+  ) {
+    simError.value = "请输入有效的 x/y 坐标(整数)";
+    return;
+  }
   try {
-    await invoke("automation_sim_click", { x: Number(simX.value), y: Number(simY.value) });
+    await invoke("automation_sim_click", { x, y });
   } catch (e) {
     simError.value = String(e);
   }
@@ -892,7 +932,9 @@ async function uiaType() {
             >Ctrl+Shift+H</span
           >
         </div>
-        <p class="text-[10px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出主面板;抽屉/剪贴板/AI 热键呼出主面板并定位到对应视图(不再是独立窗口);全部显示/隐藏为固定值;抽屉/剪贴板热键可在各自区块修改</p>
+        <p class="text-[11px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出主面板;抽屉/剪贴板/AI 热键呼出主面板并定位到对应视图(不再是独立窗口);全部显示/隐藏为固定值;抽屉/剪贴板热键可在各自区块修改</p>
+        <!-- 录制中连续忽略提示:某些键(如 Ctrl+; )不参与热键组合,连按 3 次无果后红字提醒,防用户以为没生效 -->
+        <p v-if="recordHint" class="text-[11px] text-[var(--aurora-danger)]">{{ recordHint }}</p>
       </div>
 
       <ToggleSwitch
@@ -945,9 +987,9 @@ async function uiaType() {
             @click="startRecord('drawer')"
             @blur="stopRecord"
           />
-          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
+          <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
-        <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
+        <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[11px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
         </p>
       </div>
@@ -973,9 +1015,9 @@ async function uiaType() {
             @click="startRecord('clipboard')"
             @blur="stopRecord"
           />
-          <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
+          <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
-        <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
+        <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[11px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
         </p>
       </div>
@@ -1076,7 +1118,7 @@ async function uiaType() {
                 @change="saveText"
               />
             </div>
-            <p class="text-[10px] text-[var(--aurora-text-dim)] ml-[70px]">
+            <p class="text-[11px] text-[var(--aurora-text-dim)] ml-[70px]">
               按本机已装模型修改,如 qwen2.5:7b
             </p>
           </template>
@@ -1126,7 +1168,7 @@ async function uiaType() {
               @click="startRecord('ai')"
               @blur="stopRecord"
             />
-            <span class="text-[10px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
+            <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
           </div>
         </div>
       </div>
@@ -1183,7 +1225,7 @@ async function uiaType() {
           </div>
           <div
             v-else-if="materials.length === 0"
-            class="text-[10px] text-[var(--aurora-text-dim)]"
+            class="text-[11px] text-[var(--aurora-text-dim)]"
           >
             素材目录为空(配置动态壁纸目录或放入 mp4/webm 等视频素材后点"刷新")
           </div>
@@ -1244,7 +1286,7 @@ async function uiaType() {
             </div>
 
             <!-- 显示器信息(只读展示) -->
-            <div class="text-[10px] text-[var(--aurora-text-dim)] space-y-0.5">
+            <div class="text-[11px] text-[var(--aurora-text-dim)] space-y-0.5">
               <div v-for="m in monitors" :key="m.index">
                 屏 {{ m.index + 1 }}{{ m.primary ? "(主)" : "" }}:
                 {{ m.width }}×{{ m.height }}
@@ -1288,7 +1330,7 @@ async function uiaType() {
                 >
                   刷新
                 </button>
-                <span class="text-[10px] text-[var(--aurora-text-dim)]">
+                <span class="text-[11px] text-[var(--aurora-text-dim)]">
                   清除某屏素材:用壁纸区"恢复系统壁纸"按钮整体恢复
                 </span>
               </div>
@@ -1301,7 +1343,7 @@ async function uiaType() {
               >
                 刷新
               </button>
-              <span class="text-[10px] text-[var(--aurora-text-dim)]">
+              <span class="text-[11px] text-[var(--aurora-text-dim)]">
                 拼接模式:素材用上方"动态壁纸素材"统一设置,自动铺满全部屏幕
               </span>
             </div>
@@ -1324,7 +1366,7 @@ async function uiaType() {
           description="读取/点击窗口内控件,比键鼠模拟风险更高"
           @update:model-value="toggleUiaEnable"
         />
-        <p class="text-[10px] text-[var(--aurora-text-dim)] leading-relaxed">
+        <p class="text-[11px] text-[var(--aurora-text-dim)] leading-relaxed">
           自动化为高风险模块:普通用户权限下无法操作管理员窗口/UWP 应用;坐标点击依赖前台窗口位置,请确认目标可见
         </p>
 
@@ -1366,7 +1408,7 @@ async function uiaType() {
               输入
             </button>
           </div>
-          <p v-if="simError" class="text-[10px] text-[var(--aurora-danger)] break-all">{{ simError }}</p>
+          <p v-if="simError" class="text-[11px] text-[var(--aurora-danger)] break-all">{{ simError }}</p>
         </div>
 
         <!-- 4.3 UIA 控件操作测试区(UIA 子开关也开启后可用) -->
@@ -1402,7 +1444,7 @@ async function uiaType() {
           </div>
           <div v-if="uiaSelHwnd !== null" class="space-y-0.5 max-h-28 overflow-y-auto">
             <div class="flex items-center justify-between">
-              <span class="text-[10px] text-[var(--aurora-text-dim)]">控件({{ uiaControls.length }} 个,点选后操作)</span>
+              <span class="text-[11px] text-[var(--aurora-text-dim)]">控件({{ uiaControls.length }} 个,点选后操作)</span>
               <button
                 v-if="uiaControls.length"
                 class="text-xs px-2 py-0.5 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)]"
@@ -1452,9 +1494,9 @@ async function uiaType() {
             >
               输入
             </button>
-            <span v-if="uiaText" class="text-[10px] text-[var(--aurora-text-dim)] break-all w-full">{{ uiaText }}</span>
+            <span v-if="uiaText" class="text-[11px] text-[var(--aurora-text-dim)] break-all w-full">{{ uiaText }}</span>
           </div>
-          <p v-if="uiaError" class="text-[10px] text-[var(--aurora-danger)] break-all">{{ uiaError }}</p>
+          <p v-if="uiaError" class="text-[11px] text-[var(--aurora-danger)] break-all">{{ uiaError }}</p>
         </div>
       </div>
 
@@ -1514,7 +1556,7 @@ async function uiaType() {
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm">自动更新</div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">
+            <div class="text-[11px] text-[var(--aurora-text-dim)]">
               当前版本 v{{ appVersion || "?" }},启动 15s 后 + 每 6 小时静默检查
             </div>
           </div>
@@ -1568,7 +1610,7 @@ async function uiaType() {
                 :style="{ width: `${Math.round((updateProgress?.percent ?? 0) * 100)}%` }"
               ></div>
             </div>
-            <div class="text-[10px] text-[var(--aurora-text-dim)]">
+            <div class="text-[11px] text-[var(--aurora-text-dim)]">
               <template v-if="updateProgress?.percent != null">
                 已下载 {{ Math.round(updateProgress.percent * 100) }}%
                 <span v-if="updateProgress?.total_bytes != null">
@@ -1602,7 +1644,7 @@ async function uiaType() {
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
         <div>
           <div class="text-sm">配置</div>
-          <div class="text-[10px] text-[var(--aurora-text-dim)]">
+          <div class="text-[11px] text-[var(--aurora-text-dim)]">
             换机迁移:导出全部设置为 JSON 文件,新电脑导入即恢复;导入前当前配置自动备份为 config.json.pre-import
           </div>
         </div>

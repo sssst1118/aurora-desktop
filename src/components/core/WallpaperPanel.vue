@@ -196,17 +196,19 @@ onUnmounted(() => {
           />
           <div
             v-else-if="thumbErrors[entry.path]"
-            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[10px] px-1 text-center"
+            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[11px] px-1 text-center"
           >
             预览不可用
           </div>
           <div
             v-else
-            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[10px] animate-pulse"
+            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[11px] animate-pulse"
           >
             加载中…
           </div>
         </div>
+        <!-- 「当前」徽章角标:absolute 贴缩略图右上角,刻意保留 9px 角标层级,
+             不随卡片信息区并入 11px(字号收敛四档允许角标例外) -->
         <span
           v-if="isCurrent(entry.path)"
           class="absolute top-1 right-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--aurora-accent)] text-white"
@@ -214,11 +216,11 @@ onUnmounted(() => {
           当前
         </span>
         <div
-          class="absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-1 text-[10px] text-white/85 truncate"
+          class="absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-1 text-[11px] text-white/85 truncate"
         >
           {{ entry.name }}
         </div>
-        <div class="px-1.5 pt-0.5 pb-1 text-[9px] text-[var(--aurora-text-dim)]">
+        <div class="px-1.5 pt-0.5 pb-1 text-[11px] text-[var(--aurora-text-dim)]">
           {{ fmtSize(entry.size) }}
         </div>
       </button>

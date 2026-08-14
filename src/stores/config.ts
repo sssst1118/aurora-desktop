@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /** Dock 快捷方式条目(与 Rust 侧 DockItem 对应) */
 export interface DockItem {
@@ -87,6 +88,8 @@ export const useConfigStore = defineStore("config", {
       const fresh = await invoke<AppConfig>("config_load");
       if (!force && (id !== loadId || lastSaveId >= id)) return;
       this.cfg = fresh;
+      // 首次加载成功后注册岛位置热同步(此时 IPC 与事件系统均已就绪)
+      void ensureIslandSync();
     },
     async save() {
       if (!this.cfg) return;
@@ -100,8 +103,9 @@ export const useConfigStore = defineStore("config", {
       if (!ok) {
         throw new Error("config_save 返回失败");
       }
-      // 热生效:保存成功即广播,依赖配置的组件(如 Dock 开关)监听后即时刷新,无需重启/下次呼出
-      window.dispatchEvent(new CustomEvent("aurora:config-saved"));
+      // 热生效:后端 config_save 成功即广播 Tauri 级 config-saved 事件,依赖配置的
+      // 组件监听后即时刷新,无需重启/下次呼出(2026-08-14:原 window 级
+      // aurora:config-saved CustomEvent 全仓无监听者,已由后端全局事件覆盖,删除)
     },
   },
 });
@@ -110,3 +114,31 @@ export const useConfigStore = defineStore("config", {
 let loadId = 0;
 /** 最近一次成功保存时的 loadId:所有 id ≤ lastSaveId 的 load 结果均视为过期 */
 let lastSaveId = 0;
+
+// ---- 岛位置热同步(防御性 2026-08-14)----
+// store.cfg.island_x/y 只在 config_load 时刷新;岛拖动经 island_save_geometry 直接落盘,
+// 前端 store 无感知。若用户在设置页打开期间拖动岛、随后保存任意设置,旧位置会随
+// config_save 全量回写覆盖磁盘新值。故监听后端 config-saved 事件后只重载位置字段:
+// 不能全量 load(设置页有未保存修改时会被旧快照冲掉,同 P1 防覆盖规则)。
+let islandSyncStarted = false;
+async function ensureIslandSync() {
+  if (islandSyncStarted) return;
+  islandSyncStarted = true;
+  try {
+    await listen("config-saved", async () => {
+      const s = useConfigStore();
+      if (!s.cfg) return; // 配置尚未加载,无字段可刷新
+      try {
+        const fresh = await invoke<AppConfig>("config_load");
+        if (s.cfg) {
+          s.cfg.island_x = fresh.island_x;
+          s.cfg.island_y = fresh.island_y;
+        }
+      } catch {
+        /* 拉取失败静默:位置字段保持旧值,下次事件再试 */
+      }
+    });
+  } catch {
+    /* 注册失败静默:热同步降级为纯防御,不影响主流程 */
+  }
+}

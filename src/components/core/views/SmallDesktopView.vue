@@ -105,7 +105,7 @@ onUnmounted(() => {
   <div class="h-full w-full flex flex-col min-h-0 text-[var(--aurora-text)]">
     <!-- 信息条:总数/截断提示 + 手动刷新兜底 -->
     <div
-      class="flex items-center gap-2 px-4 py-1.5 border-b border-[var(--aurora-border)] text-[10.5px] text-[var(--aurora-text-dim)] shrink-0"
+      class="flex items-center gap-2 px-4 py-1.5 border-b border-[var(--aurora-border)] text-[11px] text-[var(--aurora-text-dim)] shrink-0"
     >
       <span>共 <span class="num">{{ total }}</span> 项</span>
       <span v-if="truncated" class="text-[var(--aurora-warn)]">
@@ -174,7 +174,7 @@ onUnmounted(() => {
               </span>
               <span class="text-xs font-medium text-[var(--aurora-text)]">{{ g.category }}</span>
               <span
-                class="text-[10px] px-1.5 rounded-full bg-[var(--aurora-field)] text-[var(--aurora-text-dim)]"
+                class="text-[11px] px-1.5 rounded-full bg-[var(--aurora-field)] text-[var(--aurora-text-dim)]"
               >
                 {{ g.files.length }}
               </span>
