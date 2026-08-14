@@ -40,6 +40,8 @@ const DOUBLE_CLICK_MS = 240;
 const MOVE_DEBOUNCE_MS = 600;
 
 const expanded = ref(false);
+/** 拖动态:临时禁毛玻璃防透明窗口拖动重绘闪烁(2026-08-14 真机反馈) */
+const dragging = ref(false);
 /** 动画期间实际窗口宽度(逻辑像素),下一次动画以它为起点 */
 let curW = W_COLLAPSED;
 
@@ -136,13 +138,22 @@ function toggleExpand() {
   void setWidthAnimated(expanded.value ? W_EXPANDED : W_COLLAPSED);
 }
 
-/** 呼出主面板(open_search 为已有命令;双击时同步展开,设计文档 §3.1) */
+let autoCollapseTimer: number | undefined;
+
+/** 呼出主面板(open_search 为已有命令;双击时同步展开,设计文档 §3.1)。
+    2026-08-14 真机反馈:双击后岛保持展开态,Dock 区禁拖导致"换个地方再双击就拖不动"
+    → 面板弹出后岛自动收回(展开=看 Dock 的瞬态,呼出面板任务结束即恢复窄态,拖动能恢复) */
 function openSearchPanel() {
   if (!expanded.value) {
     expanded.value = true;
     void setWidthAnimated(W_EXPANDED);
   }
   invoke("open_search").catch((e) => console.error("open_search failed", e));
+  if (autoCollapseTimer) window.clearTimeout(autoCollapseTimer);
+  autoCollapseTimer = window.setTimeout(() => {
+    autoCollapseTimer = undefined;
+    if (expanded.value) toggleExpand();
+  }, 450);
 }
 
 // ---- 单击/双击判定(pointerdown 驱动,2026-08-14 真机反馈修复):
@@ -153,6 +164,18 @@ function openSearchPanel() {
 let clickTimer: number | undefined;
 let downPos: { x: number; y: number } | null = null;
 let lastDownAt = 0;
+let dragEndTimer: number | undefined;
+
+/** 标记拖动态(禁 blur 防闪烁);拖动结束由 pointerup 立即清 + 移动断流 150ms 兜底
+    (系统拖动期间 DOM 可能收不到 pointerup,onMoved 断流兜底恢复毛玻璃) */
+function markDragging() {
+  if (!dragging.value) dragging.value = true;
+  if (dragEndTimer) window.clearTimeout(dragEndTimer);
+  dragEndTimer = window.setTimeout(() => {
+    dragEndTimer = undefined;
+    dragging.value = false;
+  }, 150);
+}
 
 function onPointerDown(e: PointerEvent) {
   const target = e.target as HTMLElement | null;
@@ -186,6 +209,18 @@ function onPointerMove(e: PointerEvent) {
     if (clickTimer !== undefined) {
       window.clearTimeout(clickTimer);
       clickTimer = undefined;
+    }
+    markDragging();
+  }
+}
+
+/** 松开立即恢复毛玻璃(系统拖动收不到 pointerup 时由 onMoved 断流定时器兜底) */
+function onPointerUp() {
+  if (dragging.value) {
+    dragging.value = false;
+    if (dragEndTimer) {
+      window.clearTimeout(dragEndTimer);
+      dragEndTimer = undefined;
     }
   }
 }
@@ -361,6 +396,8 @@ onUnmounted(() => {
   if (geometryTimer) window.clearTimeout(geometryTimer);
   if (hintTimer) window.clearTimeout(hintTimer);
   if (dragLeaveTimer) window.clearTimeout(dragLeaveTimer);
+  if (dragEndTimer) window.clearTimeout(dragEndTimer);
+  if (autoCollapseTimer) window.clearTimeout(autoCollapseTimer);
   if (animRaf) cancelAnimationFrame(animRaf);
   unlistenSys?.();
   unMoved?.();
@@ -371,11 +408,12 @@ onUnmounted(() => {
 <template>
   <div
     class="island"
-    :class="{ expanded, dragover: fileDragOver }"
+    :class="{ expanded, dragover: fileDragOver, dragging }"
     data-tauri-drag-region
     title="单击展开 Dock · 双击呼出主面板"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
   >
     <!-- 静态展示元素全部标 drag-region(bare 语义下命中它们也能拖动窗口,
          2026-08-14 真机反馈:此前只有根元素空白处能拖) -->
@@ -428,6 +466,15 @@ onUnmounted(() => {
   cursor: pointer;
   user-select: none;
   overflow: hidden;
+  /* 2026-08-14 真机反馈:四角可见 backdrop-filter 矩形模糊(圆角外仍生效,
+     表现为"外面的方角+内部的圆角并存")→ clip-path 把模糊输出裁进圆角,四角干净 */
+  clip-path: inset(0 round 999px);
+}
+/* 拖动中:透明窗口+毛玻璃每帧重绘闪烁(右侧明显)→ 临时实心面板禁 blur,静止恢复 */
+.island.dragging {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--aurora-panel-solid);
 }
 .island:active {
   transform: scale(0.988);
