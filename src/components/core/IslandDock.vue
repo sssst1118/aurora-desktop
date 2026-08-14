@@ -4,9 +4,13 @@
 //   悬停 ✕ 删除徽章(dock_set_items 移除)/点击启动(dock_launch + 本地 launching 防连点
 //   900ms + 脉冲 class,到期 emit("launched") 通知父组件收回岛)。
 // - ＋ 虚线按钮:点击轻提示"拖拽应用进岛添加"(添加走拖入,由父组件 Island 处理 onDragDropEvent)。
-// - 溢出:条目 >9 个 → 渲染前 9 + 「…」按钮,点击弹浮层列全条目(浮层内可点启动/✕);
+// - 溢出:条目超过可视容量 → 渲染前 N 个 + 「…」按钮,点击弹浮层列全条目(浮层内可点启动/✕);
 //   浮层 Teleport 出药丸(药丸 overflow:hidden 会裁剪)并用 .aurora-panel 玻璃样式,
 //   弹出时临时加高窗口容纳(46px 药丸容不下,关闭恢复 —— 见错误记录 2026-08-11 弹层超窗裁剪)。
+// - 可视容量动态计算(2026-08-14 真机观察项):静态 9 高于实际可视(~6 瓦片,378 药丸
+//   左段时间/状态占位后剩 ~270px),第 7~9 个被 overflow:hidden 裁剪且不进「…」浮层直接
+//   丢失;改为 ResizeObserver 按 mini-dock 实测宽度算容量(34px 瓦片 + 4px gap,预留
+//   ＋ 与「…」按钮位),左段内容宽窄变化/DPI 自适应。
 // - 图标预热:本组件随 Island 挂载(应用启动即挂载,不 v-if 懒加载)即后台发起全部
 //   dock_get_icon(后端 LNK_TARGET_CACHE + 磁盘缓存幂等),用户展开岛时图标零延迟(设计文档 §6)。
 // - 与旧 Dock 差异:去掉 HTML5 内部排序(设计稿无此交互);窗口常驻可见不暂停轮询。
@@ -32,9 +36,31 @@ const items = ref<DockItem[]>([]);
 const icons = ref<Map<string, string>>(new Map());
 const running = ref<Set<string>>(new Set());
 
-/** 溢出阈值:>9 个 → 渲染前 9 + 「…」浮层列全条目 */
-const MAX_VISIBLE = 9;
-const visibleItems = computed(() => items.value.slice(0, MAX_VISIBLE));
+/** 溢出:条目超过可视容量 → 渲染前 N + 「…」浮层列全条目。
+    N 由 mini-dock 实测宽度动态算出(见 recomputeVisible),默认 6 兜底首帧 */
+const dockEl = ref<HTMLElement | null>(null);
+const visibleCount = ref(6);
+const overflow = computed(() => items.value.length > visibleCount.value);
+const visibleItems = computed(() => items.value.slice(0, visibleCount.value));
+/** 瓦片 34px + 间距 4px 的排布步长 */
+const TILE_STEP = 38;
+
+let dockResize: ResizeObserver | undefined;
+
+/** 按当前宽度计算可视瓦片数:
+    - 无溢出:瓦片 + 尾部 ＋ 按钮 → N ≤ (w-34)/38
+    - 有溢出:额外腾出「…」按钮位 → N ≤ (w-72)/38,保底 1 */
+function recomputeVisible() {
+  const el = dockEl.value;
+  if (!el) return;
+  const w = el.clientWidth;
+  const withoutMore = Math.max(1, Math.floor((w - 34) / TILE_STEP));
+  const n =
+    items.value.length <= withoutMore
+      ? withoutMore
+      : Math.max(1, Math.floor((w - 72) / TILE_STEP));
+  if (n !== visibleCount.value) visibleCount.value = n;
+}
 
 /** 启动中集合:本地防连点(后端 dock_launch 亦有 LAUNCHING 防抖,双保险) */
 const launching = ref<Set<string>>(new Set());
@@ -190,12 +216,19 @@ onMounted(async () => {
   await pollRunning();
   runningTimer = window.setInterval(pollRunning, 2000);
   document.addEventListener("mousedown", onDocMouseDown);
+  // 可视容量跟随宽度变化(展开动画/左段内容宽窄变化/DPI 缩放)
+  dockResize = new ResizeObserver(recomputeVisible);
+  if (dockEl.value) dockResize.observe(dockEl.value);
 });
 
 onUnmounted(() => {
   if (runningTimer) window.clearInterval(runningTimer);
   document.removeEventListener("mousedown", onDocMouseDown);
+  dockResize?.disconnect();
 });
+
+// items 增删后溢出判定变化(是否腾出「…」按钮位),重算容量
+watch(items, recomputeVisible);
 
 defineExpose({ addPaths });
 </script>
@@ -205,7 +238,7 @@ defineExpose({ addPaths });
   保证瓦片点击/✕/＋ 交互不被拖动接管;与旧 Dock.vue 同款处理)。
   expanded class = 岛展开态样式联动(收起时隐藏,2026-08-14 真机反馈:此前收起态
   括入区无隐藏样式,被静态内容挤成 34px 宽仍可见,表现为"Dock 只有一个图标") -->
-  <div class="mini-dock" :class="{ expanded }" data-tauri-drag-region="false">
+  <div ref="dockEl" class="mini-dock" :class="{ expanded }" data-tauri-drag-region="false">
     <button
       v-for="it in visibleItems"
       :key="it.path"
@@ -237,9 +270,9 @@ defineExpose({ addPaths });
       </span>
     </button>
 
-    <!-- 溢出:>9 显示前 9 + 「…」,点击弹浮层列全条目 -->
+    <!-- 溢出:超可视容量显示前 N + 「…」,点击弹浮层列全条目 -->
     <button
-      v-if="items.length > MAX_VISIBLE"
+      v-if="overflow"
       class="dock-tile dock-more"
       title="全部应用"
       aria-label="全部应用"
