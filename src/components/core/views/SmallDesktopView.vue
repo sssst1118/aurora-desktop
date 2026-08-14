@@ -274,4 +274,12 @@ onUnmounted(() => {
   align-content: start;
   overflow-y: auto;
 }
+
+/* 减少动态效果:分类 tab 悬停过渡归零(模板内 transition-colors/transition-transform
+   工具类过渡由 global.css 全局兜底) */
+@media (prefers-reduced-motion: reduce) {
+  .drawer-tab {
+    transition: none;
+  }
+}
 </style>

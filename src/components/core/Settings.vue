@@ -1654,4 +1654,14 @@ async function uiaType() {
 .cfg-sel-tint {
   background: color-mix(in srgb, var(--aurora-accent) 20%, transparent);
 }
+
+/* 减少动态效果:控件过渡归零(transition-all/transition-colors/transition-[width]
+   均为 Tailwind 工具类,scoped 选择器 button[data-v] 特异性高于单类选择器可覆盖;
+   active:scale-95 按下反馈是状态切换非过渡,保留) */
+@media (prefers-reduced-motion: reduce) {
+  button,
+  [class*="transition-"] {
+    transition: none;
+  }
+}
 </style>

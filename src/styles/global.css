@@ -182,6 +182,20 @@
   .aurora-panel::before {
     animation: none;
   }
+  /* 全局兜底(2026-08-14 审计「reduced-motion 未全覆盖」):任意过渡/动画即时完成。
+     覆盖:各组件 Tailwind 工具类过渡(transition-all/transition-colors/transition-[width]、
+     animate-pulse 等)与散落过渡(.aurora-drag-hint/view-btn/dock-tile 等);进入动画经
+     duration 0.01ms 完成保最终态(fill:both 不丢终态),无限循环动画跑一帧即停;
+     delay 归零消除错峰入场等待。 */
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 /* ---- 显示方式:玻璃模式(设置可选;默认不透明,2026-08-14 真机反馈)。
