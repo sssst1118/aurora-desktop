@@ -49,4 +49,6 @@ export const ICON_PATHS: Record<string, string> = {
   plus: '<path d="M12 5v14M5 12h14"></path>',
   /* 对勾 */
   check: '<path d="M20 6L9 17l-5-5"></path>',
+  /* 折叠指示(向右箭头;展开态旋转 90° 变向下) */
+  chevron: '<path d="M9 6l6 6-6 6"></path>',
 };

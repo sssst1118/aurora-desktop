@@ -3,7 +3,7 @@ import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useConfigStore } from "../../stores/config";
+import { useConfigStore, type AppConfig } from "../../stores/config";
 import { apply_theme } from "../../theme";
 import ToggleSwitch from "../ToggleSwitch.vue";
 import WallpaperPanel from "./WallpaperPanel.vue";
@@ -178,13 +178,6 @@ async function toggleModule(
 ) {
   if (!store.cfg) return;
   store.cfg[key] = !store.cfg[key];
-  await saveSafe();
-}
-
-/** 搜索框显示方式(热生效:保存后 SearchBar 经 aurora:config-saved 即时刷新,无需重启) */
-async function setSearchStyle(style: "glass" | "solid") {
-  if (!store.cfg) return;
-  store.cfg.search_style = style;
   await saveSafe();
 }
 
@@ -475,21 +468,56 @@ async function clearMaterial() {
   }
 }
 
-/** Phase4 4.4 主题三态切换(system/dark/light;保存成功后经 theme.ts 立即应用) */
-async function setThemeMode(mode: "system" | "dark" | "light") {
-  if (!store.cfg) return;
-  store.cfg.theme_mode = mode;
-  await saveSafe();
-  // 成功即应用新值;失败时 saveSafe 已回滚 cfg,此处按回滚值重放,保证界面与落盘一致
-  apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
+/** 皮肤胶囊数据(id = 后端 skin 字段值;标签与设计文档 §5.1 一致) */
+const SKINS = [
+  { id: "deep", label: "深空极光" },
+  { id: "midnight", label: "午夜" },
+  { id: "dawn", label: "拂晓" },
+  { id: "verdant", label: "翠野" },
+];
+
+/** 强调色圆点数据(token 名与后端 theme_accent 一致;色值为 Phase6 新 4 色) */
+const ACCENTS = [
+  { name: "blue", value: "#38bdf8" },
+  { name: "purple", value: "#a78bfa" },
+  { name: "green", value: "#34d399" },
+  { name: "orange", value: "#fbbf24" },
+];
+
+/** 界面实际呈现的皮肤(与 theme.ts resolveSkin 同规则:老配置 theme_mode="light" 且
+ * skin 缺失/默认 deep 时按拂晓呈现;选中态须与界面一致,不能只读 skin 字段) */
+function shownSkin(cfg: AppConfig): string {
+  const s = cfg.skin ?? "deep";
+  if (s !== "deep" && ["midnight", "dawn", "verdant"].includes(s)) return s;
+  return cfg.theme_mode === "light" ? "dawn" : "deep";
 }
 
-/** Phase4 4.4 强调色选择(存 token 名,不存色值;保存成功后立即应用) */
+/** Phase6 皮肤切换(设计文档 §5.1:皮肤自带明暗,替换原主题三态;
+ * theme_mode 随皮肤推导写入(dawn→light,其余→dark),保持旧字段与皮肤一致;
+ * 保存成功后经 theme.ts 立即应用) */
+async function setSkin(skin: string) {
+  if (!store.cfg) return;
+  store.cfg.skin = skin;
+  store.cfg.theme_mode = skin === "dawn" ? "light" : "dark";
+  await saveSafe();
+  // 成功即应用新值;失败时 saveSafe 已回滚 cfg,此处按回滚值重放,保证界面与落盘一致
+  apply_theme({
+    theme_mode: store.cfg.theme_mode,
+    theme_accent: store.cfg.theme_accent,
+    skin: store.cfg.skin,
+  });
+}
+
+/** Phase4 4.4 强调色选择(存 token 名,不存色值;保存成功后立即应用;Phase6 起带皮肤) */
 async function setAccent(name: string) {
   if (!store.cfg) return;
   store.cfg.theme_accent = name;
   await saveSafe();
-  apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
+  apply_theme({
+    theme_mode: store.cfg.theme_mode,
+    theme_accent: store.cfg.theme_accent,
+    skin: store.cfg.skin,
+  });
 }
 
 // ---- 配置导入导出(可维护性收尾 2026-08-13:主力工具换机迁移)----
@@ -555,8 +583,12 @@ async function onImportFileChange(e: Event) {
     importNotice.value = "配置已导入并生效";
     await store.load(); // 刷新为后端实际落盘配置
     if (store.cfg) {
-      // 导入可能改变主题模式/强调色:按新配置立即应用(与 setThemeMode 同路径)
-      apply_theme({ theme_mode: store.cfg.theme_mode, theme_accent: store.cfg.theme_accent });
+      // 导入可能改变主题模式/强调色/皮肤:按新配置立即应用(与 setSkin 同路径)
+      apply_theme({
+        theme_mode: store.cfg.theme_mode,
+        theme_accent: store.cfg.theme_accent,
+        skin: store.cfg.skin,
+      });
     }
   } catch (err) {
     importError.value = `导入失败:${err}`;
@@ -856,35 +888,6 @@ async function uiaType() {
         description="搜索窗口底部快捷栏,拖拽 exe/lnk 添加,立即生效"
         @update:model-value="toggleModule('enable_dock')"
       />
-
-      <!-- 搜索框:显示方式可选(毛玻璃/不透明);几何(位置/大小)自动记忆,无需设置项 -->
-      <div v-if="store.cfg" class="flex flex-col gap-1.5">
-        <div>
-          <div class="text-sm">搜索框</div>
-          <div class="text-[10px] text-[var(--aurora-text-dim)]">
-            拖左上角手柄移动、拖右下角调整大小,位置与大小自动记忆;显示方式保存后即时生效
-          </div>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">显示方式</span>
-          <button
-            class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.search_style !== 'solid' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            aria-label="搜索框显示方式:毛玻璃"
-            @click="setSearchStyle('glass')"
-          >
-            毛玻璃
-          </button>
-          <button
-            class="text-xs px-2 py-0.5 rounded transition-colors"
-            :class="store.cfg.search_style === 'solid' ? 'bg-[var(--aurora-accent)]' : 'bg-[var(--aurora-field)]'"
-            aria-label="搜索框显示方式:经典不透明"
-            @click="setSearchStyle('solid')"
-          >
-            经典不透明
-          </button>
-        </div>
-      </div>
 
       <!-- 文件抽屉:热键受模块开关门控,关闭时仅展示不生效 -->
       <div class="flex flex-col gap-1.5">
@@ -1420,55 +1423,40 @@ async function uiaType() {
         </div>
       </div>
 
-      <!-- Phase4 4.4 主题区块(切换后经 theme.ts 立即应用) -->
+      <!-- Phase6 皮肤区块(设计文档 §5.1:皮肤替换原主题三态,保存后经 theme.ts 立即生效) -->
       <div v-if="store.cfg" class="border-t border-[var(--aurora-border)] pt-3 space-y-2.5">
         <div class="text-sm mb-1 flex items-center gap-1.5">
           <span class="w-[3px] h-3 rounded-full bg-[var(--aurora-accent)]"></span>
-          主题
+          皮肤
         </div>
         <div class="flex items-center gap-1.5">
-          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">外观</span>
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">皮肤包</span>
           <button
-            class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
-            :class="store.cfg.theme_mode === 'light' ? CHIP_ON : CHIP_OFF"
-            aria-label="切换浅色主题"
-            @click="setThemeMode('light')"
+            v-for="s in SKINS"
+            :key="s.id"
+            class="text-xs px-3 py-1 rounded-full transition-all active:scale-95"
+            :class="shownSkin(store.cfg) === s.id ? CHIP_ON : CHIP_OFF"
+            :aria-label="`皮肤:${s.label}`"
+            @click="setSkin(s.id)"
           >
-            浅色
-          </button>
-          <button
-            class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
-            :class="store.cfg.theme_mode === 'dark' ? CHIP_ON : CHIP_OFF"
-            aria-label="切换深色主题"
-            @click="setThemeMode('dark')"
-          >
-            深色
-          </button>
-          <button
-            class="text-xs px-2 py-0.5 rounded transition-all active:scale-95"
-            :class="store.cfg.theme_mode === 'system' ? CHIP_ON : CHIP_OFF"
-            aria-label="切换跟随系统主题"
-            @click="setThemeMode('system')"
-          >
-            跟随系统
+            {{ s.label }}
           </button>
         </div>
         <div class="flex items-center gap-1.5">
           <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">强调色</span>
           <button
-            v-for="c in ['blue', 'green', 'purple', 'orange']"
-            :key="c"
-            class="w-4 h-4 rounded-full transition-transform"
-            :class="[
-              c === 'blue' && 'bg-blue-500',
-              c === 'green' && 'bg-green-500',
-              c === 'purple' && 'bg-purple-500',
-              c === 'orange' && 'bg-orange-500',
-              store.cfg.theme_accent === c ? 'scale-110 ring-1 ring-[var(--aurora-border)]' : '',
-            ]"
-            :title="c"
-            :aria-label="`强调色:${c}`"
-            @click="setAccent(c)"
+            v-for="c in ACCENTS"
+            :key="c.name"
+            class="w-4 h-4 rounded-full cursor-pointer transition-all"
+            :class="
+              store.cfg.theme_accent === c.name
+                ? 'scale-110 shadow-[0_0_8px_-1px_currentColor]'
+                : 'hover:scale-110'
+            "
+            :style="{ background: c.value, color: c.value }"
+            :title="c.name"
+            :aria-label="`强调色:${c.name}`"
+            @click="setAccent(c.name)"
           />
         </div>
       </div>

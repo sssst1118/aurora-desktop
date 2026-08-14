@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { MAX_FILES, type DrawerGroup } from "../../FileDrawer/types";
 import FileItem from "../../FileDrawer/FileItem.vue";
+import AuroraIcon from "../../icons/AuroraIcon.vue";
 
 defineOptions({ name: "SmallDesktopView" });
 
@@ -150,7 +151,7 @@ onUnmounted(() => {
           v-else-if="total === 0"
           class="col-span-full flex flex-col items-center justify-center gap-1 py-8 text-[var(--aurora-text-dim)]"
         >
-          <div class="text-3xl mb-1">✨</div>
+          <div class="text-3xl mb-1">✦</div>
           <div class="text-sm">桌面空空如也</div>
           <div class="text-xs">把文件放到桌面,它们会自动出现在这里</div>
         </div>
@@ -166,10 +167,10 @@ onUnmounted(() => {
               @click="toggleCollapse(g.category)"
             >
               <span
-                class="text-[9px] text-[var(--aurora-text-dim)] transition-transform"
+                class="text-[var(--aurora-text-dim)] transition-transform"
                 :class="{ 'rotate-90': !collapsed.has(g.category) }"
               >
-                ▶
+                <AuroraIcon name="chevron" :size="9" />
               </span>
               <span class="text-xs font-medium text-[var(--aurora-text)]">{{ g.category }}</span>
               <span

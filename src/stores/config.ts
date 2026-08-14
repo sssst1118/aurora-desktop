@@ -46,6 +46,8 @@ export interface AppConfig {
   automation_click_delay_ms: number;
   theme_mode: string;
   theme_accent: string;
+  // ---- Phase6(与 src-tauri/src/commands/config.rs 同步)----
+  skin: string; // 皮肤包 "deep"|"midnight"|"dawn"|"verdant",默认 "deep"
   // ---- Phase5(与 src-tauri/src/commands/config.rs 同步)----
   update_enabled: boolean;
   update_feed_url: string;
