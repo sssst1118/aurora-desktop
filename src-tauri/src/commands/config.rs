@@ -84,16 +84,16 @@ impl Default for AppConfig {
         Self {
             hotkey_search: "Ctrl+Shift+Space".to_string(),
             enable_island: true,
-            enable_dock: false,
-            enable_file_drawer: false,
-            enable_clipboard_history: false,
+            enable_dock: true,
+            enable_file_drawer: true,
+            enable_clipboard_history: true,
             dock_items: Vec::new(),
             drawer_hotkey: "ctrl+alt+d".to_string(),
             drawer_open_on_launch: false,
             clipboard_max_items: 200,
             hotkey_clipboard: "ctrl+alt+v".to_string(),
             wallpaper_dir: None,
-            enable_ai: false,
+            enable_ai: true,
             ai_provider: "deepseek".to_string(),
             ai_api_key: None,
             ai_model: "deepseek-chat".to_string(),
@@ -104,7 +104,7 @@ impl Default for AppConfig {
             ai_search_roots: Vec::new(),
             ai_max_tool_rounds: 3,
             ai_hotkey: "ctrl+alt+a".to_string(),
-            enable_dynamic_wallpaper: false,
+            enable_dynamic_wallpaper: true,
             wallpaper_dynamic_dir: None,
             wallpaper_scale_mode: "cover".to_string(),
             wallpaper_battery_downshift: true,
@@ -513,7 +513,7 @@ mod tests {
         let loaded = load_from(&p);
         assert_eq!(loaded.hotkey_search, "ctrl+alt+x");
         assert!(!loaded.enable_island);
-        assert!(!loaded.enable_dock);
+        assert!(loaded.enable_dock);
         let _ = std::fs::remove_file(&p);
     }
 
@@ -669,7 +669,7 @@ mod tests {
         let cfg = load_from(&p);
         assert_eq!(cfg.hotkey_search, "ctrl+alt+z");
         assert!(cfg.enable_island);
-        assert!(!cfg.enable_dock);
+        assert!(cfg.enable_dock);
         let _ = std::fs::remove_file(&p);
     }
 
@@ -680,8 +680,8 @@ mod tests {
         let p = tmp_cfg("p4partial");
         std::fs::write(&p, r#"{"hotkey_search":"ctrl+alt+z"}"#).unwrap();
         let cfg = load_from(&p);
-        // 4.1 动态壁纸:全部默认关/空
-        assert!(!cfg.enable_dynamic_wallpaper);
+        // 4.1 动态壁纸:开关默认开(注入仅发生在显式 set 素材时,无素材不动作);目录等默认空
+        assert!(cfg.enable_dynamic_wallpaper);
         assert_eq!(cfg.wallpaper_dynamic_dir, None);
         assert_eq!(cfg.wallpaper_scale_mode, "cover");
         assert!(cfg.wallpaper_battery_downshift);
