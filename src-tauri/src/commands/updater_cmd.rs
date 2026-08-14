@@ -74,7 +74,9 @@ pub fn recheck_installer(
         .get(version)
         .ok_or_else(|| "安装包无已验证记录,请重新下载更新".to_string())?;
     let actual = updater::sha256_hex(exe).map_err(|e| format!("校验失败: {e}"))?;
-    if !expected.eq_ignore_ascii_case(&actual) {
+    // G1 加固(2026-08-14):统一走 sha256_eq(大小写不敏感)——下载校验与复验两处
+    // 语义一致,feed 提供大写 sha256 时不再误报"校验失败"
+    if !updater::sha256_eq(expected, &actual) {
         return Err("安装包校验失败(哈希与下载时不一致),已拒绝安装,请重新下载".to_string());
     }
     Ok(())
@@ -92,6 +94,29 @@ fn load_cfg(app: &AppHandle) -> crate::commands::config::AppConfig {
     crate::commands::config::load_from(&crate::commands::config::config_path(app))
 }
 
+/// 构建带 30s 总超时的更新检查客户端(纯逻辑)。
+/// 加固(2026-08-14 G3):构建失败降级分支同样带 .timeout(30s)——此前 fallback 是裸
+/// reqwest::Client::new(),无总超时,与"带 30s 总超时"注释矛盾,挂死的更新源可无限期
+/// 占用;连续构建失败(系统 TLS 后端缺失等极端环境)才兜底裸 Client(仅此路径失去
+/// 超时语义,不 panic 崩进程,与 build_client 的降级策略一致)。
+fn update_check_client() -> reqwest::Client {
+    let build = || {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+    };
+    match build() {
+        Ok(c) => c,
+        Err(_) => match build() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[aurora] 更新检查客户端构建失败,兜底默认 Client(无 30s 总超时): {e}");
+                reqwest::Client::new()
+            }
+        },
+    }
+}
+
 /// 手动检查更新(状态语义:latest/available/error;网络失败静默返回 error 文案)
 #[tauri::command(rename = "update_check")]
 pub async fn update_check(app: AppHandle) -> UpdateCheckResult {
@@ -104,12 +129,8 @@ pub async fn update_check(app: AppHandle) -> UpdateCheckResult {
             error: Some("自动更新已关闭".to_string()),
         };
     }
-    // 带 30s 总超时(网络不通时静默返回 error,不挂死)
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())
-        .unwrap_or_else(|_| reqwest::Client::new());
+    // 带 30s 总超时(网络不通时静默返回 error,不挂死);构建失败降级同样带超时(见 update_check_client)
+    let client = update_check_client();
     let body = match client.get(&cfg.update_feed_url).send().await {
         Ok(r) if r.status().is_success() => match r.text().await {
             Ok(t) => t,
@@ -192,7 +213,13 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败: {e}"))?;
     let dest = dir.join(format!("Aurora_setup_{}.exe", info.version));
     // 已下载且校验通过 → 直接完成(幂等)
-    if dest.exists() && updater::sha256_hex(&dest).ok().as_deref() == Some(info.sha256.as_str()) {
+    // G1 加固(2026-08-14):sha256_eq 大小写不敏感——此前与 feed 的大写 sha256
+    // 严格相等比较,大写 hex 时"已下载"幂等分支永远命中不了,反复重下
+    if dest.exists()
+        && updater::sha256_hex(&dest)
+            .map(|a| updater::sha256_eq(&a, &info.sha256))
+            .unwrap_or(false)
+    {
         save_verified(&dir, &info.version, &info.sha256)?; // 复验记录补齐(幂等)
         let _ = app.emit(
             "update-downloaded",
@@ -207,9 +234,11 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
     }
     // 流式下载 + 进度上报(节流:每 ≥1% 或 ≥512KB 报一次,防小块高频事件风暴;
     // total 未知(无 Content-Length)时按 512KB 固定步长上报,percent 为 None)
+    // G2 加固(2026-08-14):传 MAX_DOWNLOAD_BYTES 下载上限,feed 的 url 不受 host
+    // 白名单约束,超限由 download_update 中止并清理半成品
     let app_for_progress = app.clone();
     let mut last_reported: u64 = 0;
-    updater::download_update(&info.url, &dest, move |downloaded, total| {
+    updater::download_update(&info.url, &dest, updater::MAX_DOWNLOAD_BYTES, move |downloaded, total| {
         let step = (total / 100).max(512 * 1024);
         if downloaded == total || downloaded - last_reported >= step {
             last_reported = downloaded;
@@ -235,7 +264,8 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
         e
     })?;
     let actual = updater::sha256_hex(&dest).map_err(|e| format!("校验失败: {e}"))?;
-    if actual != info.sha256 {
+    // G1 加固(2026-08-14):大小写不敏感比较,与 recheck_installer 语义一致
+    if !updater::sha256_eq(&actual, &info.sha256) {
         let _ = std::fs::remove_file(&dest);
         return Err("下载文件校验失败(哈希不匹配),已删除,请重试".to_string());
     }
@@ -317,6 +347,20 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .spawn()
         .map_err(|e| format!("启动安装器失败: {e}"))?;
+    // G4 界面反馈(2026-08-14):spawn 成功后、退出前广播 update-install-start,
+    // 让前端提示"开始安装,安装器将接管后续(静默完成后自动启动新版本)"——
+    // 此前 spawn 后立即 app.exit(0),安装器返回非 0 时用户只见旧版退出、新版未启动,
+    // 无任何反馈。方案说明:app.exit(0) 在命令内同步执行,invoke 的返回值永远来不及
+    // 回到前端,事件是退出前唯一可靠通道(与 update-progress 的"契约先就位、前端
+    // 后续接上"先例一致);安装器结果不在 app 内等待——等待会改变"秒退交给安装器"
+    // 的现有行为语义,失败场景由安装器自报告/自恢复。
+    let _ = app.emit(
+        "update-install-start",
+        &serde_json::json!({
+            "version": ver,
+            "message": format!("开始安装 v{ver},安装器将接管后续(静默完成后自动启动新版本)")
+        }),
+    );
     app.exit(0);
     Ok(())
 }
@@ -352,6 +396,42 @@ mod tests {
         let entries = vec![("bad".to_string(), PathBuf::from("Aurora_setup_bad.exe"))];
         // "bad" 不可解析 → 与任何项 Equal,取第一个(候选集只有它时仍返回)
         assert!(pick_latest_candidate(entries).is_some());
+    }
+
+    // ---- 更新检查客户端(2026-08-14 G3 加固:fallback 分支同样带 30s 总超时) ----
+
+    #[test]
+    fn update_check_client_reaches_local_server() {
+        // 冒烟测试:构建出的客户端(带 30s 总超时)能完成本地回环请求。
+        // fallback 分支仅在 reqwest 构建失败时可达,进程内无法模拟,由代码走查
+        // 保证其同样带 .timeout(30s)(与注释"带 30s 总超时"一致)
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+            );
+        });
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let body = rt.block_on(async {
+            update_check_client()
+                .get(&format!("http://{addr}/latest.json"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+        server.join().unwrap();
+        assert_eq!(body, "ok");
     }
 
     // ---- sidecar 校验记录(安全加固:安装前复验) ----

@@ -18,7 +18,7 @@ pub struct AppConfig {
     // ---- Phase1 ----
     pub hotkey_search: String,
     pub enable_island: bool,
-    // ---- Phase2 开关(Phase1 已含,默认 false,独立验收)----
+    // ---- Phase2 开关(Phase1 已含,默认 true,独立验收)----
     pub enable_dock: bool,
     pub enable_file_drawer: bool,
     pub enable_clipboard_history: bool,
@@ -33,7 +33,7 @@ pub struct AppConfig {
     // ---- Phase2 2.4 壁纸 ----
     pub wallpaper_dir: Option<String>,
     // ---- Phase3 AI 集成(设计文档 §0.3.4;全部 ai 前缀)----
-    pub enable_ai: bool,              // 总开关,默认 false;关闭时不注册热键、不显示面板入口
+    pub enable_ai: bool,              // 总开关,默认 true;关闭时不注册热键、不显示面板入口
     pub ai_provider: String,          // "deepseek" | "ollama",默认 "deepseek"
     pub ai_api_key: Option<String>,   // 仅 DeepSeek 用;存文件明文,前端永远只见掩码(§1.3)
     pub ai_model: String,             // 默认 "deepseek-chat"
@@ -45,7 +45,7 @@ pub struct AppConfig {
     pub ai_max_tool_rounds: u32,      // 工具循环上限,默认 3(防死循环)
     pub ai_hotkey: String,            // 默认 "ctrl+alt+a"
     // ---- Phase4 4.1 动态壁纸(设计文档 §1)----
-    pub enable_dynamic_wallpaper: bool,    // 总开关,默认 false;关闭时不创建壁纸窗口、不启动电池检测
+    pub enable_dynamic_wallpaper: bool,    // 总开关,默认 true;关闭时不创建壁纸窗口、不启动电池检测
     pub wallpaper_dynamic_dir: Option<String>, // 动态壁纸素材目录,默认 None = 与 2.4 wallpaper_dir 相同(仍为空则 %USERPROFILE%\Pictures)
     pub wallpaper_scale_mode: String,      // "cover" | "contain" | "stretch",默认 "cover"(视频/图片填充方式)
     pub wallpaper_battery_downshift: bool, // 电池降载开关,默认 true(§8 风险铁律,默认开)
@@ -65,10 +65,10 @@ pub struct AppConfig {
     pub wallpaper_multi_monitor: bool,     // 多屏开关,默认 false(= 现状只铺主屏)
     pub wallpaper_span_mode: bool,         // true=拼接(一张素材铺满虚拟桌面);false=每屏独立素材
     // ---- 搜索框外观与几何记忆(2026-08-12)----
-    pub search_style: String,              // "glass" 毛玻璃(默认) | "solid" 不透明
+    pub search_style: String,              // "glass" 毛玻璃 | "solid" 不透明(默认)
     pub search_x: Option<i32>,             // 记住的窗口位置(逻辑像素);None=启动居中
     pub search_y: Option<i32>,
-    pub search_width: Option<f64>,         // 记住的窗口大小;None=配置默认 620x420
+    pub search_width: Option<f64>,         // 记住的窗口大小;None=恢复 680x520(tauri.conf 初始尺寸,见 lib.rs setup)
     pub search_height: Option<f64>,
     // ---- 稳定性包(2026-08-13)----
     pub launch_at_startup: bool,           // 开机自启;注册表 Run 键为真值(commands/launch.rs 读写)
@@ -238,6 +238,16 @@ pub fn config_import(app: tauri::AppHandle, json: String) -> Result<bool, String
     // H1 供应链加固:导入同样是把 update_feed_url 写入配置的路径,白名单边界保持一致
     // (与磁盘旧值相同 → 放行,防历史 URL 误拒;有改动 → 严格校验)
     validate_feed_url_change(&prev.update_feed_url, &cfg.update_feed_url)?;
+    // G5 加固(2026-08-14):导入的 ai_base_url 同样校验——恶意配置可把 base_url
+    // 指向任意服务器,而密钥保留在本地,后续对话会把真实 API Key 发给该服务器。
+    // 语义:非空必须 https + 合法结构,违反则整体拒绝导入(明确报错,编辑后可重导);
+    // 空串 = 未配置(仅用 Ollama 等场景),保留本机旧值,导入不接管既有可用配置
+    validate_import_base_url(&cfg.ai_base_url)
+        .map_err(|e| format!("导入配置校验失败:模型接口地址 {e}"))?;
+    cfg.ai_base_url = resolve_import_base_url(&prev.ai_base_url, &cfg.ai_base_url);
+    // G6 加固(2026-08-14):数值字段范围钳制——1e9 之类的上限会让剪贴板历史渐进
+    // 扩容撑爆内存,钳制到 [1, 2000]
+    cfg.clipboard_max_items = clamp_clipboard_max_items(cfg.clipboard_max_items);
     if !cfg.first_run_done {
         cfg.first_run_done = true;
         crate::tray::set_first_run_hint(false);
@@ -312,6 +322,56 @@ fn validate_feed_url_change(prev: &str, incoming: &str) -> Result<(), String> {
     validate_update_feed_url(incoming)
 }
 
+/// 导入时 ai_base_url 校验(纯函数,可单测)。
+/// 安全语义(2026-08-14 G5 加固):导入的恶意配置可把 base_url 指向任意服务器,
+/// 而密钥保留在本地(config_import 的密钥裁决),后续对话会把真实 API Key 发给该
+/// 服务器——对比 update_feed_url 有白名单,ai_base_url 此前全盘接受。
+/// 规则:非空必须 https + 结构合法(能解析出 host,拒绝 `https://` 裸串/用户信息
+/// 段混淆);违反则整体拒绝导入(明确报错,编辑后可重导)。
+/// 空串 = 未配置(仅用 Ollama 等场景),由 resolve_import_base_url 保留本机旧值。
+pub fn validate_import_base_url(url: &str) -> Result<(), String> {
+    let s = url.trim();
+    if s.is_empty() {
+        return Ok(()); // 空串语义:未配置,调用方保留旧值
+    }
+    let (scheme, rest) = s
+        .split_once("://")
+        .ok_or_else(|| "不是合法 URL(缺少协议)".to_string())?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err("必须是 https 地址(http 明文会向网络暴露 API Key)".to_string());
+    }
+    // 与 validate_update_feed_url 同款解析:authority 取首个 /?# 之前,host 取最后一个 @ 之后
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    if host.is_empty() {
+        return Err("缺少主机名".to_string());
+    }
+    Ok(())
+}
+
+/// 导入 base_url 裁决(纯函数):空串 → 保留本机旧值(未配置不接管既有可用配置);
+/// 非空 → 原样生效(校验已过)。
+fn resolve_import_base_url(prev: &str, incoming: &str) -> String {
+    if incoming.trim().is_empty() {
+        prev.to_string()
+    } else {
+        incoming.to_string()
+    }
+}
+
+/// clipboard_max_items 范围钳制(纯函数,可单测):导入/保存的数值字段不受信任,
+/// 1e9 之类的值会让剪贴板历史渐进扩容到撑爆内存(clipboard.rs truncate 上限);
+/// 钳制到 [1, 2000](默认 200;下限 1 防 0 的"无上限"语义歧义,上限 2000 覆盖重度使用)。
+pub fn clamp_clipboard_max_items(v: u32) -> u32 {
+    v.clamp(1, 2000)
+}
+
 #[tauri::command]
 pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> Result<bool, String> {
     let path = config_path(&app);
@@ -324,6 +384,8 @@ pub fn config_save(app: tauri::AppHandle, mut cfg: AppConfig) -> Result<bool, St
     // H1 供应链加固:更新源 URL 白名单校验(只拦 save 不拦 load_from,避免启动误拒)。
     // 校验失败返回 Err 拒绝保存(前端 saveSafe 已有捕获链路:提示 + 回滚本地值)
     validate_feed_url_change(&prev.update_feed_url, &cfg.update_feed_url)?;
+    // G6 加固(2026-08-14):数值字段范围钳制(与导入同语义),防 1e9 上限渐进撑爆内存
+    cfg.clipboard_max_items = clamp_clipboard_max_items(cfg.clipboard_max_items);
     // 稳定性包:首次启动引导兜底——保存任意配置即视为引导完成(用户已找到设置页)。
     // 主路径是引导窗口关闭即置位(见 first_run.rs),此处兜底防关闭事件丢失导致
     // 每次启动重复引导;同步撤下托盘快捷键提示
@@ -860,6 +922,54 @@ mod tests {
         assert!(validate_update_feed_url("").is_err());
         assert!(validate_update_feed_url("   ").is_err());
         assert!(validate_update_feed_url("https://").is_err());
+    }
+
+    // ---- 导入 ai_base_url 校验(2026-08-14 G5 加固:防恶意配置接管 base_url) ----
+
+    #[test]
+    fn import_base_url_validation() {
+        // 合法 https 放行(含默认 DeepSeek 地址/自定义端口/大小写)
+        assert!(validate_import_base_url("https://api.deepseek.com/v1").is_ok());
+        assert!(validate_import_base_url("https://127.0.0.1:8000/v1").is_ok());
+        assert!(validate_import_base_url("HTTPS://Api.DeepSeek.com/v1").is_ok());
+        // 空串放行(语义:保留本机旧值,由 resolve_import_base_url 处理)
+        assert!(validate_import_base_url("").is_ok());
+        assert!(validate_import_base_url("   ").is_ok());
+        // http 明文拒绝(API Key 会明文发给任意服务器)
+        assert!(validate_import_base_url("http://evil.com/v1").is_err());
+        assert!(validate_import_base_url("HTTP://evil.com/v1").is_err());
+        // 结构非法拒绝
+        assert!(validate_import_base_url("https://").is_err());
+        assert!(validate_import_base_url("not a url").is_err());
+        assert!(validate_import_base_url("ftp://x.com/v1").is_err());
+        assert!(validate_import_base_url("https://user@/v1").is_err(), "用户信息段后无 host 拒绝");
+        // https + host 存在即放行(任务底线 = 协议与结构;base_url 不设 host 白名单,
+        // 否则会误拒合法的自建 https 代理场景)
+        assert!(validate_import_base_url("https://user@evil.com/v1").is_ok());
+    }
+
+    #[test]
+    fn import_base_url_empty_keeps_prev() {
+        // 空串 → 保留本机旧值(导入不接管/不清空既有可用配置)
+        assert_eq!(resolve_import_base_url("https://api.deepseek.com/v1", ""), "https://api.deepseek.com/v1");
+        assert_eq!(resolve_import_base_url("https://api.deepseek.com/v1", "   "), "https://api.deepseek.com/v1");
+        // 非空 → 原样生效(校验已过)
+        assert_eq!(
+            resolve_import_base_url("https://api.deepseek.com/v1", "https://other.com/v1"),
+            "https://other.com/v1"
+        );
+    }
+
+    // ---- clipboard_max_items 范围钳制(2026-08-14 G6 加固:防渐进扩容撑爆内存) ----
+
+    #[test]
+    fn clamp_clipboard_max_items_bounds() {
+        assert_eq!(clamp_clipboard_max_items(0), 1, "下限钳制");
+        assert_eq!(clamp_clipboard_max_items(1), 1);
+        assert_eq!(clamp_clipboard_max_items(200), 200, "默认值不变");
+        assert_eq!(clamp_clipboard_max_items(2000), 2000, "上限值不变");
+        assert_eq!(clamp_clipboard_max_items(2001), 2000, "上限钳制");
+        assert_eq!(clamp_clipboard_max_items(1_000_000_000), 2000, "1e9 恶意值钳制");
     }
 
     #[test]

@@ -38,6 +38,13 @@ pub const DEEPSEEK_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Ollama 连接超时(本机拒绝连接 = 未启动,秒级提示)
 pub const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// SSE 累积字节上限(安全加固 2026-08-14):ai_base_url 可配置任意地址,恶意端点可在
+/// 120s 总超时内持续灌数据,行缓冲 buf 与累积文本(回复内容 + 工具参数分片)无上限
+/// 会内存膨胀;超过即 StreamInterrupted 中止(与 MAX_TOOL_CALLS 同类加固风格)。
+/// 正常对话回复远低于此量级(4MB 文本 ≈ 百万汉字)。
+const MAX_SSE_BUF_BYTES: usize = 1024 * 1024;      // 跨 chunk 半行累积缓冲上限 1MB
+const MAX_SSE_FULL_BYTES: usize = 4 * 1024 * 1024; // 累积回复文本/工具参数上限 4MB
+
 /// reqwest Client 惰性创建(首次请求才建连接池,不聊天零网络线程)。
 /// 双模式连接超时不同,无法共用单个 Client,各持一个 OnceLock。
 static CLIENT_DS: OnceLock<Client> = OnceLock::new();
@@ -298,6 +305,15 @@ pub fn extract_completion_text(body: &str) -> Option<String> {
 
 // ==================== 对话请求(唯一网络出口) ====================
 
+/// 校验 SSE 流累积量是否超限(纯函数,可单测):行缓冲 > 1MB 或累积文本(回复内容 +
+/// 工具参数分片)> 4MB → Err(StreamInterrupted,中止);等于上限放行(严格超限才断)。
+fn sse_size_exceeded(buf_len: usize, accumulated: usize) -> Result<(), AiErrorKind> {
+    if buf_len > MAX_SSE_BUF_BYTES || accumulated > MAX_SSE_FULL_BYTES {
+        return Err(AiErrorKind::StreamInterrupted);
+    }
+    Ok(())
+}
+
 /// 一次对话请求(单轮;工具循环在命令层 run_tool_loop)。
 /// 返回契约(§2.3):回复含 tool_calls → 返回完整 message JSON 字符串(parse_tool_calls 可解析);
 /// 纯文本回复 → 返回 content 文本。stream=false 一次性返回;stream=true SSE 逐行解析,
@@ -357,11 +373,15 @@ where
     }
 
     // SSE 循环(方案 1~5):bytes_stream 累积按 \n 切行;idle 超时 30s
+    // 安全加固(2026-08-14):行缓冲 buf / 累积文本 full+工具参数无上限时,恶意端点
+    // 可在 120s 总超时内持续灌数据撑爆内存;每收到一个 chunk、每累积一段文本都
+    // 校验上限,超限即 StreamInterrupted 中止(见 sse_size_exceeded)
     use futures_util::StreamExt;
     let mut byte_stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
     let mut tool_chunks: Vec<(usize, String, String, String)> = Vec::new();
+    let mut tool_args_bytes: usize = 0; // 流式工具调用参数分片累计字节(与 full 同享 4MB 上限)
     loop {
         let next = tokio::time::timeout(SSE_IDLE_TIMEOUT, byte_stream.next())
             .await
@@ -370,6 +390,7 @@ where
             Some(Err(_)) => return Err(AiErrorKind::StreamInterrupted),
             Some(Ok(bytes)) => {
                 buf.extend_from_slice(&bytes);
+                sse_size_exceeded(buf.len(), full.len() + tool_args_bytes)?;
                 while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                     let line: String = String::from_utf8_lossy(&buf[..pos]).into_owned();
                     buf.drain(..=pos);
@@ -378,9 +399,12 @@ where
                     }
                     if let Some(delta) = parse_sse_line(&line) {
                         full.push_str(&delta);
+                        sse_size_exceeded(buf.len(), full.len() + tool_args_bytes)?;
                         on_delta(delta);
                     } else if let Some(chunks) = parse_sse_tool_chunk(&line) {
+                        tool_args_bytes += chunks.iter().map(|c| c.3.len()).sum::<usize>();
                         tool_chunks.extend(chunks); // 流式工具调用分片(OpenAI 格式)
+                        sse_size_exceeded(buf.len(), full.len() + tool_args_bytes)?;
                     }
                 }
             }
@@ -696,5 +720,29 @@ mod tests {
         assert_eq!(calls.len(), 2, "空槽不应产出 tool_call");
         assert_eq!(calls[0]["id"], "call_0");
         assert_eq!(calls[1]["id"], "call_5");
+    }
+
+    // ---------- SSE 累积上限(2026-08-14 加固:防恶意端点灌数据内存膨胀) ----------
+
+    #[test]
+    fn sse_size_limit_bounds() {
+        // 等于上限放行、严格超限才中止(与 MAX_TOOL_CALLS 同类边界测试)
+        assert!(sse_size_exceeded(MAX_SSE_BUF_BYTES, 0).is_ok(), "行缓冲等于上限放行");
+        assert!(sse_size_exceeded(0, MAX_SSE_FULL_BYTES).is_ok(), "累积文本等于上限放行");
+        assert_eq!(
+            sse_size_exceeded(MAX_SSE_BUF_BYTES + 1, 0),
+            Err(AiErrorKind::StreamInterrupted),
+            "行缓冲超限中止"
+        );
+        assert_eq!(
+            sse_size_exceeded(0, MAX_SSE_FULL_BYTES + 1),
+            Err(AiErrorKind::StreamInterrupted),
+            "累积文本超限中止"
+        );
+        // 行缓冲与累积文本是"或"关系:任一超限即中止
+        assert_eq!(
+            sse_size_exceeded(MAX_SSE_BUF_BYTES + 1, MAX_SSE_FULL_BYTES + 1),
+            Err(AiErrorKind::StreamInterrupted)
+        );
     }
 }
