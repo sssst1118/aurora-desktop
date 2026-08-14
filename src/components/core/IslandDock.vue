@@ -107,7 +107,12 @@ async function iconOf(path: string): Promise<string | undefined> {
  */
 async function addPaths(paths: string[]): Promise<number> {
   addFailReason.value = ""; // 每次尝试先复位,父组件 await 后读到的即本次结果
-  const fresh = paths.filter((p) => !items.value.some((it) => it.path === p));
+  // 中2(2026-08-14 波次 4):前置去重与父组件提示链同口径——Windows 路径大小写
+  // 不敏感,统一 toLowerCase 比较(此前严格相等,已存 C:\A.exe 时拖入 c:\a.exe
+  // 会写盘生成真实重复条目)
+  const fresh = paths.filter(
+    (p) => !items.value.some((it) => it.path.toLowerCase() === p.toLowerCase()),
+  );
   if (fresh.length === 0) return 0; // 全部已存在(调用方按 0 提示"已在岛内")
   const next = [...items.value, ...fresh.map((p) => ({ name: nameOf(p), path: p }))];
   try {
@@ -260,6 +265,7 @@ defineExpose({ addPaths, addFailReason });
       class="dock-tile"
       :class="{ launching: launching.has(it.path) }"
       :title="it.name"
+      :aria-label="`启动 ${it.name}`"
       @click.stop="launch(it)"
     >
       <span class="dock-ico">
@@ -333,6 +339,7 @@ defineExpose({ addPaths, addFailReason });
         class="dock-overflow-row"
         :class="{ launching: launching.has(it.path) }"
         :title="it.name"
+        :aria-label="`启动 ${it.name}`"
         @click.stop="launch(it)"
       >
         <span class="dock-ico">

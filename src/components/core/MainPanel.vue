@@ -110,8 +110,8 @@ function replayPopIn() {
 // ---- 窗口级键盘:Esc 三级 + 打字即搜 ----
 
 /** 焦点是否在可输入元素(INPUT/TEXTAREA/SELECT/富文本)。
-    Esc 放行与打字即搜豁免共用同一原则(2026-08-14 波次 3 审计):焦点在输入区时
-    键盘事件归属输入控件,窗口级快捷键一律不劫持 */
+    打字即搜豁免与 Esc 判定的共用基础(2026-08-14 波次 3 引入);
+    Esc 侧波次 4 已降级为「有值或 IME 组合中才放行」,见 onWindowKeydown */
 function isTypingTarget(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
   return (
@@ -122,11 +122,39 @@ function isTypingTarget(t: EventTarget | null): boolean {
   );
 }
 
+/** 焦点可输入元素的当前值(输入控件取 .value,富文本取 textContent)。
+    Esc 豁免降级判据:有值或 IME 组合中才放行(2026-08-14 波次 4 中1) */
+function typingValue(t: EventTarget | null): string {
+  if (!(t instanceof HTMLElement)) return "";
+  if (
+    t.tagName === "INPUT" ||
+    t.tagName === "TEXTAREA" ||
+    t.tagName === "SELECT"
+  ) {
+    return (t as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value ?? "";
+  }
+  if (t.isContentEditable) return t.textContent ?? "";
+  return "";
+}
+
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
-    // 焦点豁免:焦点在可输入元素时放行原生 Esc(取消输入/关闭下拉),
-    // 不触发清搜索/收岛/关面板——与下方打字即搜的焦点豁免原则一致
-    if (isTypingTarget(e.target)) return;
+    const typing = isTypingTarget(e.target);
+    // 高1(2026-08-14 波次 4):search 态焦点在主搜索输入框 → 执行一级
+    // (清空 query 回小桌面)。波次 3 的 isTypingTarget 豁免把主输入框一并放行,
+    // 最常见路径(打字后按 Esc 清空回小桌面)退化成无动作;
+    // IME 组合中仍放行原生 Esc 取消输入法组合
+    if (typing && activeView.value === "search" && e.target === inputEl.value) {
+      if (e.isComposing) return;
+      e.preventDefault();
+      query.value = "";
+      showView("small-desktop");
+      return;
+    }
+    // 中1(2026-08-14 波次 4):其余可输入元素仅「有值或 IME 组合中」放行原生
+    // Esc(取消输入/关闭下拉);空值/非组合时递进执行收岛/关面板——波次 3 全放行
+    // 导致焦点在设置页/AI 输入框/剪贴板搜索框时面板既不收岛也不关闭,纯键盘用户被卡死
+    if (typing && (e.isComposing || typingValue(e.target) !== "")) return;
     e.preventDefault();
     if (activeView.value === "search") {
       // 一级:搜索态 → 清空输入退回小桌面(对标 Raycast,面板保持打开)
@@ -153,6 +181,9 @@ function onWindowKeydown(e: KeyboardEvent) {
   if (e.key.length !== 1) return;
   if (activeView.value === "search") return;
   if (isTypingTarget(e.target)) return;
+  // 低6(2026-08-14 波次 4):按钮聚焦时按 Space 激活是原生行为,打字即搜不得劫持
+  // (与 SearchView 同款豁免;此前 Tab 到视图切换按钮按空格会被切到搜索视图)
+  if (e.target instanceof HTMLButtonElement) return;
   e.preventDefault();
   showView("search", e.key);
 }
@@ -290,6 +321,46 @@ function resizeEnd() {
   window.removeEventListener("pointermove", resizeMove);
   window.removeEventListener("pointerup", resizeEnd);
   scheduleSaveSize(); // 缩放结束落一次尺寸(防抖保存兜底)
+}
+
+/** 缩放手柄键盘调节步长(逻辑像素;右下角手柄方向语义:右/下放大,左/上缩小) */
+const RESIZE_KEY_STEP = 20;
+
+/** 缩放手柄键盘调节(role="slider" + tabindex 键盘可达,无指针时方向键等效拖动;
+    clamp 与 applyResize 同口径 360×260 ~ 2 倍显示器) */
+async function resizeByKey(dx: number, dy: number) {
+  try {
+    const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    const monitors = await logicalMonitors();
+    const maxW = monitors.length ? Math.max(...monitors.map((m) => m.w)) * 2 : 4096;
+    const maxH = monitors.length ? Math.max(...monitors.map((m) => m.h)) * 2 : 4096;
+    const w = Math.min(maxW, Math.max(360, Math.round(size.width / sf) + dx));
+    const h = Math.min(maxH, Math.max(260, Math.round(size.height / sf) + dy));
+    await win.setSize(new LogicalSize(w, h));
+    scheduleSaveSize(); // 与指针缩放结束同口径:调整后落一次尺寸
+  } catch (err) {
+    console.error("resize by key failed", err);
+  }
+}
+
+function onResizeHandleKeydown(e: KeyboardEvent) {
+  if (e.key === "ArrowRight") {
+    e.preventDefault();
+    void resizeByKey(RESIZE_KEY_STEP, 0);
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    void resizeByKey(0, RESIZE_KEY_STEP);
+  } else if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    void resizeByKey(-RESIZE_KEY_STEP, 0);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    void resizeByKey(0, -RESIZE_KEY_STEP);
+  } else if (e.key === " ") {
+    // role="slider" 无 Space 激活语义:吞掉,防止被窗口级打字即搜误判切到搜索视图
+    e.preventDefault();
+    e.stopPropagation();
+  }
 }
 
 onMounted(async () => {
@@ -434,11 +505,16 @@ onUnmounted(() => {
       </span>
     </footer>
 
-    <!-- 右下角缩放手柄(自绘;无边框窗口无系统 resize 边框) -->
+    <!-- 右下角缩放手柄(自绘;无边框窗口无系统 resize 边框;
+         键盘可达:role="slider" + tabindex + 方向键调节,2026-08-14 波次 4) -->
     <div
       class="resize-handle"
-      @pointerdown="resizeStart"
+      role="slider"
+      tabindex="0"
+      aria-label="调整窗口大小"
       title="拖动调整大小"
+      @pointerdown="resizeStart"
+      @keydown="onResizeHandleKeydown"
     >
       <span class="resize-corner"></span>
     </div>

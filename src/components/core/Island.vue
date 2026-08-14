@@ -188,15 +188,24 @@ async function ensureExpandFits(targetW: number) {
   }
 }
 
+/** 双击呼出后的自动收回定时器(openSearchPanel 设置;手动操作即取消,见 toggleExpand) */
+let autoCollapseTimer: number | undefined;
+
 function toggleExpand() {
+  // 低5(2026-08-14 波次 4):手动收起/展开即取消 450ms 自动收回定时器——定时器与
+  // 手动操作竞态时,到期会把用户刚展开/刚收起的岛反向弹回
+  // (与 island-collapse-request 分支同款处理;定时器自身到期后已置 undefined,
+  //  此处清的是「用户操作时仍挂着的」那个)
+  if (autoCollapseTimer) {
+    window.clearTimeout(autoCollapseTimer);
+    autoCollapseTimer = undefined;
+  }
   expanded.value = !expanded.value;
   void (async () => {
     if (expanded.value) await ensureExpandFits(W_EXPANDED);
     await setWidthAnimated(expanded.value ? W_EXPANDED : W_COLLAPSED);
   })();
 }
-
-let autoCollapseTimer: number | undefined;
 
 /** 呼出主面板(open_search 为已有命令;双击时同步展开,设计文档 §3.1)。
     2026-08-14 真机反馈:双击后岛保持展开态,Dock 区禁拖导致"换个地方再双击就拖不动"
@@ -240,8 +249,10 @@ let downPos: { x: number; y: number } | null = null;
 let lastDownAt = 0;
 let dragEndTimer: number | undefined;
 
-/** 标记拖动态(禁 blur 防闪烁);拖动结束由 pointerup 立即清 + 移动断流 150ms 兜底
-    (系统拖动期间 DOM 可能收不到 pointerup,onMoved 断流兜底恢复毛玻璃) */
+/** 标记拖动态(禁 blur 防闪烁);拖动结束由 pointerup 立即清 + 移动断流 150ms 兜底。
+    长拖续灯(2026-08-14 波次 4):系统拖动期间 DOM 收不到 pointermove/pointerup,
+    onMoved(见 onMounted 注册处)每帧续灯,事件流断流(拖动结束)后此 150ms
+    定时器兜底恢复毛玻璃 */
 function markDragging() {
   if (!dragging.value) dragging.value = true;
   if (dragEndTimer) window.clearTimeout(dragEndTimer);
@@ -536,7 +547,18 @@ onMounted(async () => {
     console.error("sys_get_status failed", e);
   }
   // 拖动结束(tauri://move)→ 跟随节流广播 + 防抖落盘(主面板跟随)
-  unMoved = await win.onMoved(() => schedulePersistGeometry());
+  // 长拖续灯(低1,2026-08-14 波次 4):系统拖动(drag-region)期间 DOM 收不到
+  // pointermove,拖动态(禁毛玻璃防闪烁)靠 onMoved 持续续灯,拖动结束事件流断流后
+  // 由 markDragging 内部 150ms 定时器兜底清除。
+  // 依据(按代码推断,tao 0.35 源码):拖动由 PostMessage(WM_NCLBUTTONDOWN,HTCAPTION)
+  // 启动,DefWindowProc 模态拖动循环泵送消息期间,WM_WINDOWPOSCHANGED 每帧派发到
+  // 子类窗口过程并同步 send_event(Moved) → tauri://move 持续触发(波次 1 高1 原
+  // bug「onMoved 600ms 防抖被反复重置」同源旁证);程序性 set_position 被 tao 抑制
+  // 不触发 Moved(波次 3 踩坑记录),故此续灯仅真实拖动生效,无程序移动副作用
+  unMoved = await win.onMoved(() => {
+    markDragging();
+    schedulePersistGeometry();
+  });
   // 皮肤/Dock 开关跨窗口热生效:设置页保存后后端全局广播 config-saved
   try {
     unlistenCfg = await listen("config-saved", applyConfig);
