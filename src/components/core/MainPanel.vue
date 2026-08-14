@@ -6,7 +6,10 @@
  * - 视图 id 契约:small-desktop | search | clipboard | ai | settings(后端 panel-open-view
  *   事件仅 drawer/clipboard/ai 三种,drawer 映射 small-desktop)。
  * - 打字即搜:窗口 keydown 按可见字符(排除修饰键/IME 组合/可输入元素焦点)→ 切 search 态并输入。
- * - Esc 两级:search 态清空回小桌面;非 search 态隐藏窗口。
+ * - Esc 三级(设计文档 §3.1「先收岛展开 → 再关主面板」,2026-08-14 审计中项):
+ *   ① search 态清空回小桌面 ② 岛展开时请求岛收起(面板保持打开)③ 再按隐藏窗口。
+ *   岛展开状态来自岛 watch 广播的 island-expand-state 事件,收岛走反向事件
+ *   island-collapse-request(纯事件通道,与 island-geometry 对称,无后端命令)。
  * - 位置跟随岛:监听 island-geometry(Task 3 岛拖动防抖后 emit,逻辑像素)→ 面板可见时
  *   水平居中于岛、垂直岛底 +12px,clamp 回工作区;面板自身拖动位置不落盘。
  * - 尺寸记忆:onResized 防抖 600ms → search_save_geometry(x/y 占位 0,后端 setup 不恢复位置)。
@@ -20,7 +23,7 @@ import {
   availableMonitors,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 import AuroraIcon from "../icons/AuroraIcon.vue";
 import SmallDesktopView from "./views/SmallDesktopView.vue";
 import ClipboardView from "./views/ClipboardView.vue";
@@ -60,6 +63,8 @@ function hidePanel() {
 }
 
 const activeView = ref<ViewId>("small-desktop");
+/** 岛当前展开状态(岛 watch expanded 广播;Esc 二级「收岛」的判据) */
+const islandExpanded = ref(false);
 /** 搜索输入状态由壳持有(打字即搜写入、视图切换保留、呼出重置清空),SearchView 经 prop 消费 */
 const query = ref("");
 const inputEl = ref<HTMLInputElement | null>(null);
@@ -100,7 +105,7 @@ function replayPopIn() {
   el.classList.add("panel-pop");
 }
 
-// ---- 窗口级键盘:Esc 两级 + 打字即搜 ----
+// ---- 窗口级键盘:Esc 三级 + 打字即搜 ----
 
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -109,8 +114,16 @@ function onWindowKeydown(e: KeyboardEvent) {
       // 一级:搜索态 → 清空输入退回小桌面(对标 Raycast,面板保持打开)
       query.value = "";
       showView("small-desktop");
+    } else if (islandExpanded.value) {
+      // 二级:岛展开 → 请求岛收起,面板保持打开(设计文档 §3.1 层级递进;
+      // 焦点在面板、岛 focus:false 收不到 Esc,只能由面板经事件通道转达)。
+      // 本地乐观置 false:岛 watch 广播会兜底同步,连按 Esc 不被 280ms 收岛动画卡出多一次按键
+      islandExpanded.value = false;
+      emit("island-collapse-request").catch((err) =>
+        console.error("emit island-collapse-request failed", err),
+      );
     } else {
-      // 二级:非搜索态 → 关闭面板
+      // 三级:岛已收起 → 关闭面板
       void win.hide();
     }
     return;
@@ -294,6 +307,15 @@ onMounted(async () => {
       if (!p || typeof p.x !== "number" || typeof p.y !== "number") return;
       if (!visible) return;
       void followIsland({ x: p.x, y: p.y, w: p.w ?? 0, h: p.h ?? 0 });
+    }),
+  );
+
+  // 岛展开状态(岛 watch expanded 广播 + 挂载时初始广播):Esc 二级收岛判据;
+  // 面板隐藏期间监听常驻,状态持续对齐,无需每次 Esc 查询
+  unlisteners.push(
+    await listen("island-expand-state", (ev) => {
+      const p = ev.payload as { expanded?: boolean } | null;
+      islandExpanded.value = p?.expanded === true;
     }),
   );
 

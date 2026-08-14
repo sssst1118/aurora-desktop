@@ -11,7 +11,10 @@
 //   + emit("island-geometry", {x,y,w,h})(逻辑像素,主面板 Task 4 跟随消费,取 x+w/2 对齐)。
 // - 拖放入岛:onDragDropEvent → .exe/.lnk 调 Dock addPaths 追加(去重)并轻提示;
 //   非目标类型忽略+提示;常态拖入先展开再接收(enter 携带有效路径即展开,drop 兜底)。
-import { ref, onMounted, onUnmounted } from "vue";
+// - 面板 Esc 递进收岛(设计文档 §3.1,2026-08-14 审计中项):expanded 翻转经 watch 统一
+//   emit("island-expand-state") 广播,主面板据其判断 Esc 收岛还是关面板;面板发
+//   "island-collapse-request" 事件(面板→岛,与 island-geometry 反向通道对称)请求收起。
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
   availableMonitors,
@@ -213,6 +216,19 @@ function openSearchPanel() {
     if (expanded.value) toggleExpand();
   }, 450);
 }
+
+// ---- 面板 Esc 递进收岛:展开状态广播 + 收岛请求(与 island-geometry 同构的纯事件通道) ----
+
+let unlistenCollapse: UnlistenFn | undefined;
+
+/** 所有 expanded 翻转点(单击 toggle/双击呼出/450ms 自动收回/Dock 启动脉冲/拖入展开)
+    经 watch 统一广播,主面板据此判断 Esc 是收岛还是关面板(岛窗口 focus:false 收不到
+    键盘事件,面板是独立窗口也收不到岛的 keydown——展开判据必须广播到面板侧) */
+watch(expanded, (v) => {
+  emit("island-expand-state", { expanded: v }).catch((e) =>
+    console.error("emit island-expand-state failed", e),
+  );
+});
 
 // ---- 单击/双击判定(pointerdown 驱动,2026-08-14 真机反馈修复):
 // 单击=展开/收起;240ms 内第二次按下=双击呼出主面板;按下后移动 >4px=拖动,取消单击。
@@ -526,6 +542,24 @@ onMounted(async () => {
   void applyConfig();
   // 启动广播一次初始几何:落盘幂等(setup 已恢复的位置写回原值),主面板可得初始同步
   void persistGeometry();
+  // 面板 Esc 二级收岛请求(面板→岛):展开才收起;同步清自动收回定时器,
+  // 防 450ms 到期重复触发(if expanded 兜底存在,主动清更干净)
+  try {
+    unlistenCollapse = await listen("island-collapse-request", () => {
+      if (!expanded.value) return;
+      if (autoCollapseTimer) {
+        window.clearTimeout(autoCollapseTimer);
+        autoCollapseTimer = undefined;
+      }
+      toggleExpand();
+    });
+  } catch (e) {
+    console.error("listen island-collapse-request failed", e);
+  }
+  // 初始展开状态广播(启动必收起态):面板晚于岛挂载时也能对齐,无需查询命令
+  emit("island-expand-state", { expanded: false }).catch((e) =>
+    console.error("emit island-expand-state initial failed", e),
+  );
   timeTimer = window.setInterval(tickTime, 1000);
 });
 
@@ -542,6 +576,7 @@ onUnmounted(() => {
   unlistenSys?.();
   unMoved?.();
   unlistenCfg?.();
+  unlistenCollapse?.();
 });
 </script>
 
