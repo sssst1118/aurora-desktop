@@ -161,14 +161,17 @@ export function useAiChat() {
     error.value = null;
     streaming.value = true;
 
-    // 先订阅后 invoke,避免漏掉后端首帧事件
-    unlisten = await listen<AiEvent>("ai-event", (e) => {
-      handleEvent(e.payload);
-    });
     try {
+      // 先订阅后 invoke,避免漏掉后端首帧事件;
+      // listen 移入 try:IPC 未就绪等场景下订阅失败会抛 rejection,若在 try 外会导致
+      // streaming 卡 true、用户消息与空助手占位残留,这里按发送失败统一兜底
+      unlisten = await listen<AiEvent>("ai-event", (e) => {
+        handleEvent(e.payload);
+      });
       await invoke("ai_chat_stream", { messages: toBackendMessages() });
     } catch (e) {
-      // 返回 Err 仅代表任务未能启动(参数非法/未配置密钥等)
+      // 返回 Err 仅代表任务未能启动(参数非法/未配置密钥等);listen 失败同走此路:
+      // 复位 streaming、清空空助手占位、取消已注册订阅,避免状态卡死
       streaming.value = false;
       error.value = typeof e === "string" ? e : String(e);
       cleanupPlaceholder();

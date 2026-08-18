@@ -71,7 +71,12 @@ const props = defineProps<{ active?: boolean }>();
 watch(
   () => props.active,
   (v) => {
-    if (v) refreshData();
+    if (v) {
+      refreshData();
+    } else {
+      // 切走设置视图即结束热键录制:防 capture 级 keydown 监听残留干扰其他视图
+      stopRecord();
+    }
   },
 );
 onMounted(async () => {
@@ -84,12 +89,14 @@ onMounted(async () => {
   // 订阅后台检查/托盘检查结果与下载事件(后端驱动,前端只展示)
   const unlisteners = [
     await listen("update-available", (ev) => {
+      if (inUpdateTransfer()) return; // 下载/安装中:后台检查结果不覆盖进行中状态(防进度条被打回 available)
       const p = ev.payload as { version?: string | null; notes?: string | null };
       updateStatus.value = "available";
       updateVersion.value = p.version ?? "";
       updateNotes.value = p.notes ?? "";
     }),
     await listen("update-check-result", (ev) => {
+      if (inUpdateTransfer()) return; // 下载/安装中:检查结果(latest/available/error)一律不打断流程
       const p = ev.payload as {
         status: string;
         version?: string | null;
@@ -145,7 +152,10 @@ onActivated(() => {
   refreshData();
 });
 
-// 离开设置页(KeepAlive 停用/销毁):结束热键录制,防止残留窗口级监听
+// 结束热键录制的兜底。现状说明:Phase6 预热改造后本组件为 v-show 常驻挂载
+// (active prop 由主面板传入),onDeactivated 永不触发,实际兜底已迁移到
+// ① 热键输入框 @blur、② 上方 watch(active) 切走视图时 stopRecord;
+// 此处保留仅兼容历史 KeepAlive 挂载形态(当时 onActivated/onDeactivated 成对生效)
 onDeactivated(() => {
   stopRecord();
 });
@@ -675,6 +685,18 @@ const updateError = ref("");
 const updateHint = ref(""); // installing 状态提示(update-install-start 事件 message)
 let updateListeners: UnlistenFn[] = [];
 
+/** 下载/安装流程进行中(downloading / downloaded / installing):屏蔽后台静默检查结果类事件。
+ * 原因:后台静默检查(启动 15s + 每 6 小时)会推 update-available / update-check-result,
+ * 若不加屏蔽,下载中收到的检查结果会把 downloading 打回 available,进度条消失
+ * (只能等下一个 progress 事件才恢复);已下载待安装、安装中同理不该被检查结果覆盖 */
+function inUpdateTransfer(): boolean {
+  return (
+    updateStatus.value === "downloading" ||
+    updateStatus.value === "downloaded" ||
+    updateStatus.value === "installing"
+  );
+}
+
 /** update-progress 事件 payload(与后端 updater::UpdateProgress 契约对应;
  * percent 为 0.0-1.0 占比;total_bytes 未知(响应无 Content-Length)时为 null) */
 interface UpdateProgress {
@@ -755,14 +777,15 @@ const simError = ref("");
 async function simClick() {
   simError.value = "";
   // 空串/非数字拦截:Number("") === 0、Number("abc") === NaN,空着就提交会真的
-  // 点击屏幕左上角(0,0)或把 NaN 传给后端,均为误操作,先本地校验并红字提示
+  // 点击屏幕左上角(0,0)或把 NaN 传给后端,均为误操作,先本地校验并红字提示;
+  // 坐标须为整数像素(后端按整数屏幕坐标取点),Number.isInteger 同时覆盖 NaN/Infinity/浮点(如 100.5)
   const x = Number(simX.value);
   const y = Number(simY.value);
   if (
     simX.value.trim() === "" ||
     simY.value.trim() === "" ||
-    !Number.isFinite(x) ||
-    !Number.isFinite(y)
+    !Number.isInteger(x) ||
+    !Number.isInteger(y)
   ) {
     simError.value = "请输入有效的 x/y 坐标(整数)";
     return;
@@ -941,8 +964,6 @@ async function uiaType() {
           >
         </div>
         <p class="text-[11px] text-[var(--aurora-text-dim)]">灵动岛点击或快捷键均呼出主面板;抽屉/剪贴板/AI 热键呼出主面板并定位到对应视图(不再是独立窗口);全部显示/隐藏为固定值;抽屉/剪贴板热键可在各自区块修改</p>
-        <!-- 录制中连续忽略提示:某些键(如 Ctrl+; )不参与热键组合,连按 3 次无果后红字提醒,防用户以为没生效 -->
-        <p v-if="recordHint" class="text-[11px] text-[var(--aurora-danger)]">{{ recordHint }}</p>
       </div>
 
       <ToggleSwitch
@@ -997,6 +1018,14 @@ async function uiaType() {
           />
           <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
+        <!-- 录制中连续忽略提示就近渲染:某些键(如 Ctrl+;)不参与热键组合,连按 3 次无果后红字提醒,
+             防用户以为没生效;此前渲染在顶部速查区块,距录制输入框数百像素用户看不到 -->
+        <p
+          v-if="recordingKey === 'drawer' && recordHint"
+          class="text-[11px] text-[var(--aurora-danger)] ml-[70px]"
+        >
+          {{ recordHint }}
+        </p>
         <p v-if="store.cfg && !store.cfg.enable_file_drawer" class="text-[11px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
         </p>
@@ -1025,6 +1054,13 @@ async function uiaType() {
           />
           <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
+        <!-- 录制提示就近渲染(同抽屉热键:连按 3 次无效键后的红字提醒,显示在当前录制输入框旁) -->
+        <p
+          v-if="recordingKey === 'clipboard' && recordHint"
+          class="text-[11px] text-[var(--aurora-danger)] ml-[70px]"
+        >
+          {{ recordHint }}
+        </p>
         <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[11px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
         </p>
@@ -1178,6 +1214,13 @@ async function uiaType() {
             />
             <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
           </div>
+          <!-- 录制提示就近渲染(同抽屉/剪贴板热键:红字提醒显示在当前录制输入框旁) -->
+          <p
+            v-if="recordingKey === 'ai' && recordHint"
+            class="text-[11px] text-[var(--aurora-danger)] ml-[70px]"
+          >
+            {{ recordHint }}
+          </p>
         </div>
       </div>
 
@@ -1570,7 +1613,9 @@ async function uiaType() {
           </div>
           <button
             class="text-xs px-2.5 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
-            :disabled="updateStatus === 'checking' || updateStatus === 'downloading'"
+            :disabled="
+              updateStatus === 'checking' || updateStatus === 'downloading' || updateStatus === 'installing'
+            "
             aria-label="检查更新"
             @click="checkUpdate"
           >
