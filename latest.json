@@ -1,6 +1,6 @@
 {
-  "version": "0.2.4",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.4/Aurora_0.2.4_x64-setup.exe",
-  "sha256": "37cdaaf2d5ba4e9a5791dfba03b08983d64ccb86e54bf3eddd989c090e7f0b43",
-  "notes": "v0.2.4:修复 Esc 一级回归(打字后 Esc 清空回小桌面);空输入框 Esc 递进收岛(波次3 全放行卡死修复);Dock 拖入路径去重大小写统一;字号四档收敛 29 处;SSE 流字节上限+更新下载大小上限+哈希大小写校验+版本字符白名单+更新检查 30s 超时+安装失败前端反馈+导入校验;热键录制忽略提示;按钮聚焦 Space 不被打字即搜劫持;无障碍 aria 补齐"
+  "version": "0.2.5",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.5/Aurora_0.2.5_x64-setup.exe",
+  "sha256": "c0e7374408ffa23a574e60395f734904c7ef47ef4a08ca57a379952701bc9d9c",
+  "notes": "v0.2.5:Esc 分级(剪贴板搜索框有值 Esc 清空/AI 正文输入 Esc 放行);键盘缩放手柄方向键连按不丢步进;溢出浮层 Esc 键盘关闭;剪贴板过滤后选中重置+删除按钮 Tab 可见;设置保存不再覆盖岛拖动位置(数据丢失修复);更新状态机防竞态+AI 订阅失败兜底;SSE 工具分片字节上限+条目上限;更新源 256KB 上限+安装包流式哈希校验;剪贴板上限加载钳制;热键提示就近渲染;resize-handle 无障碍补全;文档 16 条同步"
 }
