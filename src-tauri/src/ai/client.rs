@@ -45,6 +45,11 @@ pub const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_SSE_BUF_BYTES: usize = 1024 * 1024;      // 跨 chunk 半行累积缓冲上限 1MB
 const MAX_SSE_FULL_BYTES: usize = 4 * 1024 * 1024; // 累积回复文本/工具参数上限 4MB
 
+/// 流式 tool_calls 分片条目数上限(安全加固 2026-08-18,中 1):tool_chunks 条目数
+/// 无上限时,恶意端点可在 120s 总超时内每行(≤1MB)塞大量分片,条目自身开销持续
+/// 累积;正常工具调用分片远低于此(单次工具循环至多几十片),128 绰绰有余。
+const MAX_TOOL_CHUNKS: usize = 128;
+
 /// reqwest Client 惰性创建(首次请求才建连接池,不聊天零网络线程)。
 /// 双模式连接超时不同,无法共用单个 Client,各持一个 OnceLock。
 static CLIENT_DS: OnceLock<Client> = OnceLock::new();
@@ -303,6 +308,46 @@ pub fn extract_completion_text(body: &str) -> Option<String> {
     }
 }
 
+// ==================== 响应体带上限读取(2026-08-18 中 2 加固) ====================
+
+/// 响应体 Content-Length 声明是否超上限(纯函数,可单测):>4MB 直接拒绝,
+/// 不必等流式累积(防恶意端点声明超大 body 后持续推送);无声明 → 放行,
+/// 由 read_body_limited 的流式累积兜底。等于上限放行(与 sse_size_exceeded
+/// "严格超限才断"同语义)。
+fn content_length_too_large(len: Option<u64>) -> bool {
+    len.is_some_and(|l| l > MAX_SSE_FULL_BYTES as u64)
+}
+
+/// 带上限的响应体读取(async;非 SSE 降级与错误响应体共用):
+/// ① Content-Length 声明超 4MB → 直接拒绝;
+/// ② bytes_stream 流式累积,超过 4MB → 拒绝(与 SSE 路径同口径上限)。
+/// 修复背景(2026-08-18 中 2):原 resp.text() 无字节上限,恶意端点返回非
+/// event-stream 巨型 body 时全量载入内存。
+async fn read_body_limited(resp: reqwest::Response) -> Result<String, AiErrorKind> {
+    if content_length_too_large(resp.content_length()) {
+        return Err(AiErrorKind::StreamInterrupted);
+    }
+    use futures_util::StreamExt;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|_| AiErrorKind::StreamInterrupted)?;
+        buf.extend_from_slice(&bytes);
+        if buf.len() > MAX_SSE_FULL_BYTES {
+            return Err(AiErrorKind::StreamInterrupted);
+        }
+    }
+    // 非 SSE 响应体按 UTF-8 文本处理(lossy 容错:恶意二进制 body 不引入新失败路径)
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// 一行流式 tool_calls 分片的字符串字段总字节(纯函数,可单测):id + name +
+/// arguments 三字段(元组第 2/3/4 元素),与 4MB 上限同口径累计——此前只累计
+/// arguments 字节,恶意端点可用超长 id/name 绕过上限持续膨胀内存(2026-08-18 中 1)。
+fn tool_chunks_bytes(chunks: &[(usize, String, String, String)]) -> usize {
+    chunks.iter().map(|c| c.1.len() + c.2.len() + c.3.len()).sum()
+}
+
 // ==================== 对话请求(唯一网络出口) ====================
 
 /// 校验 SSE 流累积量是否超限(纯函数,可单测):行缓冲 > 1MB 或累积文本(回复内容 +
@@ -353,7 +398,8 @@ where
         return Err(AiErrorKind::ModelNotFound);
     }
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        // 中 2 加固:错误响应体同样走带上限读取(恶意端点可用巨型错误 body 撑内存)
+        let body = read_body_limited(resp).await.unwrap_or_default();
         let message = extract_error_message(&body);
         return Err(AiErrorKind::Http { code: status.as_u16(), message });
     }
@@ -365,10 +411,9 @@ where
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("text/event-stream"));
     if !is_sse {
-        let body = resp
-            .text()
-            .await
-            .map_err(|_| AiErrorKind::StreamInterrupted)?;
+        // 中 2 加固:非 SSE 降级路径带 4MB 上限读取(此前 resp.text() 无上限,
+        // 恶意端点返回非 event-stream 巨型 body 时全量载入内存)
+        let body = read_body_limited(resp).await?;
         return Ok(extract_completion_text(&body).unwrap_or(body));
     }
 
@@ -381,7 +426,9 @@ where
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
     let mut tool_chunks: Vec<(usize, String, String, String)> = Vec::new();
-    let mut tool_args_bytes: usize = 0; // 流式工具调用参数分片累计字节(与 full 同享 4MB 上限)
+    // 流式工具调用分片 id/name/arguments 三字段累计字节(与 full 同享 4MB 上限;
+    // 2026-08-18 中 1:由仅算 arguments 扩为四字段同口径,防超长 id/name 绕过)
+    let mut tool_bytes: usize = 0;
     loop {
         let next = tokio::time::timeout(SSE_IDLE_TIMEOUT, byte_stream.next())
             .await
@@ -390,7 +437,7 @@ where
             Some(Err(_)) => return Err(AiErrorKind::StreamInterrupted),
             Some(Ok(bytes)) => {
                 buf.extend_from_slice(&bytes);
-                sse_size_exceeded(buf.len(), full.len() + tool_args_bytes)?;
+                sse_size_exceeded(buf.len(), full.len() + tool_bytes)?;
                 while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                     let line: String = String::from_utf8_lossy(&buf[..pos]).into_owned();
                     buf.drain(..=pos);
@@ -399,12 +446,19 @@ where
                     }
                     if let Some(delta) = parse_sse_line(&line) {
                         full.push_str(&delta);
-                        sse_size_exceeded(buf.len(), full.len() + tool_args_bytes)?;
+                        sse_size_exceeded(buf.len(), full.len() + tool_bytes)?;
                         on_delta(delta);
                     } else if let Some(chunks) = parse_sse_tool_chunk(&line) {
-                        tool_args_bytes += chunks.iter().map(|c| c.3.len()).sum::<usize>();
+                        // 中 1 加固(2026-08-18):此前只累计 arguments 字节,
+                        // 恶意端点可用超长 id/name 绕过 4MB 上限持续膨胀内存;
+                        // 现累计 id+name+arguments 三字段总字节,并对分片条目数
+                        // 一并设上限(任一超限即中止,与 4MB 同口径)
+                        if tool_chunks.len() + chunks.len() > MAX_TOOL_CHUNKS {
+                            return Err(AiErrorKind::StreamInterrupted);
+                        }
+                        tool_bytes += tool_chunks_bytes(&chunks);
                         tool_chunks.extend(chunks); // 流式工具调用分片(OpenAI 格式)
-                        sse_size_exceeded(buf.len(), full.len() + tool_args_bytes)?;
+                        sse_size_exceeded(buf.len(), full.len() + tool_bytes)?;
                     }
                 }
             }
@@ -744,5 +798,46 @@ mod tests {
             sse_size_exceeded(MAX_SSE_BUF_BYTES + 1, MAX_SSE_FULL_BYTES + 1),
             Err(AiErrorKind::StreamInterrupted)
         );
+    }
+
+    // ---------- 分片四字段字节统计与响应体上限(2026-08-18 中 1/中 2 加固) ----------
+
+    #[test]
+    fn tool_chunks_bytes_counts_id_name_args() {
+        // id/name/arguments 三字段都计入(元组第 2/3/4 元素),index 不计
+        let chunks = vec![
+            (0, "call_abc".to_string(), "open_item".to_string(), r#"{"path":"C:\x"}"#.to_string()),
+            (1, String::new(), String::new(), "{}".to_string()),
+        ];
+        assert_eq!(
+            tool_chunks_bytes(&chunks),
+            "call_abc".len() + "open_item".len() + r#"{"path":"C:\x"}"#.len() + "{}".len()
+        );
+        assert_eq!(tool_chunks_bytes(&[]), 0);
+    }
+
+    #[test]
+    fn oversize_id_name_trips_full_limit() {
+        // 中 1 复现场景:arguments 很小但 id 超长——三字段累计后必须触发
+        // 与 full 同享的 4MB 上限(此前只累计 args 会放行;严格超限才断,
+        // 故 +1 构造超限值)
+        let big_id = "i".repeat(MAX_SSE_FULL_BYTES + 1);
+        let chunks = vec![(0, big_id, String::new(), String::new())];
+        let bytes = tool_chunks_bytes(&chunks);
+        assert!(bytes > MAX_SSE_FULL_BYTES, "超长 id 累计字节应超 4MB");
+        assert_eq!(sse_size_exceeded(0, bytes), Err(AiErrorKind::StreamInterrupted));
+        // 条目数上限:128 条是硬顶(与 MAX_TOOL_CHUNKS 定义一致,代码走查循环内校验)
+        assert_eq!(MAX_TOOL_CHUNKS, 128);
+    }
+
+    #[test]
+    fn content_length_too_large_bounds() {
+        // 无 Content-Length(分块/流式)→ 放行,靠流式累积兜底
+        assert!(!content_length_too_large(None));
+        assert!(!content_length_too_large(Some(0)));
+        // 恰等于上限放行(与 sse_size_exceeded "严格超限才断"同语义)
+        assert!(!content_length_too_large(Some(MAX_SSE_FULL_BYTES as u64)));
+        assert!(content_length_too_large(Some(MAX_SSE_FULL_BYTES as u64 + 1)));
+        assert!(content_length_too_large(Some(u64::MAX)));
     }
 }

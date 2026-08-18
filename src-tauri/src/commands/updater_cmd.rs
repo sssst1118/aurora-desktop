@@ -95,26 +95,47 @@ fn load_cfg(app: &AppHandle) -> crate::commands::config::AppConfig {
 }
 
 /// 构建带 30s 总超时的更新检查客户端(纯逻辑)。
-/// 加固(2026-08-14 G3):构建失败降级分支同样带 .timeout(30s)——此前 fallback 是裸
-/// reqwest::Client::new(),无总超时,与"带 30s 总超时"注释矛盾,挂死的更新源可无限期
-/// 占用;连续构建失败(系统 TLS 后端缺失等极端环境)才兜底裸 Client(仅此路径失去
-/// 超时语义,不 panic 崩进程,与 build_client 的降级策略一致)。
+/// 加固(2026-08-14 G3):构建失败降级为默认 Client,不 panic 崩进程(与 ai/client.rs
+/// build_client 的降级策略一致)。
+/// 2026-08-18 修订(低 1):原实现是"连续构建失败才兜底"的双重 build——同参数重复
+/// build 第二次必然失败,注释与实现不符;改为单次 build + unwrap_or_else 兜底。
 fn update_check_client() -> reqwest::Client {
-    let build = || {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-    };
-    match build() {
-        Ok(c) => c,
-        Err(_) => match build() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[aurora] 更新检查客户端构建失败,兜底默认 Client(无 30s 总超时): {e}");
-                reqwest::Client::new()
-            }
-        },
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("[aurora] 更新检查客户端构建失败,兜底默认 Client(无 30s 总超时): {e}");
+            reqwest::Client::new()
+        })
+}
+
+/// 更新源(latest.json)响应体大小上限(安全加固 2026-08-18 中 3):feed 只是几 KB 的
+/// JSON 元数据,恶意/失控更新源可在 30s 超时内无限灌数据;安装包下载有 1GB 上限
+/// (updater::MAX_DOWNLOAD_BYTES),feed 此前反而没有上限,现统一限制 256KB,
+/// 超限按「更新源格式不合法」处理
+const MAX_FEED_BYTES: u64 = 256 * 1024;
+
+/// 读取更新源响应体(带上限):Content-Length 声明超 256KB 或流式累积超 256KB
+/// → Err("更新源格式不合法")(feed 内容不可信,与 parse_update_info 失败同语义);
+/// 流读失败 → Err("读取更新源失败: …")。修复背景(2026-08-18 中 3):原
+/// resp.text() 无字节上限,巨型 feed 响应会全量载入内存。
+async fn read_feed_body(resp: reqwest::Response) -> Result<String, String> {
+    if let Some(len) = resp.content_length() {
+        if len > MAX_FEED_BYTES {
+            return Err("更新源格式不合法".to_string());
+        }
     }
+    use futures_util::StreamExt;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| format!("读取更新源失败: {e}"))?;
+        buf.extend_from_slice(&bytes);
+        if buf.len() as u64 > MAX_FEED_BYTES {
+            return Err("更新源格式不合法".to_string());
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// 手动检查更新(状态语义:latest/available/error;网络失败静默返回 error 文案)
@@ -132,14 +153,16 @@ pub async fn update_check(app: AppHandle) -> UpdateCheckResult {
     // 带 30s 总超时(网络不通时静默返回 error,不挂死);构建失败降级同样带超时(见 update_check_client)
     let client = update_check_client();
     let body = match client.get(&cfg.update_feed_url).send().await {
-        Ok(r) if r.status().is_success() => match r.text().await {
+        // 中 3 加固:feed 读取带 256KB 上限,超限报"更新源格式不合法"(此前
+        // r.text() 无字节上限,巨型 feed 响应全量载入内存)
+        Ok(r) if r.status().is_success() => match read_feed_body(r).await {
             Ok(t) => t,
             Err(e) => {
                 return UpdateCheckResult {
                     status: "error".to_string(),
                     version: None,
                     notes: None,
-                    error: Some(format!("读取更新源失败: {e}")),
+                    error: Some(e),
                 }
             }
         },
@@ -197,14 +220,13 @@ pub async fn update_download(app: AppHandle) -> Result<(), String> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("创建请求客户端失败: {e}"))?;
-    let body = client
+    let resp = client
         .get(&cfg.update_feed_url)
         .send()
         .await
-        .map_err(|e| format!("检查更新失败: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("读取更新源失败: {e}"))?;
+        .map_err(|e| format!("检查更新失败: {e}"))?;
+    // 中 3 加固:feed 读取带 256KB 上限,超限按「更新源格式不合法」处理
+    let body = read_feed_body(resp).await?;
     let info = updater::parse_update_info(&body).ok_or("更新源格式不合法")?;
     if !updater::compare_versions(APP_VERSION, &info.version) {
         return Err("当前已是最新版本".to_string());
@@ -398,13 +420,14 @@ mod tests {
         assert!(pick_latest_candidate(entries).is_some());
     }
 
-    // ---- 更新检查客户端(2026-08-14 G3 加固:fallback 分支同样带 30s 总超时) ----
+    // ---- 更新检查客户端(2026-08-14 G3 加固:构建失败兜底默认 Client) ----
 
     #[test]
     fn update_check_client_reaches_local_server() {
         // 冒烟测试:构建出的客户端(带 30s 总超时)能完成本地回环请求。
-        // fallback 分支仅在 reqwest 构建失败时可达,进程内无法模拟,由代码走查
-        // 保证其同样带 .timeout(30s)(与注释"带 30s 总超时"一致)
+        // 兜底分支仅在 reqwest 构建失败时可达,进程内无法模拟,由代码走查
+        // 保证其为默认 Client(失去 30s 超时语义,属极端环境降级,与
+        // ai/client.rs build_client 策略一致)
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
@@ -432,6 +455,95 @@ mod tests {
         });
         server.join().unwrap();
         assert_eq!(body, "ok");
+    }
+
+    // ---- 更新源响应体上限(2026-08-18 中 3 加固:feed 读取带 256KB 上限) ----
+
+    fn local_feed_server(body: Vec<u8>, content_length: Option<usize>) -> std::net::SocketAddr {
+        // 本地极简 HTTP 服务器:返回固定 body(声明或省略 Content-Length),
+        // 供 read_feed_body 测试(127.0.0.1 回环,无外网依赖)
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf);
+            let head = match content_length {
+                Some(len) => format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"),
+                None => "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_string(),
+            };
+            let _ = sock.write_all(head.as_bytes());
+            let _ = sock.write_all(&body);
+        });
+        addr
+    }
+
+    #[test]
+    fn read_feed_body_rejects_declared_oversize() {
+        // Content-Length 声明 300KB > 256KB → 立即 Err(不读 body)
+        let addr = local_feed_server(vec![b'x'; 300 * 1024], Some(300 * 1024));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt.block_on(async {
+            read_feed_body(
+                update_check_client()
+                    .get(&format!("http://{addr}/latest.json"))
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await
+        })
+        .expect_err("声明超限必须报错");
+        assert!(err.contains("更新源格式不合法"), "超限文案应指向格式不合法: {err}");
+    }
+
+    #[test]
+    fn read_feed_body_rejects_accumulated_oversize() {
+        // 无 Content-Length(分块/close 语义):靠流式累积兜底,300KB 同样拒绝
+        let addr = local_feed_server(vec![b'x'; 300 * 1024], None);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt.block_on(async {
+            read_feed_body(
+                update_check_client()
+                    .get(&format!("http://{addr}/latest.json"))
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await
+        })
+        .expect_err("累积超限必须报错");
+        assert!(err.contains("更新源格式不合法"), "超限文案应指向格式不合法: {err}");
+    }
+
+    #[test]
+    fn read_feed_body_small_body_ok() {
+        // 正常小 feed(几 KB 量级)→ 读出完整内容
+        let small = br#"{"version":"0.2.0","url":"https://x/a.exe","sha256":"abcd"}"#.to_vec();
+        let addr = local_feed_server(small.clone(), Some(small.len()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let body = rt.block_on(async {
+            read_feed_body(
+                update_check_client()
+                    .get(&format!("http://{addr}/latest.json"))
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        });
+        assert!(body.contains("0.2.0"), "正常 feed 应读出内容: {body}");
     }
 
     // ---- sidecar 校验记录(安全加固:安装前复验) ----

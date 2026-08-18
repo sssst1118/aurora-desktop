@@ -22,7 +22,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
-use super::config::{config_path, load_from};
+use super::config::{clamp_clipboard_max_items, config_path, load_from};
 
 /// 前端订阅的广播事件:新条目入库后发出(payload = 最新一条 ClipboardItem)
 pub const EVENT_CLIPBOARD_UPDATED: &str = "clipboard-updated";
@@ -333,7 +333,11 @@ fn ensure_ready(app: &AppHandle) {
         hist.items = load_from_file(&history_path(app));
         hist.last_hash = hist.items.first().map(|i| content_hash(&i.payload)).unwrap_or(0);
     }
-    hist.max_items = cfg.clipboard_max_items;
+    // 中 5 加固(2026-08-18):磁盘原值在此统一钳制到 [1,2000](复用 config 层
+    // clamp_clipboard_max_items,与导入/保存同口径)。config::load_from 有意不
+    // 钳制(避免启动误拒配置),手工编辑/旧版本写下的 1e9 若直接生效,History::push
+    // 的 truncate 永不触发,剪贴板历史会无限累积;钳回 2000 后运行时上限恒定
+    hist.max_items = clamp_clipboard_max_items(cfg.clipboard_max_items);
     drop(hist);
 
     if cfg.enable_clipboard_history {

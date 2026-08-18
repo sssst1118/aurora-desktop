@@ -23,6 +23,9 @@ pub struct UpdateInfo {
 /// 输入);白名单外直接拒绝。允许:ASCII 字母数字 + `.` `_` `-`(覆盖常见语义化版本写法)。
 fn valid_version(s: &str) -> bool {
     !s.is_empty()
+        // 低 2 加固(2026-08-18):纯点号串(如 ".." / "....")此前能通过白名单,
+        // 会拼出 "Aurora_setup_....exe" 之类的文件名;要求至少含一个非点字符
+        && !s.chars().all(|c| c == '.')
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
@@ -71,9 +74,22 @@ pub fn compare_versions(current: &str, latest: &str) -> bool {
 /// 文件 SHA-256 hex(小写)
 pub fn sha256_hex(path: &std::path::Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path).map_err(|e| format!("读取文件失败: {e}"))?;
-    let digest = Sha256::digest(&bytes);
-    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+    // 中 4 加固(2026-08-18):std::fs::read 全量载入内存再哈希,1GB 上限的安装包
+    // 校验时内存峰值 ≈1GB,抵消下载阶段的流式优化;改 BufReader 分块流式哈希
+    // (sha2 流式 API:Digest::update 逐块喂入),内存占用 O(64KB) 恒定
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("读取文件失败: {e}"))?;
+    let mut reader = std::io::BufReader::with_capacity(64 * 1024, file);
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("读取文件失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// SHA-256 hex 相等比较(大小写不敏感,纯函数,可单测):下载校验与安装前复验统一走本函数。
@@ -211,6 +227,22 @@ mod tests {
     }
 
     #[test]
+    fn sha256_hex_streams_large_file_correctly() {
+        // 中 4 加固回归:流式分块哈希的结果必须与全量一次哈希一致
+        // (大文件路径;10MB 确定性内容,无需随机源)
+        use sha2::{Digest, Sha256};
+        let p = std::env::temp_dir().join("aurora_sha_large.bin");
+        let content: Vec<u8> = (0..10_000_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&p, &content).unwrap();
+        let expected: String = Sha256::digest(&content)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(sha256_hex(&p).unwrap(), expected, "流式哈希必须与全量哈希一致");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
     fn download_update_streams_chunks_with_progress() {
         // 本地极简 HTTP 服务器(线程):返回固定字节流 + Content-Length,验证流式
         // 落盘与进度回调契约(downloaded 单调递增、末次 == total;127.0.0.1 回环,
@@ -300,6 +332,10 @@ mod tests {
         }
         for bad in [
             "",          // 空串
+            ".",         // 纯点号(低 2 加固:拼出 "Aurora_setup_..exe" 类文件名)
+            "..",        // 纯点号
+            "...",       // 纯点号
+            "....",      // 纯点号
             "0.2.0/1",   // 正斜杠路径分隔符
             "..\\..",    // 反斜杠 + 目录穿越
             "1 0",       // 空白
