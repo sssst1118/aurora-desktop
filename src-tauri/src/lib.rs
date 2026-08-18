@@ -231,6 +231,9 @@ pub fn run() {
             commands::uia_cmd::uia_get_control_text,
             commands::uia_cmd::uia_click_control,
             commands::uia_cmd::uia_type_into,
+            // ---- 截图功能(2026-08-18:热键遮罩 + BitBlt 截屏 + CF_DIB 剪贴板 + png 保存)----
+            commands::screenshot::screenshot_begin,
+            commands::screenshot::screenshot_capture,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

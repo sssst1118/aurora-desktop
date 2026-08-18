@@ -35,6 +35,8 @@ export interface AppConfig {
   ai_search_roots: string[];
   ai_max_tool_rounds: number;
   ai_hotkey: string;
+  // ---- 截图功能(2026-08-18,与 src-tauri/src/commands/config.rs 同步)----
+  screenshot_hotkey: string;
   // ---- Phase4(与 src-tauri/src/commands/config.rs 同步)----
   enable_dynamic_wallpaper: boolean;
   wallpaper_dynamic_dir: string | null;

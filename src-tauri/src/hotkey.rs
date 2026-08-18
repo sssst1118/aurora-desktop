@@ -14,7 +14,7 @@ pub const SEARCH_HOTKEY: &str = "ctrl+shift+space";
 pub const ALL_HOTKEY: &str = "ctrl+shift+h";
 
 /// 动态热键当前注册表:用途 → 已注册的键(热生效 diff 依据)。
-/// 搜索热键固定注册、不参与 diff;本表只管抽屉/剪贴板/AI 三个可配置热键。
+/// 搜索热键固定注册、不参与 diff;本表只管抽屉/剪贴板/AI/截图四个可配置热键。
 static REGISTERED: Mutex<Option<HashMap<&'static str, String>>> = Mutex::new(None);
 
 fn registered() -> &'static Mutex<Option<HashMap<&'static str, String>>> {
@@ -35,6 +35,18 @@ pub fn toggle_clipboard_window(app: &AppHandle) {
 /// Phase6:AI 热键 = 呼出主面板并定位到「AI 助手」视图(同上)
 pub fn toggle_ai_panel_window(app: &AppHandle) {
     crate::win_utils::show_panel_with_view(app, "ai");
+}
+
+/// 截图热键(2026-08-18):触发全屏截图遮罩。ARMED/SELECTING 状态去重由
+/// screenshot_begin 内部完成(任一 capture 窗口可见即忽略连按)。
+/// screenshot_begin 是 async 命令(窗口创建须避开主线程),这里 spawn 到运行时。
+pub fn trigger_screenshot(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::commands::screenshot::screenshot_begin(app).await {
+            eprintln!("[aurora] 截图触发失败: {e}");
+        }
+    });
 }
 
 /// 注册单个热键,按下时触发 on_press
@@ -61,10 +73,12 @@ where
 /// 注册失败(如被系统或其他程序占用)仅告警,不影响其他热键与应用运行。
 pub fn apply_hotkeys(app: &AppHandle, cfg: &AppConfig) {
     // 目标表:用途 → 开关开且键位非空时的键(键位 trim 后为空 = 未配置)
-    let targets: [(&'static str, Option<&str>); 3] = [
+    // 截图无独立开关:热键存在性天然门控(键位清空即注销)
+    let targets: [(&'static str, Option<&str>); 4] = [
         ("drawer", cfg.enable_file_drawer.then_some(cfg.drawer_hotkey.as_str())),
         ("clipboard", cfg.enable_clipboard_history.then_some(cfg.hotkey_clipboard.as_str())),
         ("ai", cfg.enable_ai.then_some(cfg.ai_hotkey.as_str())),
+        ("screenshot", Some(cfg.screenshot_hotkey.as_str())),
     ];
     let mut binding = registered().lock().unwrap_or_else(|p| p.into_inner());
     let g = binding.get_or_insert_with(HashMap::new);
@@ -107,11 +121,12 @@ fn unregister_shortcut(app: &AppHandle, key: &str) {
     }
 }
 
-/// 用途 → 按键处理函数(抽屉/剪贴板/AI 三入口,Phase6 起均呼出主面板对应视图)
+/// 用途 → 按键处理函数(抽屉/剪贴板/AI 三入口呼出主面板对应视图;截图独立触发遮罩)
 fn handler_for(kind: &str) -> fn(&AppHandle) {
     match kind {
         "drawer" => toggle_drawer_window,
         "clipboard" => toggle_clipboard_window,
+        "screenshot" => trigger_screenshot,
         _ => toggle_ai_panel_window,
     }
 }

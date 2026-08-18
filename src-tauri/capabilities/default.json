@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "default capability for all windows (Phase6 一岛一窗: island/search + wallpaper). Permission blocks: core window 几何/拖拽/置顶(前端 island 拖动记忆与面板跟随用 set-position/set-size/set-always-on-top/start-dragging;core:event 的 allow-listen/allow-emit 由 core:default 内含 core:event:default 提供);Phase2 2.3 clipboard plugin(allow-* per command, plugin has no default set; wallpaper asset protocol is config-scoped, no capability entry needed)",
-  "windows": ["island", "search", "wallpaper"],
+  "windows": ["island", "search", "wallpaper", "capture-*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

@@ -234,6 +234,7 @@ function openSearchPanel() {
 // ---- 面板 Esc 递进收岛:展开状态广播 + 收岛请求(与 island-geometry 同构的纯事件通道) ----
 
 let unlistenCollapse: UnlistenFn | undefined;
+let unlistenShot: UnlistenFn | undefined; // 截图完成提示(2026-08-18)
 
 /** 所有 expanded 翻转点(单击 toggle/双击呼出/450ms 自动收回/Dock 启动脉冲/拖入展开)
     经 watch 统一广播,主面板据此判断 Esc 是收岛还是关面板(岛窗口 focus:false 收不到
@@ -591,6 +592,23 @@ onMounted(async () => {
   } catch (e) {
     console.error("listen island-collapse-request failed", e);
   }
+  // 截图完成提示(2026-08-18):遮罩窗广播 screenshot-done(成功 {path,w,h,copy_ok} / 失败 {error})
+  try {
+    unlistenShot = await listen(
+      "screenshot-done",
+      (e: { payload: { error?: string; w?: number; h?: number; copy_ok?: boolean } }) => {
+        const d = e.payload;
+        if (d.error) {
+          showHint(`截图失败:${d.error.slice(0, 40)}`);
+          return;
+        }
+        const copied = d.copy_ok ? "已复制" : "复制失败(已保存)";
+        showHint(`已截图 ${d.w}×${d.h} · ${copied} · 已保存到图片`);
+      },
+    );
+  } catch (e) {
+    console.error("listen screenshot-done failed", e);
+  }
   // 初始展开状态广播(启动必收起态):面板晚于岛挂载时也能对齐,无需查询命令
   emit("island-expand-state", { expanded: false }).catch((e) =>
     console.error("emit island-expand-state initial failed", e),
@@ -612,6 +630,7 @@ onUnmounted(() => {
   unMoved?.();
   unlistenCfg?.();
   unlistenCollapse?.();
+  unlistenShot?.();
 });
 </script>
 

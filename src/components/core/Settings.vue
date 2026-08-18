@@ -239,11 +239,15 @@ async function saveText() {
 // 一次只录一个(recordingKey 记录当前录制项)
 const recordingKey = ref<string | null>(null);
 
-/** 录制项 → 配置字段映射 */
-const HOTKEY_FIELDS: Record<string, "drawer_hotkey" | "hotkey_clipboard" | "ai_hotkey"> = {
+/** 录制项 → 配置字段映射(2026-08-18 加截图热键,无模块开关,键位清空即注销) */
+const HOTKEY_FIELDS: Record<
+  string,
+  "drawer_hotkey" | "hotkey_clipboard" | "ai_hotkey" | "screenshot_hotkey"
+> = {
   drawer: "drawer_hotkey",
   clipboard: "hotkey_clipboard",
   ai: "ai_hotkey",
+  screenshot: "screenshot_hotkey",
 };
 
 /** 输入框显示文本:录制中显示提示,否则显示当前配置值 */
@@ -1063,6 +1067,31 @@ async function uiaType() {
         </p>
         <p v-if="store.cfg && !store.cfg.enable_clipboard_history" class="text-[11px] text-[var(--aurora-text-dim)] ml-[70px]">
           模块关闭时不生效
+        </p>
+      </div>
+
+      <!-- 截图热键(2026-08-18:全局热键触发遮罩截图;无独立开关,键位清空即注销) -->
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-[var(--aurora-text-dim)] w-16 shrink-0">截图热键</span>
+          <input
+            :value="hotkeyText('screenshot')"
+            readonly
+            placeholder="点击后按下组合键"
+            aria-label="截图热键"
+            class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
+            :class="recordingKey === 'screenshot' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
+            :title="recordingKey === 'screenshot' ? '按下 Esc 取消录制' : '点击进入录制模式'"
+            @click="startRecord('screenshot')"
+            @blur="stopRecord"
+          />
+          <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
+        </div>
+        <p
+          v-if="recordingKey === 'screenshot' && recordHint"
+          class="text-[11px] text-[var(--aurora-danger)] ml-[70px]"
+        >
+          {{ recordHint }}
         </p>
       </div>
 

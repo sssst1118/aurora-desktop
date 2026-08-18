@@ -43,7 +43,9 @@ pub struct AppConfig {
     pub ai_tools_enabled: bool,       // 工具调用总开关,默认 true
     pub ai_search_roots: Vec<String>, // 3.3 搜索目录集合,默认空 = 仅桌面(禁止全盘)
     pub ai_max_tool_rounds: u32,      // 工具循环上限,默认 3(防死循环)
-    pub ai_hotkey: String,            // 默认 "ctrl+alt+a"
+    pub ai_hotkey: String,            // 默认 "ctrl+alt+e"(2026-08-18 截图功能占用 ctrl+alt+a 后让位)
+    // ---- 截图功能(2026-08-18,设计 docs/截图功能-设计.md)----
+    pub screenshot_hotkey: String,    // 默认 "ctrl+alt+a";无独立开关,热键存在性天然门控
     // ---- Phase4 4.1 动态壁纸(设计文档 §1)----
     pub enable_dynamic_wallpaper: bool,    // 总开关,默认 true;关闭时不创建壁纸窗口、不启动电池检测
     pub wallpaper_dynamic_dir: Option<String>, // 动态壁纸素材目录,默认 None = 与 2.4 wallpaper_dir 相同(仍为空则 %USERPROFILE%\Pictures)
@@ -103,7 +105,8 @@ impl Default for AppConfig {
             ai_tools_enabled: true,
             ai_search_roots: Vec::new(),
             ai_max_tool_rounds: 3,
-            ai_hotkey: "ctrl+alt+a".to_string(),
+            ai_hotkey: "ctrl+alt+e".to_string(), // 2026-08-18 起 ctrl+alt+a 让位给截图热键(用户确认)
+            screenshot_hotkey: "ctrl+alt+a".to_string(),
             enable_dynamic_wallpaper: true,
             wallpaper_dynamic_dir: None,
             wallpaper_scale_mode: "cover".to_string(),
