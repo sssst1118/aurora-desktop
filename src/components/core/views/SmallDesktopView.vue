@@ -8,7 +8,7 @@
  * - 分类 tab 样式移植预览稿 .drawer-side/.drawer-tab(无 emoji 图标,文字+计数);
  *   网格与条目复用 FileItem.vue(图标懒加载 + 缓存不变)。
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { MAX_FILES, type DrawerGroup } from "../../FileDrawer/types";
@@ -85,6 +85,17 @@ function selectCategory(category: string) {
     collapsed.value = next;
   }
 }
+
+// 数据刷新(手动/事件驱动)后分组可能消失:选中的分类不再存在时选中项悬空,
+// 右侧空白无回退。监听分组变化,失效分类自动回退「全部」(波次5 G2 审计)
+watch(
+  () => groups.value.map((g) => g.category),
+  (cats) => {
+    if (selected.value !== "全部" && !cats.includes(selected.value)) {
+      selected.value = "全部";
+    }
+  },
+);
 
 let unlisten: UnlistenFn | undefined;
 

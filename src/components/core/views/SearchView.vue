@@ -1,3 +1,14 @@
+<script lang="ts">
+// 结果项真实图标 data URL 缓存(path → url;模块级共享,跨挂载保留)。
+// SearchView 每次进入搜索视图都是全新挂载,实例级缓存会在切换视图后全部失效、
+// 下次进入重复 IPC 拉取;提到模块级后仅首次拉取,后续挂载直接命中缓存
+// (FileItem.vue 的 iconCache 同思路;后端 dock_get_icon 另有内存+磁盘双缓存;
+// 波次5 G2 审计:原注释声称模块级,实际是组件作用域 reactive,已修正)
+import { reactive } from "vue";
+
+export const icons = reactive(new Map<string, string>());
+</script>
+
 <script setup lang="ts">
 /**
  * Phase6 搜索视图(SearchBar.vue 结果区逻辑迁移,设计文档 §4.1 + 预览稿 renderSearch)。
@@ -7,7 +18,7 @@
  * - 应用组在前、文件组在后(应用优先,其次文件,后端序);「最近打开」固定在下,
  *   与结果重复的项隐藏(预览稿行为);空输入 = 最近打开铺满,无占位文案。
  * - 最近打开含文件条目(设计文档 §6:open_item 打开文件同样记入);
- * - 图标缓存为模块级单例:search 视图不缓存(每次挂载新实例),缓存跨挂载保留;
+ * - 图标缓存为模块级单例(见上方普通 script 块):跨挂载保留,避免重复 IPC;
  * - 键盘 ↑↓/Enter 窗口级监听(仅挂载期间;Esc/打字即搜由壳处理)。
  * 样式移植预览稿 .results/.group-label/.result-item/.app-icon/.item-name/.item-sub/.empty-state。
  */
@@ -17,7 +28,6 @@ import {
   onActivated,
   onMounted,
   onUnmounted,
-  reactive,
   ref,
   watch,
 } from "vue";
@@ -69,9 +79,7 @@ const selected = ref(0);
 const searching = ref(false);
 const searchError = ref("");
 const { recents, loadRecents, saveRecent } = useRecentApps();
-// 结果项真实图标 data URL 缓存(path → url;模块级 reactive Map,跨挂载共享;
-// 后端 dock_get_icon 自带内存+磁盘双缓存)
-const icons = reactive(new Map<string, string>());
+// icons 为模块级缓存(上方普通 script 块声明,reactive 保持"晚到图标触发重渲染")
 // 结果项 DOM 引用(键盘选中后 scrollIntoView 用)
 const itemEls: (HTMLElement | null)[] = [];
 

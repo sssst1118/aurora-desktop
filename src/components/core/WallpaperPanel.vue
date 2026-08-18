@@ -40,13 +40,14 @@ function isCurrent(path: string): boolean {
   return cur !== null && path.toLowerCase() === cur.toLowerCase();
 }
 
-/** 逐张生成缩略图(后台 invoke;组件卸载后丢弃结果) */
-async function loadThumb(path: string) {
+/** 逐张生成缩略图(后台 invoke;组件卸载或刷新过期后丢弃结果) */
+async function loadThumb(path: string, seq: number) {
   try {
     const uri = await invoke<string>("wallpaper_thumbnail", { filePath: path });
-    if (!disposed) thumbs.value[path] = uri;
+    // 已有更新的刷新发起时丢弃:旧目录的缩略图晚到会串进新结果
+    if (!disposed && seq === refreshSeq) thumbs.value[path] = uri;
   } catch {
-    if (!disposed) thumbErrors.value[path] = true;
+    if (!disposed && seq === refreshSeq) thumbErrors.value[path] = true;
   }
 }
 
@@ -54,36 +55,45 @@ async function loadThumb(path: string) {
 const THUMB_CONCURRENCY = 4;
 
 /** 固定并发拉取缩略图:N 个 worker 各自取下一个路径直到取完(失败不阻塞后续) */
-async function loadThumbs(paths: string[]) {
+async function loadThumbs(paths: string[], seq: number) {
   const total = paths.length;
   if (total === 0) return;
   let next = 0;
   const worker = async () => {
     while (next < total) {
-      await loadThumb(paths[next++]);
+      await loadThumb(paths[next++], seq);
     }
   };
   const n = Math.min(THUMB_CONCURRENCY, total);
   await Promise.all(Array.from({ length: n }, () => worker()));
 }
 
+// 刷新单调序号:连续点击「刷新」时,旧响应晚到会覆盖新结果(列表/当前壁纸/缩略图),
+// 与 SearchView doSearch 同款 seq 防过期(波次5 G2 审计)
+let refreshSeq = 0;
+
 async function refresh() {
+  const seq = ++refreshSeq;
   loading.value = true;
   error.value = "";
   try {
-    entries.value = await invoke<WallpaperEntry[]>("wallpaper_list_local");
-    currentPath.value = await invoke<string | null>("wallpaper_get_current");
+    const list = await invoke<WallpaperEntry[]>("wallpaper_list_local");
+    const cur = await invoke<string | null>("wallpaper_get_current");
+    if (seq !== refreshSeq) return; // 已有更新的刷新,丢弃过期响应
+    entries.value = list;
+    currentPath.value = cur;
     thumbs.value = {};
     thumbErrors.value = {};
     // 缩略图后台 4 路并发拉取,不阻塞列表展示(loading 只管列表本身)
-    void loadThumbs(entries.value.map((e) => e.path));
+    void loadThumbs(entries.value.map((e) => e.path), seq);
     if (entries.value.length === 0) {
       error.value = `目录中没有可用图片:${store.cfg?.wallpaper_dir ?? "默认目录"}`;
     }
   } catch (e) {
+    if (seq !== refreshSeq) return;
     error.value = `读取壁纸列表失败:${e}`;
   } finally {
-    loading.value = false;
+    if (seq === refreshSeq) loading.value = false;
   }
 }
 

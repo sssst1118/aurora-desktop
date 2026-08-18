@@ -55,7 +55,7 @@ export interface AppConfig {
   wallpaper_multi_monitor: boolean;
   wallpaper_span_mode: boolean;
   // ---- 搜索框外观与几何记忆(2026-08-12;search_x/y/w/h 由后端记忆,前端不直接改)----
-  search_style: string; // "glass" 毛玻璃(默认) | "solid" 不透明
+  search_style: string; // "solid" 不透明(默认) | "glass" 毛玻璃(与后端 default 一致,波次5 G2 审计修正)
   search_x: number | null;
   search_y: number | null;
   search_width: number | null;
@@ -98,6 +98,18 @@ export const useConfigStore = defineStore("config", {
       // 不会覆盖保存期间的本地修改(若等保存成功才标记,保存 IPC 在飞时旧
       // load 返回仍会冲掉用户的新值)
       lastSaveId = loadId;
+      // 岛位置由岛组件经 island_save_geometry 直接落盘,本 store 内存值可能滞后;
+      // 提交前拉一次最新位置填回,避免 config_save 全量写盘用旧值覆盖磁盘新位置
+      // (热同步 ensureIslandSync 只刷前端缓存、不消除根因;波次5 G2 审计)
+      try {
+        const fresh = await invoke<AppConfig>("config_load");
+        if (this.cfg) {
+          this.cfg.island_x = fresh.island_x;
+          this.cfg.island_y = fresh.island_y;
+        }
+      } catch {
+        /* 拉取失败静默:位置字段沿用内存值,不阻断保存 */
+      }
       const ok = await invoke<boolean>("config_save", { cfg: this.cfg });
       // 保存失败统一抛错,由调用方(Settings 等)捕获后回滚本地值并提示
       if (!ok) {

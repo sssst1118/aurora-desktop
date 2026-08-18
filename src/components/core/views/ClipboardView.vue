@@ -9,7 +9,15 @@
  * - 键盘 ↑↓/Enter 绑定在搜索框上(焦点在框内时生效);Esc 由壳统一处理。
  * 样式移植预览稿 .clip-list/.clip-item/.type-ico/.clip-del。
  */
-import { computed, nextTick, onActivated, onMounted, onUnmounted, ref } from "vue";
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onMounted,
+  onUnmounted,
+  ref,
+  watch,
+} from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useClipboardStore, type ClipboardItem, type HistoryEntry } from "../../../stores/clipboard";
@@ -25,6 +33,15 @@ const inputEl = ref<HTMLInputElement | null>(null);
 const { start, stop } = useClipboardHistory();
 
 const list = computed(() => store.filtered);
+
+// 过滤关键字变化 → 过滤列表重排:原选中下标指向的条目已变(可能错位或越界),
+// 重置到首项,避免高亮错位、Enter 直接回贴错内容(波次5 G2 审计)
+watch(
+  () => store.keyword,
+  () => {
+    store.selected = 0;
+  },
+);
 
 function pad(n: number) {
   return n.toString().padStart(2, "0");
@@ -130,15 +147,29 @@ function onActivatedView() {
   void nextTick().then(() => inputEl.value?.focus());
 }
 
+// useClipboardHistory.start() 是异步的(listen 注册要 IPC 往返):若注册完成前组件就卸载,
+// onUnmounted 直接调 stop() 时内部 unlisten 还是 null,停止无效、监听泄漏。
+// 持有 start 的 promise,卸载时先等它 settle 再补停(波次5 G2 审计)
+let startDone: Promise<void> | null = null;
+
 onMounted(() => {
-  void start(); // 事件订阅一次即可(组件销毁时 stop)
+  startDone = start(); // 事件订阅一次即可(组件销毁时 stop)
 });
 
 // 首次挂载后 activated 必触发一次,数据拉取与聚焦统一走这里
 onActivated(onActivatedView);
 
 onUnmounted(() => {
-  stop();
+  // 已发起 start:等注册完成再停(成功→有监听可停;失败→本无监听,静默)
+  if (startDone) {
+    void startDone
+      .then(stop)
+      .catch(() => {
+        /* start 失败(事件注册异常):无监听需要停止 */
+      });
+  } else {
+    stop();
+  }
   if (confirmTimer) window.clearTimeout(confirmTimer);
   if (clearedTimer) window.clearTimeout(clearedTimer);
   if (deleteErrorTimer) window.clearTimeout(deleteErrorTimer);
@@ -308,6 +339,12 @@ onUnmounted(() => {
 }
 
 .clip-item:hover .clip-del {
+  opacity: 1;
+}
+
+/* Tab 聚焦时 ✕ 必须可见:否则焦点环画在透明按钮上、图标看不到,键盘用户无法定位
+   (悬停规则对键盘不生效;波次5 G2 审计) */
+.clip-del:focus-visible {
   opacity: 1;
 }
 
