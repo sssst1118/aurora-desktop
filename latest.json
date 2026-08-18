@@ -1,6 +1,6 @@
 {
-  "version": "0.2.5",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.5/Aurora_0.2.5_x64-setup.exe",
-  "sha256": "c0e7374408ffa23a574e60395f734904c7ef47ef4a08ca57a379952701bc9d9c",
-  "notes": "v0.2.5:Esc 分级(剪贴板搜索框有值 Esc 清空/AI 正文输入 Esc 放行);键盘缩放手柄方向键连按不丢步进;溢出浮层 Esc 键盘关闭;剪贴板过滤后选中重置+删除按钮 Tab 可见;设置保存不再覆盖岛拖动位置(数据丢失修复);更新状态机防竞态+AI 订阅失败兜底;SSE 工具分片字节上限+条目上限;更新源 256KB 上限+安装包流式哈希校验;剪贴板上限加载钳制;热键提示就近渲染;resize-handle 无障碍补全;文档 16 条同步"
+  "version": "0.2.6",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.6/Aurora_0.2.6_x64-setup.exe",
+  "sha256": "c283bd473409a6357426aa7ec3d7bd4d0f6b51eb98f8c6453ad90bd5b7f86696",
+  "notes": "v0.2.6 视觉质感优化 8 项:极光缘升级 28px 流动光晕(4 皮肤各自配色);灵动岛亮色玻璃感(透出桌面模糊);小桌面分类栏单行+空分类排尾淡化;dawn 亮色层次重塑(面板/卡片/投影三级);搜索/AI 空态引导 chips;设置热键条右对齐紧凑胶囊;岛 Dock 图标统一防裁剪;剪贴板行高 56px 时间戳右对齐。356/356 测试全绿,前后截图对比 8/8 通过"
 }

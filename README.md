@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue)](./LICENSE)
 [![Platform: Windows 10/11](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6)](https://github.com/sssst1118/aurora-desktop)
-[![Version: 0.2.5](https://img.shields.io/badge/Version-0.2.5-8b5cf6)](https://github.com/sssst1118/aurora-desktop/releases)
+[![Version: 0.2.6](https://img.shields.io/badge/Version-0.2.6-8b5cf6)](https://github.com/sssst1118/aurora-desktop/releases)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8D8)](https://tauri.app)
 
 [English](./README.md) | [中文](./README.zh-CN.md)
@@ -55,7 +55,7 @@ Settings, and the four skin packs:
 
 ## 🚀 Quick Start
 
-1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.2.5_x64-setup.exe` recommended, or `Aurora_0.2.5_x64_en-US.msi`)
+1. Download the installer from [Releases](https://github.com/sssst1118/aurora-desktop/releases) (`Aurora_0.2.6_x64-setup.exe` recommended, or `Aurora_0.2.6_x64_en-US.msi`)
 2. Install and launch Aurora
 3. Press `Ctrl+Shift+Space` (or double-click the Island) to summon the main panel and start
 
