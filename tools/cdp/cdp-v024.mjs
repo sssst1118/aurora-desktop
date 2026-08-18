@@ -78,7 +78,11 @@ const sPanel = () =>
     inputVisible: (() => { const el = document.querySelector(".head-input"); return !!el && getComputedStyle(el).display !== "none"; })(),
     activeViewBtn: document.querySelector(".view-switch .view-btn.on")?.getAttribute("aria-label") ?? "?"
   })`).then(JSON.parse);
-const state = async () => ({ ...(await sIsland()), ...(await sPanel()) });
+// 窗口隐藏探针:win.hide() 后 DOM 元素仍在,.main-panel-root 存在性≠窗口可见;
+// document.hidden/visibilityState 在 WebView2 里不随窗口隐藏更新(实测恒 visible),
+// 唯一可靠探针=Tauri IPC is_visible(隐藏时返回 false)
+const sWindow = () => search.ev(`window.__TAURI_INTERNALS__.invoke("plugin:window|is_visible", { label: "search" })`);
+const state = async () => ({ ...(await sIsland()), ...(await sPanel()), winVis: await sWindow() });
 
 let pass = 0, fail = 0;
 function chk(name, cond, detail = "") {
@@ -96,6 +100,9 @@ async function openPanelByDbl() {
 }
 await openPanelByDbl();
 if (!search) { console.log("NO_SEARCH after dbl"); process.exit(1); }
+// 收敛:清空输入框值 + 焦点移到 body(防真实键盘输入污染判定)
+await search.ev(`(() => { const i = document.querySelector(".head-input"); if (i) i.value = ""; document.activeElement?.blur?.(); return true; })()`);
+await sleep(200);
 let s = await state();
 console.log("初始(双击后):", JSON.stringify(s));
 
@@ -116,7 +123,10 @@ chk("T1d Esc 回小桌面视图", s.activeViewBtn === "切换到小桌面视图"
 chk("T1e 面板保持打开", s.panelVisible);
 
 // ===== T3 三级:岛收起态 Esc → 关面板 =====
-// 确保岛收起(单击收起)
+// 前置状态收敛:先单击展开岛,再单击收起(450ms 自动收回已让岛处于收起态,
+// 直接"单击收起"会把收起态 toggle 成展开——T3a 第一版在此误判)
+await island.ev(`document.querySelector(".island").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 60, clientY: 23 }))`);
+await sleep(500);
 await island.ev(`document.querySelector(".island").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 60, clientY: 23 }))`);
 await sleep(500);
 s = await state();
@@ -124,7 +134,7 @@ chk("T3a 岛已收起", !s.islandExpanded, JSON.stringify(s));
 await pressKey(search.cdp, "Escape", "Escape", 27);
 await sleep(500);
 s = await state();
-chk("T3b Esc 三级关闭面板", !s.panelVisible, JSON.stringify(s));
+chk("T3b Esc 三级关闭面板", s.winVis === false, JSON.stringify(s));
 
 // ===== T2 中1:空输入框 Esc 递进收岛(设置页输入框聚焦空值) =====
 // 重新呼出 + 展开岛 + 切设置视图 + 焦点放一个空输入框
@@ -153,18 +163,24 @@ s = await state();
 chk("T2b 空输入框 Esc 收岛", !s.islandExpanded, JSON.stringify(s));
 chk("T2c 面板保持打开", s.panelVisible);
 
-// ===== T4 低6:按钮聚焦按 Space 不切视图 =====
-// 当前在设置视图;Tab 到视图按钮或直接 focus 一个 view-btn,按 Space → 视图不变
+// ===== T4 低6:按钮聚焦按 Space = 原生激活,打字即搜不得劫持 =====
+// 修复语义(MainPanel onWindowKeydown):按钮聚焦按 Space → 打字即搜放行,
+// 按钮获得原生激活(视图切换)。断言方向:Space 后视图应切到剪贴板(按钮生效)
+// 且输入框无字符(未被劫持成输入)——"视图不变"恰是 bug 行为。
 await search.ev(`document.querySelector('.view-switch .view-btn[aria-label="切换到剪贴板视图"]').focus()`);
 await sleep(150);
 await pressKey(search.cdp, " ", "Space", 32);
 await sleep(300);
 s = await state();
-chk("T4 Space 不劫持(仍设置视图)", s.activeViewBtn === "切换到设置视图", JSON.stringify(s));
+chk("T4 Space 激活按钮(切到剪贴板视图)", s.activeViewBtn === "切换到剪贴板视图", JSON.stringify(s));
+chk("T4b 输入框无劫持字符", s.inputVal === "", `val=${s.inputVal}`);
 
 // ===== T5 低10:热键录制连续 3 次不支持键提示 =====
-// 点抽屉热键录制按钮(title="点击进入录制模式")
-await search.ev(`document.querySelector('.main-panel-root button[title="点击进入录制模式"]').click()`);
+// 前置:切回设置视图(T4 后停在剪贴板视图,录制入口在设置页;
+// 注意:录制入口是 readonly input 不是 button,title="点击进入录制模式")
+await search.ev(`document.querySelector('.view-switch .view-btn[aria-label="切换到设置视图"]').click()`);
+await sleep(300);
+await search.ev(`document.querySelector('.main-panel-root input[aria-label="抽屉热键"]').click()`);
 await sleep(200);
 // 连续 4 次纯修饰键 Shift(不支持 → 计数,≥3 提示)
 for (let i = 0; i < 4; i++) {
