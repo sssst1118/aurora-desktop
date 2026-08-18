@@ -66,15 +66,19 @@ async function pressKey(cdp, key, code, vk, mods = 0) {
   await sleep(120);
 }
 
-// 岛状态/面板视图辅助
-const state = () =>
+// 岛状态/面板视图辅助(岛与面板是两个 WebView 窗口,须分窗口查询)
+const sIsland = () =>
   island.ev(`JSON.stringify({
-    islandExpanded: document.querySelector(".island")?.classList.contains("expanded") ?? false,
+    islandExpanded: document.querySelector(".island")?.classList.contains("expanded") ?? false
+  })`).then(JSON.parse);
+const sPanel = () =>
+  search.ev(`JSON.stringify({
     panelVisible: !!document.querySelector(".main-panel-root"),
     inputVal: document.querySelector(".head-input")?.value ?? "",
-    inputVisible: getComputedStyle(document.querySelector(".head-input")).display !== "none",
+    inputVisible: (() => { const el = document.querySelector(".head-input"); return !!el && getComputedStyle(el).display !== "none"; })(),
     activeViewBtn: document.querySelector(".view-switch .view-btn.on")?.getAttribute("aria-label") ?? "?"
   })`).then(JSON.parse);
+const state = async () => ({ ...(await sIsland()), ...(await sPanel()) });
 
 let pass = 0, fail = 0;
 function chk(name, cond, detail = "") {
