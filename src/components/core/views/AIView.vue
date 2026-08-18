@@ -21,6 +21,14 @@ const emit = defineEmits<{ (e: "open-settings"): void }>();
 
 const { messages, streaming, error, send, stop, clear, confirmReqs, confirmTool } = useAiChat();
 
+/** 空态引导 chips(点击=填入输入框,不自动发送,由用户确认后回车/点发送) */
+const SUGGESTIONS = ["打开记事本", "查系统状态", "把壁纸换成深色"];
+
+function fillInput(text: string) {
+  input.value = text;
+  void nextTick(() => inputEl.value?.focus());
+}
+
 const input = ref("");
 const inputEl = ref<HTMLTextAreaElement | null>(null);
 const listEl = ref<HTMLDivElement | null>(null);
@@ -198,9 +206,20 @@ function splitBlocks(text: string): Block[] {
     <div ref="listEl" class="ai-body flex-1 min-h-0">
       <div
         v-if="messages.length === 0"
-        class="h-full flex items-center justify-center text-xs text-[var(--aurora-text-dim)] leading-relaxed text-center px-6"
+        class="h-full flex flex-col items-center justify-center text-xs text-[var(--aurora-text-dim)] leading-relaxed text-center px-6"
       >
-        输入消息开始与 AI 对话<br />可调用工具:打开应用 / 搜文件 / 设壁纸 / 查系统状态…
+        <div>输入消息开始与 AI 对话<br />可调用工具:打开应用 / 搜文件 / 设壁纸 / 查系统状态…</div>
+        <!-- 空态引导 chips:点击只填入输入框,不自动发送 -->
+        <div class="sug-chips">
+          <button
+            v-for="s in SUGGESTIONS"
+            :key="s"
+            class="sug-chip"
+            @click="fillInput(s)"
+          >
+            {{ s }}
+          </button>
+        </div>
       </div>
 
       <template v-for="(m, i) in messages" :key="i">
@@ -448,6 +467,29 @@ function splitBlocks(text: string): Block[] {
   50% {
     opacity: 0.55;
   }
+}
+
+/* 空态引导 chips:小圆角胶囊、field 底、hover 提亮、accent 文字+描边(随皮肤令牌,与 SearchView 同款) */
+.sug-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.sug-chip {
+  border: 1px solid color-mix(in srgb, var(--aurora-accent) 35%, transparent);
+  background: var(--aurora-field);
+  color: var(--aurora-accent);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+.sug-chip:hover {
+  background: var(--aurora-field-hover);
 }
 
 @media (prefers-reduced-motion: reduce) {

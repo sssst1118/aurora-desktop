@@ -688,7 +688,9 @@ onUnmounted(() => {
   border-radius: 999px;
   /* 2026-08-18 用户反馈:透明融合诉求下 1px 描边形成"框",删掉;
      层次仅靠内高光+顶部极光带(药丸背景色/模糊本身已提供与桌面区分度) */
-  background: linear-gradient(180deg, var(--glass-hi), transparent 45%), var(--aurora-panel);
+  /* 背景走 --aurora-island:浅色皮肤半透明 0.7 让 blur 透出桌面(亮色玻璃感),
+     暗色皮肤默认跟随面板色,行为不变 */
+  background: linear-gradient(180deg, var(--glass-hi), transparent 45%), var(--aurora-island);
   backdrop-filter: blur(28px) saturate(165%);
   -webkit-backdrop-filter: blur(28px) saturate(165%);
   /* 2026-08-14 真机反馈:外阴影在透明矩形窗口内被裁剪,圆角药丸外露出
@@ -712,19 +714,29 @@ onUnmounted(() => {
 .island:active {
   transform: scale(0.988);
 }
-/* 极光缘短带(签名元素:岛顶 14%~86% 短带,设计稿 .island::before) */
+/* 极光缘(签名元素):岛顶向下晕染 ~28px 的流动柔光带(与 .aurora-panel 同款,
+   16s 循环;不透明度随皮肤 --aur-glow)。全宽铺开后由药丸 overflow:hidden +
+   clip-path 裁进圆角,四角干净 */
 .island::before {
   content: "";
   position: absolute;
   top: 0;
-  left: 14%;
-  right: 14%;
-  height: 1.5px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--aur-1), var(--aur-2), var(--aur-3));
+  left: 0;
+  right: 0;
+  height: 28px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--aur-1) 18%,
+    var(--aur-2) 50%,
+    var(--aur-3) 82%,
+    transparent 100%
+  );
   background-size: 200% 100%;
-  animation: aurora-flow 9s linear infinite;
-  opacity: 0.9;
+  animation: aurora-flow 16s linear infinite;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, transparent 100%);
+  opacity: var(--aur-glow, 0.5);
   pointer-events: none;
 }
 /* 拖入有效应用文件悬停高亮(设计稿 .island.dragover;外描边在透明窗口会被裁,

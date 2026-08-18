@@ -32,6 +32,12 @@
   --aur-1: #34d399;
   --aur-2: #38bdf8;
   --aur-3: #a78bfa;
+  /* 顶部流动光晕不透明度(暗色皮肤 0.5,浅色皮肤覆写 0.35) */
+  --aur-glow: 0.5;
+  /* 岛背景:默认跟随面板色;浅色皮肤覆写为半透明让 blur 透出桌面 */
+  --aurora-island: var(--aurora-panel);
+  /* 卡片柔和投影(elevation):默认关闭,仅浅色皮肤启用 */
+  --aurora-card-shadow: none;
 }
 
 /* ---- 皮肤:午夜 ---- */
@@ -61,14 +67,16 @@
 /* ---- 皮肤:拂晓(浅色) ---- */
 :root[data-skin="dawn"] {
   color-scheme: light;
-  --aurora-panel: #f4f6fb;
+  /* 页面/面板背景沉一档,与白色卡片面拉开层次(亮色 elevation 方案) */
+  --aurora-panel: #e8ecf4;
   --aurora-panel-solid: #f8fafc;
   --aurora-text: #16213a;
   --aurora-text-dim: rgba(22, 33, 58, 0.5);
   --aurora-border: rgba(15, 23, 42, 0.1);
   --aurora-accent: #4f7df9;
-  --aurora-field: rgba(15, 23, 42, 0.05);
-  --aurora-field-hover: rgba(15, 23, 42, 0.07);
+  /* 卡片/字段面提亮为白,浮于沉一档的页面底之上 */
+  --aurora-field: rgba(255, 255, 255, 0.72);
+  --aurora-field-hover: rgba(255, 255, 255, 0.95);
   /* 语义色:浅色用 600/700 系深色保证白底可读 */
   --aurora-danger: #dc2626;
   --aurora-danger-bg: rgba(220, 38, 38, 0.08);
@@ -81,6 +89,14 @@
   --aur-1: #34d399;
   --aur-2: #38bdf8;
   --aur-3: #8b7cf6;
+  /* 亮色皮肤光晕带减淡(0.35),避免浅色底上过曝 */
+  --aur-glow: 0.35;
+  /* 岛背景半透明 0.7:backdrop blur 透出桌面,亮色玻璃感 */
+  --aurora-island: rgba(232, 236, 244, 0.7);
+  /* 白卡片浮于沉底之上的柔和 elevation */
+  --aurora-card-shadow:
+    0 1px 2px rgba(22, 33, 58, 0.05),
+    0 3px 10px rgba(22, 33, 58, 0.07);
 }
 
 /* ---- 皮肤:翠野 ---- */
@@ -133,14 +149,16 @@
   overflow: hidden;
 }
 
-/* 极光缘:顶部 1.5px 流动渐变光带(9s 循环) */
+/* 极光缘:顶部向下晕染 ~28px 的流动柔光带(16s 循环;不透明度随皮肤
+   --aur-glow:暗色 0.5 / 浅色 0.35)。横向三色渐变 + 纵向 mask 衰减成柔光,
+   非实心色块;reduced-motion 由全局兜底归零动画 */
 .aurora-panel::before {
   content: "";
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  height: 1.5px;
+  height: 28px;
   background: linear-gradient(
     90deg,
     transparent 0%,
@@ -150,8 +168,10 @@
     transparent 100%
   );
   background-size: 200% 100%;
-  animation: aurora-flow 9s linear infinite;
-  opacity: 0.85;
+  animation: aurora-flow 16s linear infinite;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, transparent 100%);
+  opacity: var(--aur-glow, 0.5);
   pointer-events: none;
 }
 

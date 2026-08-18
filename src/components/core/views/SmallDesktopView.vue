@@ -28,11 +28,16 @@ const total = computed(() => groups.value.reduce((sum, g) => sum + g.files.lengt
 /** 是否被后端截断(总数到上限时提示条说明) */
 const truncated = computed(() => total.value >= MAX_FILES);
 
-/** 左侧分类 tab:全部 + 各组(带计数) */
-const tabs = computed(() => [
-  { category: "全部", count: total.value },
-  ...groups.value.map((g) => ({ category: g.category, count: g.files.length })),
-]);
+/** 左侧分类 tab:全部 + 各组(带计数);空分类(0 项)排到列表末尾淡化,
+ *  "全部"与有数分类保持原顺序(视觉降噪,空分类仍可点击展开) */
+const tabs = computed(() => {
+  const gs = groups.value.map((g) => ({ category: g.category, count: g.files.length }));
+  return [
+    { category: "全部", count: total.value },
+    ...gs.filter((g) => g.count > 0),
+    ...gs.filter((g) => g.count === 0),
+  ];
+});
 
 /** 右侧内容:选中"全部"时展示全部分组(可收折),否则只展示选中分组 */
 const visibleGroups = computed(() =>
@@ -139,7 +144,7 @@ onUnmounted(() => {
           v-for="t in tabs"
           :key="t.category"
           class="drawer-tab"
-          :class="{ on: selected === t.category }"
+          :class="{ on: selected === t.category, empty: t.count === 0 && t.category !== '全部' }"
           :title="`${t.category}(${t.count} 项)`"
           @click="selectCategory(t.category)"
         >
@@ -214,7 +219,8 @@ onUnmounted(() => {
 <style scoped>
 /* 分类侧栏与 tab 样式移植自设计稿 aurora-v02-preview.html(.drawer-side/.drawer-tab) */
 .drawer-side {
-  width: 96px;
+  /* 96px 时"文件夹"等三字分类竖排断行,加宽到 112px 保单行 */
+  width: 112px;
   flex: none;
   padding: 8px 6px;
   display: flex;
@@ -244,6 +250,16 @@ onUnmounted(() => {
 .drawer-tab:hover {
   background: var(--aurora-field);
   color: var(--aurora-text);
+}
+
+/* 分类名单行显示(三字分类不竖排断行) */
+.drawer-tab > span:first-child {
+  white-space: nowrap;
+}
+
+/* 空分类(0 项,排末尾)淡化 40%,仍可点击展开 */
+.drawer-tab.empty {
+  opacity: 0.4;
 }
 
 /* 选中态:field 底 + 左侧极光渐变竖条(替代原 inset 描边,与 SearchView/剪贴板同款) */

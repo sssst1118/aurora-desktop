@@ -38,7 +38,14 @@ import AuroraIcon from "../../icons/AuroraIcon.vue";
 defineOptions({ name: "SearchView" });
 
 const props = defineProps<{ query: string }>();
-const emit = defineEmits<{ (e: "open"): void }>();
+const emit = defineEmits<{
+  (e: "open"): void;
+  /** 空态引导 chip 点击:壳把词填入搜索输入框并触发打字即搜链路 */
+  (e: "fill", text: string): void;
+}>();
+
+/** 空态引导 chips(点击=填入搜索框并触发搜索,复用输入→搜索链路) */
+const SUGGESTIONS = ["打开微信", "搜 pdf", "计算器"];
 
 /** 后端 search_apps 返回的应用条目(name/path;icon 字段未落地,走 dock_get_icon 取真实图标) */
 interface AppEntry {
@@ -364,6 +371,17 @@ onUnmounted(() => {
       输入以搜索
       <br />
       <span class="sub">打开过的应用与文件会出现在这里</span>
+      <!-- 空态引导 chips:点击=词填入搜索框并触发搜索(壳持有输入,经 fill 事件上行) -->
+      <div class="sug-chips">
+        <button
+          v-for="s in SUGGESTIONS"
+          :key="s"
+          class="sug-chip"
+          @click="emit('fill', s)"
+        >
+          {{ s }}
+        </button>
+      </div>
     </div>
     <!-- 结果列表:应用/文件在上,最近打开固定在下 -->
     <div v-else class="results flex-1 min-h-0" role="listbox">
@@ -486,6 +504,8 @@ onUnmounted(() => {
   color: var(--aurora-text-dim);
   border-radius: 7px;
   flex: none;
+  /* 亮色皮肤卡片 elevation(暗色皮肤令牌为 none,无视觉变化) */
+  box-shadow: var(--aurora-card-shadow);
 }
 
 /* 应用无图标回退:首字母瓦片(强调色系,与 Dock 占位同款观感) */
@@ -497,6 +517,30 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 600;
   flex: none;
+  box-shadow: var(--aurora-card-shadow);
+}
+
+/* 空态引导 chips:小圆角胶囊、field 底、hover 提亮、accent 文字+描边(随皮肤令牌) */
+.sug-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.sug-chip {
+  border: 1px solid color-mix(in srgb, var(--aurora-accent) 35%, transparent);
+  background: var(--aurora-field);
+  color: var(--aurora-accent);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+.sug-chip:hover {
+  background: var(--aurora-field-hover);
 }
 
 .item-name {

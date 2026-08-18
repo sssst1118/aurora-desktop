@@ -89,6 +89,13 @@ function onSearchOpen() {
   void win.hide();
 }
 
+/** 空态引导 chip(SearchView emit):词填入搜索输入框,query 变化经 SearchView
+    的 watch 触发打字即搜链路;聚焦输入框便于继续编辑 */
+function onFillQuery(text: string) {
+  query.value = text;
+  void nextTick(() => inputEl.value?.focus());
+}
+
 function showView(id: ViewId, queryText?: string) {
   activeView.value = id;
   if (id === "search") {
@@ -590,6 +597,7 @@ onUnmounted(() => {
           v-else-if="activeView === 'search'"
           :query="query"
           @open="onSearchOpen"
+          @fill="onFillQuery"
         />
         <ClipboardView v-else-if="activeView === 'clipboard'" />
         <AIView v-else-if="activeView === 'ai'" @open-settings="showView('settings')" />

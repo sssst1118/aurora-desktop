@@ -472,28 +472,41 @@ defineExpose({ addPaths, addFailReason, onCollapse });
 
 .dock-ico {
   position: relative;
-  width: 24px;
-  height: 24px;
+  /* 占位瓦片与真实图标统一 34px 满瓦片(圆角 22% ≈ 7.5px),尺寸/圆角同款 */
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   pointer-events: none;
 }
 .dock-ico-img {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 34px;
+  height: 34px;
+  border-radius: 22%;
   display: block;
+  /* contain + 2px 内边距:RSView 类满幅图标不再贴边被裁 */
+  object-fit: contain;
+  padding: 2px;
+  box-sizing: border-box;
 }
 .dock-ico-fallback {
-  width: 24px;
-  height: 24px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
-  border-radius: 6px;
+  border-radius: 22%;
   background: var(--aurora-field);
-  font-size: 11px;
+  box-shadow: var(--aurora-card-shadow);
+  font-size: 12px;
   font-weight: 600;
   color: var(--aurora-text);
+}
+/* 溢出浮层行高 40px:行内图标回退 24px,不撑破行 */
+.dock-overflow-row .dock-ico,
+.dock-overflow-row .dock-ico-img,
+.dock-overflow-row .dock-ico-fallback {
+  width: 24px;
+  height: 24px;
 }
 
 /* 空态(button:加载失败时可点击重试;err 态用危险色提示真实错误) */

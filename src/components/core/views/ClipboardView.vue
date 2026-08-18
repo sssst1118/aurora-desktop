@@ -241,8 +241,9 @@ onUnmounted(() => {
           <span class="summary block">
             {{ entry.item.tp === "image" ? entry.item.payload : summary(entry.item) }}
           </span>
-          <span class="meta num">{{ fmtTime(entry.item.ts) }}</span>
         </span>
+        <!-- 时间戳行内右对齐(次要色),不再占内容下方一行(密度优化) -->
+        <span class="meta num">{{ fmtTime(entry.item.ts) }}</span>
         <!-- 悬停 ✕ 单条删除(对标 Win+V;stop 阻止冒泡触发回贴) -->
         <button
           class="clip-del"
@@ -268,7 +269,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 9px 12px;
+  /* 密度优化:72px → 56px 固定行高,时间戳移入行内右侧 */
+  height: 56px;
+  padding: 0 12px;
   border-radius: 10px;
   cursor: pointer;
   animation: rise-in 0.22s ease both;
@@ -302,6 +305,8 @@ onUnmounted(() => {
   place-items: center;
   border-radius: 7px;
   background: var(--aurora-field);
+  /* 亮色皮肤卡片 elevation(暗色皮肤令牌为 none,无视觉变化) */
+  box-shadow: var(--aurora-card-shadow);
   color: var(--aurora-text-dim);
 }
 
@@ -318,13 +323,25 @@ onUnmounted(() => {
 }
 
 .meta {
+  /* 行内右侧时间戳:次要色、不收缩、贴右缘 */
+  flex: none;
+  margin-left: auto;
   font-size: 11px;
   color: var(--aurora-text-dim);
-  margin-top: 2px;
+  transition: opacity 0.12s ease;
+}
+
+/* 悬停 ✕ 浮现时时间戳淡出,同位交替不抢位 */
+.clip-item:hover .meta {
+  opacity: 0;
 }
 
 .clip-del {
-  flex: none;
+  /* 绝对定位右缘:时间戳才能真正贴右,✕ 悬停浮现覆盖其位 */
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 22px;
   height: 22px;
   display: grid;

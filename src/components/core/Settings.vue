@@ -257,6 +257,14 @@ function hotkeyText(key: string): string {
   return recordingKey.value === key ? "按下组合键…" : cfg[HOTKEY_FIELDS[key]];
 }
 
+/** 热键条宽度自适应内容(等宽字体按 ch 估算:CJK 计 2ch,含左右 padding 余量),
+ *  min-width 140px;右对齐紧凑胶囊,替代原全宽灰条 */
+function hotkeyWidth(key: string): string {
+  let ch = 0;
+  for (const c of hotkeyText(key)) ch += c.charCodeAt(0) <= 0xff ? 1 : 2;
+  return `max(140px, ${ch + 4}ch)`;
+}
+
 /** 修饰键判定(纯修饰键按下不生成组合,继续等主键) */
 function isModifierKey(key: string): boolean {
   return key === "Control" || key === "Alt" || key === "Shift" || key === "Meta";
@@ -1014,13 +1022,13 @@ async function uiaType() {
             readonly
             placeholder="点击后按下组合键"
             aria-label="抽屉热键"
-            class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
+            class="ml-auto text-sm bg-[var(--aurora-field)] rounded-full px-3 py-1 font-mono cursor-pointer text-center"
+            :style="{ width: hotkeyWidth('drawer') }"
             :class="recordingKey === 'drawer' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
             :title="recordingKey === 'drawer' ? '按下 Esc 取消录制' : '点击进入录制模式'"
             @click="startRecord('drawer')"
             @blur="stopRecord"
           />
-          <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
         <!-- 录制中连续忽略提示就近渲染:某些键(如 Ctrl+;)不参与热键组合,连按 3 次无果后红字提醒,
              防用户以为没生效;此前渲染在顶部速查区块,距录制输入框数百像素用户看不到 -->
@@ -1050,13 +1058,13 @@ async function uiaType() {
             readonly
             placeholder="点击后按下组合键"
             aria-label="剪贴板热键"
-            class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
+            class="ml-auto text-sm bg-[var(--aurora-field)] rounded-full px-3 py-1 font-mono cursor-pointer text-center"
+            :style="{ width: hotkeyWidth('clipboard') }"
             :class="recordingKey === 'clipboard' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
             :title="recordingKey === 'clipboard' ? '按下 Esc 取消录制' : '点击进入录制模式'"
             @click="startRecord('clipboard')"
             @blur="stopRecord"
           />
-          <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
         <!-- 录制提示就近渲染(同抽屉热键:连按 3 次无效键后的红字提醒,显示在当前录制输入框旁) -->
         <p
@@ -1079,13 +1087,13 @@ async function uiaType() {
             readonly
             placeholder="点击后按下组合键"
             aria-label="截图热键"
-            class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
+            class="ml-auto text-sm bg-[var(--aurora-field)] rounded-full px-3 py-1 font-mono cursor-pointer text-center"
+            :style="{ width: hotkeyWidth('screenshot') }"
             :class="recordingKey === 'screenshot' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
             :title="recordingKey === 'screenshot' ? '按下 Esc 取消录制' : '点击进入录制模式'"
             @click="startRecord('screenshot')"
             @blur="stopRecord"
           />
-          <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
         </div>
         <p
           v-if="recordingKey === 'screenshot' && recordHint"
@@ -1235,13 +1243,13 @@ async function uiaType() {
               readonly
               placeholder="点击后按下组合键"
               aria-label="AI 热键"
-              class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-2 py-1 font-mono cursor-pointer"
+              class="ml-auto text-sm bg-[var(--aurora-field)] rounded-full px-3 py-1 font-mono cursor-pointer text-center"
+              :style="{ width: hotkeyWidth('ai') }"
               :class="recordingKey === 'ai' ? 'ring-1 ring-[var(--aurora-accent)] text-[var(--aurora-text-dim)]' : ''"
               :title="recordingKey === 'ai' ? '按下 Esc 取消录制' : '点击进入录制模式'"
               @click="startRecord('ai')"
               @blur="stopRecord"
             />
-            <span class="text-[11px] text-[var(--aurora-text-dim)] shrink-0">立即生效</span>
           </div>
           <!-- 录制提示就近渲染(同抽屉/剪贴板热键:红字提醒显示在当前录制输入框旁) -->
           <p
