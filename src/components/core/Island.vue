@@ -667,12 +667,13 @@ onUnmounted(() => {
   width: 100%;
   padding: 0 18px;
   border-radius: 999px;
-  border: 1px solid var(--aurora-border);
+  /* 2026-08-18 用户反馈:透明融合诉求下 1px 描边形成"框",删掉;
+     层次仅靠内高光+顶部极光带(药丸背景色/模糊本身已提供与桌面区分度) */
   background: linear-gradient(180deg, var(--glass-hi), transparent 45%), var(--aurora-panel);
   backdrop-filter: blur(28px) saturate(165%);
   -webkit-backdrop-filter: blur(28px) saturate(165%);
   /* 2026-08-14 真机反馈:外阴影在透明矩形窗口内被裁剪,圆角药丸外露出
-     "方块"残影 → 去掉外阴影,只保留内高光;层次靠边框+顶部极光带。
+     "方块"残影 → 去掉外阴影,只保留内高光。
      内高光用 --aurora-text 低浓度自适应(2026-08-14 审计:硬编码白高光在拂晓
      浅色皮肤上失效,color-mix 随皮肤变深色低对比提亮) */
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--aurora-text) 7%, transparent);
@@ -708,9 +709,11 @@ onUnmounted(() => {
   pointer-events: none;
 }
 /* 拖入有效应用文件悬停高亮(设计稿 .island.dragover;外描边在透明窗口会被裁,
-   改边框变色提示) */
+   2026-08-18 常态描边已删,高亮改内圈发光,不依赖 border) */
 .island.dragover {
-  border-color: var(--aurora-accent);
+  box-shadow:
+    inset 0 0 0 1.5px var(--aurora-accent),
+    inset 0 1px 0 color-mix(in srgb, var(--aurora-text) 7%, transparent);
 }
 
 /* 呼吸点 */
