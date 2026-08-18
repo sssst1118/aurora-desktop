@@ -202,6 +202,11 @@ function toggleExpand() {
   }
   expanded.value = !expanded.value;
   void (async () => {
+    // 收岛前先等 Dock 浮层加高恢复(审计中3,2026-08-18):closeOverflow 的
+    // setSize(46) 与 setWidthAnimated 读 innerSize→curH 并发时,动画会把加高后
+    // 的高度当 curH 逐帧写回,浮层已关但窗口高度残留 46+extra 透明区;
+    // watch(expanded) 异步触发,须经 Dock 暴露的 onCollapse 显式等待高度链
+    if (!expanded.value) await dockRef.value?.onCollapse();
     if (expanded.value) await ensureExpandFits(W_EXPANDED);
     await setWidthAnimated(expanded.value ? W_EXPANDED : W_COLLAPSED);
   })();
@@ -547,9 +552,10 @@ onMounted(async () => {
     console.error("sys_get_status failed", e);
   }
   // 拖动结束(tauri://move)→ 跟随节流广播 + 防抖落盘(主面板跟随)
-  // 长拖续灯(低1,2026-08-14 波次 4):系统拖动(drag-region)期间 DOM 收不到
-  // pointermove,拖动态(禁毛玻璃防闪烁)靠 onMoved 持续续灯,拖动结束事件流断流后
-  // 由 markDragging 内部 150ms 定时器兜底清除。
+  // 长拖续灯(低1,2026-08-14 波次 4;2026-08-18 审计低4 核对注释与实现相符,
+  // 仅措辞修正):系统拖动(drag-region)期间 DOM 收不到 pointermove,拖动态
+  // (禁毛玻璃防闪烁)靠 onMoved 每帧续灯——markDragging 每次触发都重置其内部
+  // 150ms 兜底定时器,拖动结束事件流断流后定时器到期自动熄灭。
   // 依据(按代码推断,tao 0.35 源码):拖动由 PostMessage(WM_NCLBUTTONDOWN,HTCAPTION)
   // 启动,DefWindowProc 模态拖动循环泵送消息期间,WM_WINDOWPOSCHANGED 每帧派发到
   // 子类窗口过程并同步 send_event(Moved) → tauri://move 持续触发(波次 1 高1 原

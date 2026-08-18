@@ -71,6 +71,14 @@ function recomputeVisible() {
 const launching = ref<Set<string>>(new Set());
 const LAUNCHING_MS = 900;
 
+/** 移除中集合:防连点(快速双击 ✕ 时第二次基于旧 items 过滤会重复写盘,
+    复用 launch 的进行中集合模式,await 完成即释放——低1,2026-08-18) */
+const removing = ref<Set<string>>(new Set());
+
+/** launch 脉冲定时器集合(卸载时全部清理:多个条目并发启动时各持一个 timer,
+    防卸载后 emit("launched") 打到已卸载父组件——低2,2026-08-18) */
+const launchTimers = new Set<number>();
+
 /** 溢出浮层 */
 const overflowOpen = ref(false);
 const OVERFLOW_ROW_H = 40;
@@ -129,12 +137,16 @@ async function addPaths(paths: string[]): Promise<number> {
 
 /** 悬停 ✕ 移除条目 */
 async function removeItem(item: DockItem) {
+  if (removing.value.has(item.path)) return; // 移除中,忽略连点
+  removing.value.add(item.path);
   const next = items.value.filter((it) => it.path !== item.path);
   try {
     await invoke<boolean>("dock_set_items", { items: next });
     items.value = next;
   } catch (e) {
     console.error("dock_set_items failed", e);
+  } finally {
+    removing.value.delete(item.path);
   }
 }
 
@@ -142,10 +154,12 @@ async function removeItem(item: DockItem) {
 async function launch(item: DockItem) {
   if (launching.value.has(item.path)) return; // 启动中,忽略连点
   launching.value.add(item.path);
-  window.setTimeout(() => {
+  const t = window.setTimeout(() => {
+    launchTimers.delete(t);
     launching.value.delete(item.path);
     emit("launched");
   }, LAUNCHING_MS);
+  launchTimers.add(t);
   try {
     await invoke<boolean>("dock_launch", { item });
     void pollRunning();
@@ -180,7 +194,21 @@ async function loadItems() {
 
 // ---- 溢出浮层:临时加高窗口(逻辑像素宽读当前实际值,不依赖父组件动画态) ----
 
+/** 加高/恢复窗口的串行链:快速开合浮层时多次 setSize 并发(各自 await innerSize
+    读同一旧高度)会互相覆盖,排队保证后一次基于前一次结果;
+    父组件收岛动画前 await(见 onCollapse),确保高度已恢复 46 再读 innerSize——
+    审计中3(2026-08-18):closeOverflow 的 setSize(46) 与 setWidthAnimated 读
+    innerSize→curH 并发,动画会把加高后的高度当 curH 逐帧写回,浮层已关但窗口
+    高度残留 46+extra 透明区 */
+let extraHeightChain: Promise<void> = Promise.resolve();
+
 async function setWindowExtraHeight(extra: number) {
+  const task = extraHeightChain.then(() => applyExtraHeight(extra));
+  extraHeightChain = task.catch(() => undefined); // 单次失败不阻断后续排队
+  return task;
+}
+
+async function applyExtraHeight(extra: number) {
   try {
     const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
     const w = Math.round(size.width / sf);
@@ -200,6 +228,14 @@ function closeOverflow() {
   if (!overflowOpen.value) return;
   overflowOpen.value = false;
   void setWindowExtraHeight(0);
+}
+
+/** 岛收起动画前由父组件显式调用(审计中3):watch(expanded) 异步 flush,收岛动画
+    读内高时 closeOverflow 可能尚未入链;这里同步发起关闭并等待高度恢复完成。
+    浮层未开时链已空,零开销(收岛路径全覆盖:所有收岛都经父组件 toggleExpand) */
+async function onCollapse(): Promise<void> {
+  if (overflowOpen.value) closeOverflow();
+  await extraHeightChain;
 }
 
 function toggleOverflow() {
@@ -222,6 +258,15 @@ function onDocMouseDown(e: MouseEvent) {
   if (!t || (!t.closest(".dock-overflow") && !t.closest(".dock-more"))) closeOverflow();
 }
 
+/** 浮层 Esc 键盘关闭(「…」按钮聚焦时 Esc 关浮层,与 mousedown 外点关闭并列,
+    键盘可达闭环——低3,2026-08-18):浮层开着时 Esc 只关浮层并阻断冒泡,不与
+    窗口级 Esc 递进叠加;浮层关闭后的下一次 Esc 由外层监听继续递进处理 */
+function onWinKeydown(e: KeyboardEvent) {
+  if (e.key !== "Escape" || !overflowOpen.value) return;
+  e.stopPropagation();
+  closeOverflow();
+}
+
 /** 占位首字符(与旧 Dock 同款:单字补空格避免字符宽度跳动) */
 function pad(s: string) {
   return s.length > 1 ? s : s + " ";
@@ -236,21 +281,26 @@ onMounted(async () => {
   await pollRunning();
   runningTimer = window.setInterval(pollRunning, 2000);
   document.addEventListener("mousedown", onDocMouseDown);
+  window.addEventListener("keydown", onWinKeydown);
   // 可视容量跟随宽度变化(展开动画/左段内容宽窄变化/DPI 缩放)
   dockResize = new ResizeObserver(recomputeVisible);
   if (dockEl.value) dockResize.observe(dockEl.value);
 });
 
 onUnmounted(() => {
+  // 卸载时清理全部 launch 脉冲定时器(防卸载后 emit 打到已卸载父组件)
+  launchTimers.forEach((t) => window.clearTimeout(t));
+  launchTimers.clear();
   if (runningTimer) window.clearInterval(runningTimer);
   document.removeEventListener("mousedown", onDocMouseDown);
+  window.removeEventListener("keydown", onWinKeydown);
   dockResize?.disconnect();
 });
 
 // items 增删后溢出判定变化(是否腾出「…」按钮位),重算容量
 watch(items, recomputeVisible);
 
-defineExpose({ addPaths, addFailReason });
+defineExpose({ addPaths, addFailReason, onCollapse });
 </script>
 
 <template>

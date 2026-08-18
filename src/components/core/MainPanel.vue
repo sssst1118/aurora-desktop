@@ -137,6 +137,32 @@ function typingValue(t: EventTarget | null): string {
   return "";
 }
 
+/** 本地过滤类输入框判定:剪贴板 keyword 搜索框(视图内唯一 INPUT,placeholder 含
+    「搜索」)。Esc 对这类输入执行与主搜索框同款的一级清空(审计中2,2026-08-18):
+    波次 4「有值即放行」依赖 WebView 的 INPUT 有原生 Esc 取消动作,但实际没有,
+    焦点在此类过滤框时按 Esc 完全无响应(不关面板不清输入),与主搜索框行为割裂 */
+function isFilterInput(t: HTMLElement): boolean {
+  return (
+    activeView.value === "clipboard" &&
+    t.tagName === "INPUT" &&
+    (t.getAttribute("placeholder") ?? "").includes("搜索")
+  );
+}
+
+/** 一级清空过滤类输入框(与主搜索框 query 清空同语义):置空 value 并派发 input
+    事件,让组件内 v-model 同步(剪贴板 keyword 清空后历史列表恢复全量) */
+function clearTypingValue(t: HTMLElement) {
+  const input = t as HTMLInputElement;
+  input.value = "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** SELECT 下拉 Esc 放行的最近时间戳(performance.now,0 = 从未放行):
+    下拉打开时放行原生 Esc 关闭下拉;页面无 API 探测下拉打开状态,以「放行后
+    短窗口内再次 Esc = 下拉已关」近似,再按递进收岛/关面板(审计中2) */
+let selectEscAt = 0;
+const SELECT_ESC_REPEAT_MS = 400;
+
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     const typing = isTypingTarget(e.target);
@@ -151,10 +177,32 @@ function onWindowKeydown(e: KeyboardEvent) {
       showView("small-desktop");
       return;
     }
-    // 中1(2026-08-14 波次 4):其余可输入元素仅「有值或 IME 组合中」放行原生
-    // Esc(取消输入/关闭下拉);空值/非组合时递进执行收岛/关面板——波次 3 全放行
-    // 导致焦点在设置页/AI 输入框/剪贴板搜索框时面板既不收岛也不关闭,纯键盘用户被卡死
-    if (typing && (e.isComposing || typingValue(e.target) !== "")) return;
+    // 中2(2026-08-18 波次 5):按输入框语义细分,替换波次 4「有值即放行」——
+    // 放行依赖原生 Esc 取消动作,但 WebView 的 INPUT 对 Esc 无动作,焦点在
+    // 剪贴板 keyword 等过滤框时 Esc 完全无响应(不关面板不清输入),与主搜索框割裂
+    if (typing) {
+      if (e.isComposing) return; // IME 组合中:放行原生 Esc 取消输入法组合
+      const t = e.target as HTMLElement;
+      if (t.tagName === "SELECT") {
+        // SELECT:下拉打开时放行原生 Esc 关闭下拉;短窗口内再次 Esc 视为下拉
+        // 已关,继续递进(收岛/关面板)——见 selectEscAt 注释
+        const now = performance.now();
+        if (now - selectEscAt > SELECT_ESC_REPEAT_MS) {
+          selectEscAt = now;
+          return;
+        }
+      } else if (isFilterInput(t)) {
+        // 本地过滤类输入框(剪贴板 keyword):与主搜索框同款一级清空,面板保持打开
+        e.preventDefault();
+        clearTypingValue(t);
+        return;
+      } else if (typingValue(t) !== "") {
+        // 正文输入(AI 消息)/设置配置输入:有值放行(取消输入是原生预期;配置输入
+        // 不清空,置空会经 change 保存空值破坏配置);空值递进收岛/关面板
+        return;
+      }
+      // SELECT 下拉已关 / 空值输入框:继续递进
+    }
     e.preventDefault();
     if (activeView.value === "search") {
       // 一级:搜索态 → 清空输入退回小桌面(对标 Raycast,面板保持打开)
@@ -261,6 +309,22 @@ function scheduleSaveSize() {
 //      移植自 SearchBar 的 rAF 节流模式,尺寸夹在 360×260 ~ 2 倍显示器之间,
 //      与后端 clamp_search_size 同口径) ----
 
+/** 缩放手柄 aria 播报(role="slider" 单值语义,主值取宽,valuetext 报 宽×高;
+    onResized 同步当前逻辑尺寸;上限挂载时按显示器计算,下限固定 360,
+    与后端 clamp_search_size 同口径——审计低5,2026-08-18) */
+const handleA11y = ref({ w: 0, h: 0, maxW: 4096 });
+
+/** 同步缩放手柄 aria-valuenow(当前逻辑尺寸) */
+async function syncHandleA11y() {
+  try {
+    const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    handleA11y.value.w = Math.round(size.width / sf);
+    handleA11y.value.h = Math.round(size.height / sf);
+  } catch {
+    /* 播报失败忽略,保留上次值 */
+  }
+}
+
 let resizeState: {
   sx: number;
   sy: number;
@@ -276,6 +340,8 @@ let resizeRaf = 0;
 
 async function resizeStart(e: PointerEvent) {
   e.preventDefault();
+  // 指针拖动开始:键盘期望值作废,下次按键重新读当前尺寸(防连按期望与真实尺寸脱节)
+  keyResizeW = undefined;
   try {
     const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
     // 上限与后端 clamp_search_size 同口径:全部显示器取最大宽/高 × 2;
@@ -326,17 +392,42 @@ function resizeEnd() {
 /** 缩放手柄键盘调节步长(逻辑像素;右下角手柄方向语义:右/下放大,左/上缩小) */
 const RESIZE_KEY_STEP = 20;
 
+/** 键盘缩放期望尺寸(逻辑像素,undefined = 尚未建立):
+    方向键快速连按(keyboard repeat ~30ms/次)时多个并发 setSize 都基于 await
+    innerSize() 读到的同一旧尺寸,连按丢步进(审计中1,2026-08-18);改为期望值
+    累加——首次按键读一次当前尺寸作起点,后续按键在期望值上累加并 clamp,
+    不重复读窗口尺寸;指针拖动开始(resizeStart)重置,防与真实尺寸脱节 */
+let keyResizeW: number | undefined;
+let keyResizeH: number | undefined;
+let keyResizeMaxW = 4096;
+let keyResizeMaxH = 4096;
+
+/** 键盘缩放期望值起点:读当前窗口尺寸 + 显示器上限(与 applyResize clamp 同口径) */
+async function initKeyResizeBase() {
+  try {
+    const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
+    const monitors = await logicalMonitors();
+    keyResizeMaxW = monitors.length ? Math.max(...monitors.map((m) => m.w)) * 2 : 4096;
+    keyResizeMaxH = monitors.length ? Math.max(...monitors.map((m) => m.h)) * 2 : 4096;
+    keyResizeW = size.width / sf;
+    keyResizeH = size.height / sf;
+  } catch (err) {
+    console.error("init key resize base failed", err);
+  }
+}
+
 /** 缩放手柄键盘调节(role="slider" + tabindex 键盘可达,无指针时方向键等效拖动;
     clamp 与 applyResize 同口径 360×260 ~ 2 倍显示器) */
 async function resizeByKey(dx: number, dy: number) {
   try {
-    const [size, sf] = await Promise.all([win.innerSize(), win.scaleFactor()]);
-    const monitors = await logicalMonitors();
-    const maxW = monitors.length ? Math.max(...monitors.map((m) => m.w)) * 2 : 4096;
-    const maxH = monitors.length ? Math.max(...monitors.map((m) => m.h)) * 2 : 4096;
-    const w = Math.min(maxW, Math.max(360, Math.round(size.width / sf) + dx));
-    const h = Math.min(maxH, Math.max(260, Math.round(size.height / sf) + dy));
-    await win.setSize(new LogicalSize(w, h));
+    // 首次按键(或指针拖动后)建立期望值;后续按键在期望值上累加,不再重新读窗口
+    if (keyResizeW === undefined) await initKeyResizeBase();
+    const baseW = keyResizeW;
+    const baseH = keyResizeH;
+    if (baseW === undefined || baseH === undefined) return; // 起点读取失败,丢本次按键
+    keyResizeW = Math.min(keyResizeMaxW, Math.max(360, baseW + dx));
+    keyResizeH = Math.min(keyResizeMaxH, Math.max(260, baseH + dy));
+    await win.setSize(new LogicalSize(Math.round(keyResizeW), Math.round(keyResizeH)));
     scheduleSaveSize(); // 与指针缩放结束同口径:调整后落一次尺寸
   } catch (err) {
     console.error("resize by key failed", err);
@@ -364,8 +455,21 @@ function onResizeHandleKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  // 尺寸变化 → 防抖落盘(仅尺寸,位置不记忆;onMoved 不监听)
-  unlisteners.push(await win.onResized(() => scheduleSaveSize()));
+  // 缩放手柄 aria 上限:显示器最大宽 × 2(与 applyResize clamp 同口径;低5)
+  try {
+    const ms = await logicalMonitors();
+    handleA11y.value.maxW = ms.length ? Math.max(...ms.map((m) => m.w)) * 2 : 4096;
+  } catch {
+    /* 保留默认 4096 兜底 */
+  }
+  void syncHandleA11y(); // 初始 aria-valuenow
+  // 尺寸变化 → 防抖落盘(仅尺寸,位置不记忆;onMoved 不监听)+ 同步手柄 aria
+  unlisteners.push(
+    await win.onResized(() => {
+      void syncHandleA11y();
+      scheduleSaveSize();
+    }),
+  );
 
   // 窗口显示:恢复默认视图小桌面(除非本次呼出带目标视图)+ 清空输入 + 呼出动画
   unlisteners.push(
@@ -506,12 +610,18 @@ onUnmounted(() => {
     </footer>
 
     <!-- 右下角缩放手柄(自绘;无边框窗口无系统 resize 边框;
-         键盘可达:role="slider" + tabindex + 方向键调节,2026-08-14 波次 4) -->
+         键盘可达:role="slider" + tabindex + 方向键调节,2026-08-14 波次 4;
+         aria-valuenow/min/max 补全:当前逻辑尺寸(宽)+ 下限 360 + 上限显示器×2,
+         与后端 clamp 同口径,valuetext 报 宽×高——2026-08-18 审计低5) -->
     <div
       class="resize-handle"
       role="slider"
       tabindex="0"
       aria-label="调整窗口大小"
+      :aria-valuenow="handleA11y.w"
+      :aria-valuemin="360"
+      :aria-valuemax="handleA11y.maxW"
+      :aria-valuetext="`${handleA11y.w}×${handleA11y.h}`"
       title="拖动调整大小"
       @pointerdown="resizeStart"
       @keydown="onResizeHandleKeydown"
