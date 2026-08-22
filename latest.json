@@ -1,6 +1,6 @@
 {
-  "version": "0.2.6",
-  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.6/Aurora_0.2.6_x64-setup.exe",
-  "sha256": "c283bd473409a6357426aa7ec3d7bd4d0f6b51eb98f8c6453ad90bd5b7f86696",
-  "notes": "v0.2.6 视觉质感优化 8 项:极光缘升级 28px 流动光晕(4 皮肤各自配色);灵动岛亮色玻璃感(透出桌面模糊);小桌面分类栏单行+空分类排尾淡化;dawn 亮色层次重塑(面板/卡片/投影三级);搜索/AI 空态引导 chips;设置热键条右对齐紧凑胶囊;岛 Dock 图标统一防裁剪;剪贴板行高 56px 时间戳右对齐。356/356 测试全绿,前后截图对比 8/8 通过"
+  "version": "0.2.7",
+  "url": "https://github.com/sssst1118/aurora-desktop/releases/download/v0.2.7/Aurora_0.2.7_x64-setup.exe",
+  "sha256": "6502e7ebcf9a167ffd549c01ae9ab5e32e4f796824c16aa17fc66e4ce76d7861",
+  "notes": "v0.2.7 效果打磨 + 真机反馈修复:视觉质感 8 项已随上一波落地(极光缘流动光晕/岛玻璃感/分类栏/空态 chips/热键胶囊/图标统一/剪贴板密度);真机修复 8 项——岛透明圆角外侧矩形框消除、设置页主线程阻塞(缩略图/图标提取移后台)、小桌面标题栏拖动、岛拖动不误触发展开+展开态可拖+点击阈值 2px、壁纸区改路径输入(静态+动态素材目录)。356/356 测试全绿,真机验收通过"
 }
