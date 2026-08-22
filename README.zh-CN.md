@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue)](./LICENSE)
 [![Platform: Windows 10/11](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6)](https://github.com/sssst1118/aurora-desktop)
-[![Version: 0.2.6](https://img.shields.io/badge/Version-0.2.6-8b5cf6)](https://github.com/sssst1118/aurora-desktop/releases)
+[![Version: 0.2.7](https://img.shields.io/badge/Version-0.2.7-8b5cf6)](https://github.com/sssst1118/aurora-desktop/releases)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8D8)](https://tauri.app)
 
 [English](./README.md) | 中文
@@ -55,7 +55,7 @@ Aurora 是 Windows 10/11 上的开源桌面效率中枢——灵动岛（常驻�
 
 ## 🚀 快速开始
 
-1. 从 [Releases](https://github.com/sssst1118/aurora-desktop/releases) 下载安装包（推荐 `Aurora_0.2.6_x64-setup.exe`，备选 `Aurora_0.2.6_x64_en-US.msi`）
+1. 从 [Releases](https://github.com/sssst1118/aurora-desktop/releases) 下载安装包（推荐 `Aurora_0.2.7_x64-setup.exe`，备选 `Aurora_0.2.7_x64_en-US.msi`）
 2. 双击安装并启动 Aurora
 3. 按 `Ctrl+Shift+Space` 呼出主面板，开始使用
 

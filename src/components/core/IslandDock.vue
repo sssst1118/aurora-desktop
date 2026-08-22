@@ -304,11 +304,12 @@ defineExpose({ addPaths, addFailReason, onCollapse });
 </script>
 
 <template>
-  <!-- 括入区根容器:整窗可拖下显式禁拖(tauri 2.11 drag-region="false" 阻断祖先判定,
-  保证瓦片点击/✕/＋ 交互不被拖动接管;与旧 Dock.vue 同款处理)。
+  <!-- 括入区根容器:2026-08-19 真机反馈「展开后有概率拖不动」——此前显式禁拖,
+  展开态约 40% 宽度(括入区)完全不可拖。本区全部交互件均为 <button>(drag.js
+  自动豁免,点击/悬停 ✕/＋ 仍正常),故根容器标 true 只让其自身空白区域可拖。
   expanded class = 岛展开态样式联动(收起时隐藏,2026-08-14 真机反馈:此前收起态
   括入区无隐藏样式,被静态内容挤成 34px 宽仍可见,表现为"Dock 只有一个图标") -->
-  <div ref="dockEl" class="mini-dock" :class="{ expanded }" data-tauri-drag-region="false">
+  <div ref="dockEl" class="mini-dock" :class="{ expanded }" data-tauri-drag-region="true">
     <button
       v-for="it in visibleItems"
       :key="it.path"

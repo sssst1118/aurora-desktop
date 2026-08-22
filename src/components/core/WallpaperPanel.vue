@@ -1,179 +1,58 @@
 <script setup lang="ts">
-// 2.4 静态壁纸:目录输入 + 缩略图网格 + 点击应用 + 当前壁纸高亮。
-// 挂载点:Settings.vue 壁纸区块(由集成 agent 接线),毛玻璃风格与 Island/Settings 一致。
-// 预览不走 asset 协议——scope 只认 Tauri 变量集($HOME/$PICTURE 等,Windows 环境变量
-// $USERPROFILE 不识别会当字面路径)且无运行时扩展授权 API,自定义壁纸目录(如
-// C:\ProgramData\Lenovo\Themes)一律 403 预览全挂;改为后端缩略图命令
-// wallpaper_thumbnail:任意目录均可读,缩到 480px JPEG base64 data URI 传回。
-import { ref, watch, onMounted, onUnmounted } from "vue";
+// 2.4 静态壁纸:壁纸文件路径输入 + 设置(2026-08-19 用户定调:不再展示缩略图,
+// 「添加地址就可以了」——最终用途就是选一个路径设为壁纸;缩略图网格与
+// wallpaper_thumbnail IPC 消费端一并退役,设置页开屏不再有大图批量解码)。
+// 挂载点:Settings.vue 壁纸区块,毛玻璃风格与 Island/Settings 一致。
+import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useConfigStore } from "../../stores/config";
 
-interface WallpaperEntry {
-  name: string;
-  path: string;
-  size: number;
-}
-
-const store = useConfigStore();
-
-const entries = ref<WallpaperEntry[]>([]);
-const currentPath = ref<string | null>(null);
-const dirInput = ref("");
-const loading = ref(false);
-const applying = ref<string | null>(null);
+const pathInput = ref("");
+const applying = ref(false);
 const error = ref("");
 const notice = ref("");
-// path → data URI(缩略图);加载中 = 未出现;失败 = thumbErrors
-const thumbs = ref<Record<string, string>>({});
-const thumbErrors = ref<Record<string, boolean>>({});
-let disposed = false;
 
-function fmtSize(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(0)}KB`;
-  return `${n}B`;
-}
-
-function isCurrent(path: string): boolean {
-  const cur = currentPath.value;
-  return cur !== null && path.toLowerCase() === cur.toLowerCase();
-}
-
-/** 逐张生成缩略图(后台 invoke;组件卸载或刷新过期后丢弃结果) */
-async function loadThumb(path: string, seq: number) {
-  try {
-    const uri = await invoke<string>("wallpaper_thumbnail", { filePath: path });
-    // 已有更新的刷新发起时丢弃:旧目录的缩略图晚到会串进新结果
-    if (!disposed && seq === refreshSeq) thumbs.value[path] = uri;
-  } catch {
-    if (!disposed && seq === refreshSeq) thumbErrors.value[path] = true;
-  }
-}
-
-/** 缩略图拉取并发上限:数百张全量并发会拥堵 IPC,信号量限流分批 */
-const THUMB_CONCURRENCY = 4;
-
-/** 固定并发拉取缩略图:N 个 worker 各自取下一个路径直到取完(失败不阻塞后续) */
-async function loadThumbs(paths: string[], seq: number) {
-  const total = paths.length;
-  if (total === 0) return;
-  let next = 0;
-  const worker = async () => {
-    while (next < total) {
-      await loadThumb(paths[next++], seq);
-    }
-  };
-  const n = Math.min(THUMB_CONCURRENCY, total);
-  await Promise.all(Array.from({ length: n }, () => worker()));
-}
-
-// 刷新单调序号:连续点击「刷新」时,旧响应晚到会覆盖新结果(列表/当前壁纸/缩略图),
-// 与 SearchView doSearch 同款 seq 防过期(波次5 G2 审计)
-let refreshSeq = 0;
-
-async function refresh() {
-  const seq = ++refreshSeq;
-  loading.value = true;
-  error.value = "";
-  try {
-    const list = await invoke<WallpaperEntry[]>("wallpaper_list_local");
-    const cur = await invoke<string | null>("wallpaper_get_current");
-    if (seq !== refreshSeq) return; // 已有更新的刷新,丢弃过期响应
-    entries.value = list;
-    currentPath.value = cur;
-    thumbs.value = {};
-    thumbErrors.value = {};
-    // 缩略图后台 4 路并发拉取,不阻塞列表展示(loading 只管列表本身)
-    void loadThumbs(entries.value.map((e) => e.path), seq);
-    if (entries.value.length === 0) {
-      error.value = `目录中没有可用图片:${store.cfg?.wallpaper_dir ?? "默认目录"}`;
-    }
-  } catch (e) {
-    if (seq !== refreshSeq) return;
-    error.value = `读取壁纸列表失败:${e}`;
-  } finally {
-    if (seq === refreshSeq) loading.value = false;
-  }
-}
-
-async function saveDir() {
-  error.value = "";
-  notice.value = "";
-  if (!store.cfg) return;
-  const v = dirInput.value.trim();
-  store.cfg.wallpaper_dir = v === "" ? null : v;
-  try {
-    await store.save();
-    await refresh();
-  } catch (e) {
-    error.value = `保存目录失败:${e}`;
-  }
-}
-
-async function apply(path: string) {
+async function apply() {
   if (applying.value) return;
-  applying.value = path;
+  const p = pathInput.value.trim();
   error.value = "";
   notice.value = "";
+  if (p === "") {
+    error.value = "请先输入壁纸文件路径";
+    return;
+  }
+  applying.value = true;
   try {
-    await invoke("wallpaper_set_static", { filePath: path });
-    currentPath.value = path;
+    await invoke("wallpaper_set_static", { filePath: p });
+    // path 归一化展示(后端未回传,直接显示用户输入即可)
     notice.value = "壁纸已更换";
   } catch (e) {
     error.value = String(e);
   } finally {
-    applying.value = null;
+    applying.value = false;
   }
 }
-
-onMounted(() => {
-  // 配置由 Settings 统一加载(本组件不再重复 store.load());
-  // 子组件 mounted 先于 Settings,cfg 可能尚未就绪,watch 等它回填目录输入框一次。
-  // ⚠️ stop 用 let + 可选调用:immediate 回调在 watch 返回前同步执行,若回调内直接
-  // 引用 const stopSync 会命中 TDZ 抛 ReferenceError(P1 根因 2026-08-13:dev 下打开
-  // 设置页时 cfg 已就绪,回调走到底即崩,中断当次渲染,表现为"按钮点击落盘但界面不切换")
-  let stop: (() => void) | null = null;
-  stop = watch(
-    () => store.cfg?.wallpaper_dir,
-    (v) => {
-      if (v === undefined) return; // cfg 未加载完成,继续等
-      dirInput.value = v ?? "";
-      stop?.();
-    },
-    { immediate: true },
-  );
-  void refresh();
-});
-
-onUnmounted(() => {
-  disposed = true;
-});
 </script>
 
 <template>
   <div class="space-y-3">
     <div>
-      <div class="text-xs text-[var(--aurora-text-dim)] mb-1">壁纸目录(留空 = 默认图片目录)</div>
+      <div class="text-xs text-[var(--aurora-text-dim)] mb-1">
+        壁纸文件路径(支持 jpg/png/bmp 等常见图片格式)
+      </div>
       <div class="flex gap-2">
         <input
-          v-model="dirInput"
+          v-model="pathInput"
           class="flex-1 min-w-0 text-sm bg-[var(--aurora-field)] rounded-lg px-3 py-1.5 outline-none focus:bg-[var(--aurora-field)] placeholder:text-[var(--aurora-text-dim)]"
-          placeholder="如 D:\Wallpapers"
+          placeholder="如 D:\Wallpapers\aurora.jpg"
           spellcheck="false"
+          @keydown.enter="apply"
         />
         <button
-          class="text-xs px-3 py-1.5 rounded-lg bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white shrink-0"
-          @click="saveDir"
+          class="text-xs px-3 py-1.5 rounded-lg bg-[var(--aurora-accent)] hover:bg-[var(--aurora-accent)] text-white shrink-0 disabled:opacity-60"
+          :disabled="applying"
+          @click="apply"
         >
-          应用目录
-        </button>
-        <button
-          class="text-xs px-3 py-1.5 rounded-lg bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] text-[var(--aurora-text)] shrink-0"
-          :disabled="loading"
-          @click="refresh"
-        >
-          {{ loading ? "加载中…" : "刷新" }}
+          {{ applying ? "设置中…" : "设置壁纸" }}
         </button>
       </div>
     </div>
@@ -183,60 +62,6 @@ onUnmounted(() => {
     </div>
     <div v-else-if="notice" class="wp-msg wp-msg-success text-xs rounded-lg px-3 py-1.5">
       {{ notice }}
-    </div>
-
-    <div v-if="entries.length > 0" class="grid grid-cols-4 gap-2">
-      <button
-        v-for="entry in entries"
-        :key="entry.path"
-        class="relative rounded-lg overflow-hidden bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] group text-left"
-        :class="[
-          isCurrent(entry.path) ? 'ring-2 ring-[var(--aurora-accent)]' : '',
-          applying === entry.path ? 'opacity-60' : '',
-        ]"
-        :title="entry.path"
-        @click="apply(entry.path)"
-      >
-        <div class="aspect-square">
-          <img
-            v-if="thumbs[entry.path]"
-            :src="thumbs[entry.path]"
-            class="w-full h-full object-cover"
-            draggable="false"
-          />
-          <div
-            v-else-if="thumbErrors[entry.path]"
-            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[11px] px-1 text-center"
-          >
-            预览不可用
-          </div>
-          <div
-            v-else
-            class="w-full h-full flex items-center justify-center text-[var(--aurora-text-dim)] text-[11px] animate-pulse"
-          >
-            加载中…
-          </div>
-        </div>
-        <!-- 「当前」徽章角标:absolute 贴缩略图右上角,刻意保留 9px 角标层级,
-             不随卡片信息区并入 11px(字号收敛四档允许角标例外) -->
-        <span
-          v-if="isCurrent(entry.path)"
-          class="absolute top-1 right-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--aurora-accent)] text-white"
-        >
-          当前
-        </span>
-        <div
-          class="absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-1 text-[11px] text-white/85 truncate"
-        >
-          {{ entry.name }}
-        </div>
-        <div class="px-1.5 pt-0.5 pb-1 text-[11px] text-[var(--aurora-text-dim)]">
-          {{ fmtSize(entry.size) }}
-        </div>
-      </button>
-    </div>
-    <div v-else-if="!loading && !error" class="text-xs text-[var(--aurora-text-dim)] py-2 text-center">
-      暂无壁纸图片
     </div>
   </div>
 </template>

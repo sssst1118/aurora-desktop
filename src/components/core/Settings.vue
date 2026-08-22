@@ -508,6 +508,25 @@ async function applyMonitorMaterial(index: number) {
 // ---- 动态壁纸素材选择(单屏/拼接模式共用;Phase4 遗留未接线的素材入口,Phase5 补齐)----
 
 const materialSel = ref("");
+/** 动态壁纸素材目录输入(2026-08-19 用户定调:素材区只给地址不做图片展示;
+    UI 此前无该目录入口,只能靠改配置文件) */
+const dynamicDir = ref("");
+watch(
+  () => store.cfg?.wallpaper_dynamic_dir,
+  (v) => {
+    if (v === undefined) return; // cfg 未加载完成,继续等
+    dynamicDir.value = v ?? "";
+  },
+  { immediate: true },
+);
+
+async function saveDynamicDir() {
+  if (!store.cfg) return;
+  const v = dynamicDir.value.trim();
+  store.cfg.wallpaper_dynamic_dir = v === "" ? null : v;
+  if (!(await saveSafe())) return;
+  await loadMultiMonitorState();
+}
 const materialError = ref("");
 const materialNotice = ref("");
 
@@ -1276,6 +1295,23 @@ async function uiaType() {
           :class="{ 'opacity-40 pointer-events-none': !on(store.cfg.enable_dynamic_wallpaper) }"
         >
           <div class="flex items-center gap-1.5">
+            <input
+              v-model="dynamicDir"
+              class="flex-1 min-w-0 text-xs bg-[var(--aurora-field)] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-[var(--aurora-accent)] placeholder:text-[var(--aurora-text-dim)]"
+              placeholder="素材目录(留空 = 默认素材目录)"
+              aria-label="动态壁纸素材目录"
+              spellcheck="false"
+              @keydown.enter="saveDynamicDir"
+            />
+            <button
+              class="text-xs px-2 py-1 rounded bg-[var(--aurora-field)] hover:bg-[var(--aurora-field)] shrink-0"
+              aria-label="应用素材目录"
+              @click="saveDynamicDir"
+            >
+              应用目录
+            </button>
+          </div>
+          <div class="flex items-center gap-1.5">
             <select
               v-model="materialSel"
               class="flex-1 min-w-0 text-[11px] bg-[var(--aurora-field)] rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-[var(--aurora-accent)]"
@@ -1315,7 +1351,7 @@ async function uiaType() {
             v-else-if="materials.length === 0"
             class="text-[11px] text-[var(--aurora-text-dim)]"
           >
-            素材目录为空(配置动态壁纸目录或放入 mp4/webm 等视频素材后点"刷新")
+            素材目录为空:填上方的素材目录并「应用目录」,或把 mp4/webm 素材放入目录后重开设置页
           </div>
         </div>
 

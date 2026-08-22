@@ -254,6 +254,10 @@ let clickTimer: number | undefined;
 let downPos: { x: number; y: number } | null = null;
 let lastDownAt = 0;
 let dragEndTimer: number | undefined;
+/** 点击/拖动判定阈值:按下后位移超过此值判为拖动(2026-08-19 用户降低阈值要求:
+    只需区分正常点击与拖动;2px 逻辑像素 @1.5x DPI = 3 物理像素,正常点击抖动
+    在此范围内,微小拖动手势即触发窗口拖动,按压响应更跟手) */
+const CLICK_DRAG_THRESHOLD_PX = 2;
 
 /** 标记拖动态(禁 blur 防闪烁);拖动结束由 pointerup 立即清 + 移动断流 150ms 兜底。
     长拖续灯(2026-08-14 波次 4):系统拖动期间 DOM 收不到 pointermove/pointerup,
@@ -300,15 +304,25 @@ function onPointerDown(e: PointerEvent) {
   }, DOUBLE_CLICK_MS);
 }
 
+/** 真机反馈 2026-08-19「拖动岛也会展开」:系统拖动(drag-region)会吞掉 DOM
+    pointermove,>4px 取消分支真机永不生效,拖动结束 pending 单击照旧到期展开。
+    onMoved 在系统拖动期间每帧触发(见 onMounted 注册处注释),用它取消单击判定:
+    窗口发生真实移动=拖动而非点击。同时清 lastDownAt,防拖动结束后首次按下
+    与拖动前的按下被误判双击。 */
+function cancelPendingClick() {
+  downPos = null;
+  lastDownAt = 0;
+  if (clickTimer !== undefined) {
+    window.clearTimeout(clickTimer);
+    clickTimer = undefined;
+  }
+}
+
 /** 按下后移动 >4px 判定为拖动:取消 pending 单击(原生拖动接管) */
 function onPointerMove(e: PointerEvent) {
   if (!downPos) return;
-  if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
-    downPos = null;
-    if (clickTimer !== undefined) {
-      window.clearTimeout(clickTimer);
-      clickTimer = undefined;
-    }
+  if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > CLICK_DRAG_THRESHOLD_PX) {
+    cancelPendingClick();
     markDragging();
   }
 }
@@ -563,6 +577,7 @@ onMounted(async () => {
   // bug「onMoved 600ms 防抖被反复重置」同源旁证);程序性 set_position 被 tao 抑制
   // 不触发 Moved(波次 3 踩坑记录),故此续灯仅真实拖动生效,无程序移动副作用
   unMoved = await win.onMoved(() => {
+    cancelPendingClick(); // 真机拖动吞 pointermove,靠窗口移动事件取消单击(防拖动展开)
     markDragging();
     schedulePersistGeometry();
   });

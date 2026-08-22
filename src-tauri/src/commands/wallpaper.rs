@@ -185,8 +185,17 @@ pub fn check_thumb_src_dims(w: u32, h: u32) -> Result<(), String> {
 /// 任意目录均可预览;读取/解码/编码失败返回 Err,前端显示"预览不可用"占位。
 /// 安全加固:解码前先读文件头判宽高([check_thumb_src_dims]),并用
 /// ImageReader::with_limits 再限一层(纵深防御,防解压炸弹打爆内存)
+/// 异步命令壳:解码/缩放/编码是 CPU 密集操作,同步命令会跑在 tao 主线程上
+/// 阻塞整应用(2026-08-19 真机反馈「设置页 1s 后卡 1s / 切走卡 2s」根因:
+/// Lenovo Themes 大图批量缩略序列化在主线程)。移入 spawn_blocking 后台线程池。
 #[tauri::command(rename = "wallpaper_thumbnail")]
-pub fn wallpaper_thumbnail_cmd(file_path: String) -> Result<String, String> {
+pub async fn wallpaper_thumbnail_cmd(file_path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || thumbnail_inner(&file_path))
+        .await
+        .map_err(|e| format!("缩略图任务异常: {e}"))?
+}
+
+fn thumbnail_inner(file_path: &str) -> Result<String, String> {
     if file_path.trim().is_empty() {
         return Err("壁纸路径为空".to_string());
     }
@@ -379,7 +388,7 @@ mod tests {
         let dir = tmp_dir("thumb");
         let p = make_png(&dir, "big.png", 1000, 800); // 超过最长边,应缩到 480
 
-        let out = wallpaper_thumbnail_cmd(p.to_string_lossy().into_owned()).unwrap();
+        let out = thumbnail_inner(&p.to_string_lossy()).unwrap();
         assert!(out.starts_with("data:image/jpeg;base64,"));
 
         // base64 解回真实 JPEG,尺寸最长边 = 480
@@ -397,7 +406,7 @@ mod tests {
     fn thumbnail_small_image_kept_as_is() {
         let dir = tmp_dir("thumb_small");
         let p = make_png(&dir, "small.png", 320, 240); // 本就小于上限,不缩放
-        let out = wallpaper_thumbnail_cmd(p.to_string_lossy().into_owned()).unwrap();
+        let out = thumbnail_inner(&p.to_string_lossy()).unwrap();
         let b64 = out.trim_start_matches("data:image/jpeg;base64,");
         let bytes = B64.decode(b64).unwrap();
         let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).unwrap();
@@ -407,14 +416,14 @@ mod tests {
 
     #[test]
     fn thumbnail_rejects_bad_inputs() {
-        assert!(wallpaper_thumbnail_cmd(String::new()).is_err());
-        assert!(wallpaper_thumbnail_cmd("   ".to_string()).is_err());
-        assert!(wallpaper_thumbnail_cmd(r"Pictures\a.jpg".to_string()).is_err()); // 相对路径
+        assert!(thumbnail_inner("").is_err());
+        assert!(thumbnail_inner("   ").is_err());
+        assert!(thumbnail_inner(r"Pictures\a.jpg").is_err()); // 相对路径
         let dir = tmp_dir("thumb_bad");
-        assert!(wallpaper_thumbnail_cmd(dir.join("none.png").to_string_lossy().into_owned()).is_err());
+        assert!(thumbnail_inner(&dir.join("none.png").to_string_lossy()).is_err());
         let txt = dir.join("a.txt");
         std::fs::write(&txt, b"not an image").unwrap();
-        assert!(wallpaper_thumbnail_cmd(txt.to_string_lossy().into_owned()).is_err()); // 非图片
+        assert!(thumbnail_inner(&txt.to_string_lossy()).is_err()); // 非图片
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -479,10 +488,10 @@ mod tests {
         let dir = tmp_dir("thumb_huge");
         // 宽高超上限(20000×20000):必须在解码前拒绝,不得进入解码分配
         let p = make_huge_header_png(&dir, 20000, 20000);
-        assert!(wallpaper_thumbnail_cmd(p.to_string_lossy().into_owned()).is_err());
+        assert!(thumbnail_inner(&p.to_string_lossy()).is_err());
         // 宽高在上限内但面积超 64MP(8192×8193):同样拒绝
         let p2 = make_huge_header_png(&dir, 8192, 8193);
-        assert!(wallpaper_thumbnail_cmd(p2.to_string_lossy().into_owned()).is_err());
+        assert!(thumbnail_inner(&p2.to_string_lossy()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

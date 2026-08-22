@@ -474,14 +474,19 @@ pub fn dock_get_running(app: tauri::AppHandle) -> Vec<String> {
 }
 
 /// 图标 base64 data URL(内存 + 磁盘双缓存);提取失败返回 None(前端回退占位)
+/// 异步壳:COM 提取是 CPU+Shell 密集操作,同步命令跑在 tao 主线程会阻塞整应用
+/// (2026-08-19 与 wallpaper_thumbnail 同批修复);COM 初始化由 extract_icon_pixels 自负责。
 #[tauri::command]
-pub fn dock_get_icon(app: tauri::AppHandle, path: String) -> Option<String> {
+pub async fn dock_get_icon(app: tauri::AppHandle, path: String) -> Option<String> {
     let dir = app
         .path()
         .app_config_dir()
         .map(|p| p.join("icons"))
         .unwrap_or_else(|_| std::env::temp_dir().join("aurora_icons"));
-    dock_icon::icon_data_url(&path, &dir)
+    tokio::task::spawn_blocking(move || dock_icon::icon_data_url(&path, &dir))
+        .await
+        .ok()
+        .flatten()
 }
 
 // ==================== 单测 ====================

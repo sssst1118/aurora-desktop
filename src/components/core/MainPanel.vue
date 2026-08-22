@@ -551,8 +551,11 @@ onUnmounted(() => {
     class="aurora-panel main-panel-root"
     data-tauri-drag-region="true"
   >
-    <!-- header:标题/输入框二态互斥 + 五视图切换 -->
-    <header class="main-head">
+    <!-- header:标题/输入框二态互斥 + 五视图切换。
+         2026-08-19 真机反馈「小桌面移动不了」:drag-region bare 语义=仅直接命中
+         true 元素可拖,根容器被 header/view-body 全覆盖无空白可命中 → header
+         显式标 true 做真正标题栏(普通应用移动逻辑);BUTTON/INPUT 由 drag.js 自动豁免 -->
+    <header class="main-head" data-tauri-drag-region="true">
       <div class="head-left">
         <span v-show="activeView !== 'search'" class="head-title">{{ viewTitle }}</span>
         <input

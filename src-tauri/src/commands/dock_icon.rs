@@ -17,8 +17,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize};
 use windows_sys::Win32::UI::Shell::ExtractIconExW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+
+/// COM 公寓模式常量(windows-sys 未导出,同 dock.rs 手写)
+const COINIT_APARTMENTTHREADED: u32 = 0x2;
 
 use super::item_target_path; // .lnk 先解析目标再提取(ExtractIconExW 对 lnk 直接调用失败);
                              // 走 dock.rs 的 LNK_TARGET_CACHE 共享缓存:实测冷启动首个
@@ -99,6 +103,21 @@ pub fn icon_dims_within_limit(w: u32, h: u32) -> bool {
 
 /// 从文件(exe/lnk/ico 等)提取图标像素,返回 (宽, 高, RGBA)
 pub fn extract_icon_pixels(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+    // COM 自初始化:ExtractIconExW 隐式依赖 COM。此前同步命令恰跑在已初始化的
+    // 主线程(tao/WebView2 已 init);2026-08-19 dock_get_icon 改 async+spawn_blocking
+    // 后后台线程未初始化会提取必失败,故在此补齐,任意线程可安全调用。
+    // S_OK(0)=自初始化,退出 Uninit;S_FALSE(1)=同线程嵌套、RPC_E_CHANGED_MODE(负)
+    // =线程已 MTA:后两者不动初始化状态。
+    let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED) };
+    let self_inited = hr == 0;
+    let result = extract_inner(path);
+    if self_inited {
+        unsafe { CoUninitialize() };
+    }
+    result
+}
+
+fn extract_inner(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     // lnk 快捷方式:ExtractIconExW 直接调用会失败(实测公共桌面 NoMachine.lnk 返回 0),
     // 先解析目标(如 exe)再提取,与资源管理器显示一致;解析失败回退原路径。
     // 注:曾改 SHGetFileInfoW 走 Shell 语义,但该 API 在并发调用下返回 ok=1 而 hIcon
